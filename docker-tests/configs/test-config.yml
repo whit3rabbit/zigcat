@@ -1,0 +1,181 @@
+# ZigCat Docker Test System Configuration
+
+# Platform and architecture configuration
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.linux
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+      arm64: aarch64-linux-gnu
+    enabled: true
+
+  - name: alpine
+    base_image: alpine:3.18
+    dockerfile: Dockerfile.alpine
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    enabled: true
+
+  - name: freebsd
+    base_image: ubuntu:22.04  # Cross-compile from Linux
+    dockerfile: Dockerfile.freebsd
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-freebsd
+    enabled: true
+
+# Build configuration
+build:
+  zig_version: "0.13.0"
+  optimization: "ReleaseSafe"
+  parallel_builds: true
+  cache_enabled: true
+  
+  # Build timeouts (in seconds)
+  timeouts:
+    compile: 300
+    test: 180
+    total: 600
+
+# Test suite configuration
+test_suites:
+  basic:
+    description: "Basic connectivity and functionality tests"
+    timeout: 30
+    tests:
+      - tcp-echo-test
+      - udp-echo-test
+      - connection-timeout-test
+      - help-output-test
+      - version-test
+    enabled: true
+
+  protocols:
+    description: "Protocol-specific functionality tests"
+    timeout: 60
+    tests:
+      - tls-handshake-test
+      - proxy-connect-test
+      - http-connect-test
+      - socks4-test
+      - socks5-test
+    enabled: true
+
+  features:
+    description: "Advanced feature tests"
+    timeout: 120
+    tests:
+      - file-transfer-test
+      - exec-command-test
+      - bidirectional-test
+      - multi-client-test
+      - broker-mode-test
+    enabled: true
+
+  security:
+    description: "Security and access control tests"
+    timeout: 90
+    tests:
+      - access-control-test
+      - privilege-drop-test
+      - exec-safety-test
+      - allowlist-test
+    enabled: true
+
+  performance:
+    description: "Performance and stress tests"
+    timeout: 180
+    tests:
+      - throughput-test
+      - connection-limit-test
+      - memory-usage-test
+      - cpu-usage-test
+    enabled: false  # Disabled by default
+
+# Resource limits
+resources:
+  build_containers:
+    cpu_limit: "2.0"
+    memory_limit: "2G"
+    cpu_reservation: "0.5"
+    memory_reservation: "512M"
+
+  test_containers:
+    cpu_limit: "1.0"
+    memory_limit: "1G"
+    cpu_reservation: "0.25"
+    memory_reservation: "256M"
+
+  coordinator:
+    cpu_limit: "0.5"
+    memory_limit: "512M"
+    cpu_reservation: "0.1"
+    memory_reservation: "128M"
+
+# Network configuration
+networks:
+  build_network:
+    subnet: "172.20.0.0/16"
+    gateway: "172.20.0.1"
+    
+  test_network:
+    subnet: "172.21.0.0/16"
+    gateway: "172.21.0.1"
+
+# Volume configuration
+volumes:
+  build_artifacts:
+    size: "1G"
+    type: "tmpfs"
+    
+  build_logs:
+    size: "512M"
+    type: "tmpfs"
+    
+  test_results:
+    size: "512M"
+    type: "tmpfs"
+    
+  test_logs:
+    size: "512M"
+    type: "tmpfs"
+
+# Global timeouts (in seconds)
+timeouts:
+  global: 1800      # 30 minutes total
+  build: 300        # 5 minutes per build
+  test: 60          # 1 minute per test
+  cleanup: 30       # 30 seconds for cleanup
+
+# Logging configuration
+logging:
+  level: "info"     # debug, info, warn, error
+  format: "json"    # json, text
+  timestamps: true
+  colors: true
+
+# Reporting configuration
+reporting:
+  formats: ["json", "junit", "html"]
+  output_dir: "docker-tests/results"
+  include_logs: true
+  include_artifacts: false
+  
+# Cleanup configuration
+cleanup:
+  auto_cleanup: true
+  keep_artifacts_on_failure: true
+  keep_logs: true
+  cleanup_timeout: 30
+
+# Feature flags
+features:
+  parallel_execution: true
+  cross_platform_tests: true
+  performance_tests: false
+  security_tests: true
+  integration_tests: true

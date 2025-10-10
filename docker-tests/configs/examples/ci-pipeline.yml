@@ -1,0 +1,60 @@
+# CI/CD Pipeline Configuration
+# Optimized for automated testing in CI environments
+
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+    build_options:
+      - "-Doptimize=ReleaseSafe"
+      - "-Dstrip=true"
+  
+  - name: alpine
+    base_image: alpine:3.18
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=builtin"
+
+test_suites:
+  smoke:
+    timeout: 30
+    tests:
+      - tcp-echo-test
+      - basic-connectivity-test
+      - help-output-test
+      - version-output-test
+  
+  regression:
+    timeout: 60
+    tests:
+      - tcp-echo-test
+      - udp-echo-test
+      - tls-handshake-test
+      - proxy-connect-test
+      - exec-safety-test
+
+timeouts:
+  build: 300
+  test: 60
+  cleanup: 30
+  global: 900
+
+ci_integration:
+  junit_output: true
+  exit_on_first_failure: false
+  parallel_execution: true
+  artifact_retention: 7  # days
+
+resource_limits:
+  memory: "2g"
+  cpu: "2"
+  disk: "10g"
+
+# Usage in CI:
+# ./run-tests.sh --config configs/examples/ci-pipeline.yml --parallel

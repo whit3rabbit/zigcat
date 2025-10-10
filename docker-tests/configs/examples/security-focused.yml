@@ -1,0 +1,64 @@
+# Security-Focused Test Configuration
+# Emphasizes security testing and validation
+
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+    security_options:
+      - "--security-opt=no-new-privileges"
+      - "--cap-drop=ALL"
+      - "--cap-add=NET_BIND_SERVICE"
+  
+  - name: alpine
+    base_image: alpine:3.18
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+    security_options:
+      - "--read-only"
+      - "--tmpfs=/tmp"
+      - "--user=nobody"
+
+test_suites:
+  security:
+    timeout: 180
+    tests:
+      - privilege-escalation-test
+      - buffer-overflow-test
+      - format-string-test
+      - access-control-bypass-test
+      - exec-injection-test
+      - path-traversal-test
+  
+  hardening:
+    timeout: 120
+    tests:
+      - aslr-effectiveness-test
+      - stack-canary-test
+      - nx-bit-test
+      - relro-test
+  
+  crypto:
+    timeout: 120
+    tests:
+      - tls-cipher-strength-test
+      - certificate-validation-test
+      - weak-random-test
+      - timing-attack-test
+
+security_scanning:
+  static_analysis: true
+  dependency_check: true
+  vulnerability_scan: true
+  compliance_check: true
+
+timeouts:
+  build: 300
+  test: 180
+  cleanup: 30
+  global: 1200
+
+# Usage: ./run-tests.sh --config configs/examples/security-focused.yml

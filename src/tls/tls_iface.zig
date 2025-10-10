@@ -1,0 +1,272 @@
+//! TLS abstraction interface providing a uniform API for TLS operations.
+//!
+//! This module defines the TLS connection trait using OpenSSL for secure
+//! TLS operations. It provides:
+//! - Encrypted read/write operations
+//! - Connection lifecycle management
+//! - Error types for TLS operations
+//! - Configuration structures
+//!
+//! **Security:**
+//! This interface uses OpenSSL exclusively to ensure proper encryption.
+//! The insecure built-in TLS implementation has been removed.
+//!
+//! **Thread Safety:**
+//! TlsConnection is NOT thread-safe. Each connection should be accessed
+//! by a single thread at a time.
+
+const std = @import("std");
+const build_options = @import("build_options");
+
+/// TLS connection interface that wraps socket operations with encryption.
+///
+/// **Backend Support:**
+/// - `.openssl`: OpenSSL/LibreSSL backend (production-ready, secure)
+/// - `.disabled`: Stub backend when TLS is disabled at build time
+///
+/// **Security:**
+/// This interface uses OpenSSL exclusively for all TLS operations to ensure
+/// proper encryption and certificate validation.
+///
+/// **Lifecycle:**
+/// 1. Create via `tls.connectTls()` or `tls.acceptTls()`
+/// 2. Use `read()`/`write()` for encrypted I/O
+/// 3. Call `close()` to send TLS close_notify
+/// 4. Call `deinit()` to free all resources
+///
+/// **Important:**
+/// Always call `deinit()` to prevent memory leaks, even if `close()` was called.
+pub const TlsConnection = struct {
+    allocator: std.mem.Allocator,
+    backend: Backend,
+
+    pub const Backend = union(enum) {
+        openssl: *OpenSslTls,
+        disabled: void,
+    };
+
+    /// Read decrypted data from the TLS connection.
+    ///
+    /// **Parameters:**
+    /// - `buffer`: Destination buffer for decrypted data
+    ///
+    /// **Returns:**
+    /// Number of bytes read (0 indicates EOF, connection closed by peer).
+    ///
+    /// **Errors:**
+    /// - `error.TlsNotEnabled`: TLS disabled at build time
+    /// - `error.InvalidState`: Connection not in connected state
+    /// - `error.AlertReceived`: Received TLS alert from peer
+    ///
+    /// **Blocking:**
+    /// This call may block until data is available or timeout occurs.
+    /// Set non-blocking mode on the underlying socket if needed.
+    pub fn read(self: *TlsConnection, buffer: []u8) !usize {
+        return switch (self.backend) {
+            .openssl => |tls| try tls.read(buffer),
+            .disabled => error.TlsNotEnabled,
+        };
+    }
+
+    /// Write data to the TLS connection (will be encrypted before sending).
+    ///
+    /// **Parameters:**
+    /// - `data`: Plaintext data to encrypt and send
+    ///
+    /// **Returns:**
+    /// Number of plaintext bytes written (may be less than `data.len`).
+    ///
+    /// **Errors:**
+    /// - `error.TlsNotEnabled`: TLS disabled at build time
+    /// - `error.InvalidState`: Connection not in connected state
+    /// - `error.BufferTooSmall`: Internal buffer cannot accommodate data
+    ///
+    /// **Note:**
+    /// The return value indicates how many plaintext bytes were accepted,
+    /// not how many encrypted bytes were sent over the wire.
+    pub fn write(self: *TlsConnection, data: []const u8) !usize {
+        return switch (self.backend) {
+            .openssl => |tls| try tls.write(data),
+            .disabled => error.TlsNotEnabled,
+        };
+    }
+
+    /// Close the TLS connection gracefully by sending close_notify alert.
+    ///
+    /// **Behavior:**
+    /// - Sends TLS close_notify alert to peer (best-effort)
+    /// - Does NOT close the underlying socket
+    /// - Does NOT free memory (call `deinit()` separately)
+    ///
+    /// **Safe to call multiple times:**
+    /// Subsequent calls are no-ops.
+    ///
+    /// **Example:**
+    /// ```zig
+    /// tls_conn.close();  // Send close_notify
+    /// socket.closeSocket(sock);  // Close underlying socket
+    /// tls_conn.deinit();  // Free TLS memory
+    /// ```
+    pub fn close(self: *TlsConnection) void {
+        switch (self.backend) {
+            .openssl => |tls| tls.close(),
+            .disabled => {},
+        }
+    }
+
+    /// Deinitialize and free all TLS resources.
+    ///
+    /// **Behavior:**
+    /// - Frees all heap-allocated buffers
+    /// - Destroys TLS session state
+    /// - Destroys the TLS backend object itself
+    ///
+    /// **Important:**
+    /// - Does NOT close the underlying socket
+    /// - Does NOT send close_notify (call `close()` first if needed)
+    /// - MUST be called to prevent memory leaks
+    ///
+    /// **Usage:**
+    /// ```zig
+    /// defer tls_conn.deinit();  // Idiomatic cleanup
+    /// ```
+    pub fn deinit(self: *TlsConnection) void {
+        switch (self.backend) {
+            .openssl => |tls| {
+                tls.deinit();
+                self.allocator.destroy(tls);
+            },
+            .disabled => {},
+        }
+    }
+
+    /// Get the underlying socket file descriptor.
+    ///
+    /// **Returns:**
+    /// The raw socket file descriptor used by the TLS connection.
+    ///
+    /// **Use cases:**
+    /// - Polling for socket readiness with poll()/select()
+    /// - Setting socket options
+    /// - Monitoring socket state
+    ///
+    /// **Warning:**
+    /// - Do NOT close this socket directly - use `close()` instead
+    /// - Do NOT perform I/O on this socket - use `read()`/`write()` instead
+    pub fn getSocket(self: *TlsConnection) std.posix.socket_t {
+        return switch (self.backend) {
+            .openssl => |tls| tls.socket,
+            .disabled => unreachable,
+        };
+    }
+};
+
+/// Configuration for TLS connections (client and server mode).
+///
+/// **Client Mode Fields:**
+/// - `server_name`: Hostname for SNI and certificate validation
+/// - `verify_peer`: Enable/disable certificate verification (default: true)
+/// - `trust_file`: CA certificate bundle (system default if null)
+/// - `crl_file`: Certificate Revocation List (optional)
+/// - `alpn_protocols`: Comma-separated ALPN list (e.g., "h2,http/1.1")
+///
+/// **Server Mode Fields:**
+/// - `cert_file`: Path to server certificate (PEM format)
+/// - `key_file`: Path to private key (PEM format)
+/// - `alpn_protocols`: Advertise ALPN support
+///
+/// **Security:**
+/// - Always set `server_name` in client mode for proper validation
+/// - Never disable `verify_peer` unless testing on trusted networks
+/// - Use `cipher_suites` to restrict to secure algorithms only
+/// - Prefer `min_version = .tls_1_2` or higher
+/// - Use `crl_file` for enhanced security in enterprise environments
+pub const TlsConfig = struct {
+    /// Certificate file path (server mode or client verification)
+    cert_file: ?[]const u8 = null,
+
+    /// Private key file path (server mode)
+    key_file: ?[]const u8 = null,
+
+    /// Verify peer certificates (client mode)
+    verify_peer: bool = true,
+
+    /// Trust store file path (CA certificates)
+    trust_file: ?[]const u8 = null,
+
+    /// Certificate Revocation List file path (optional)
+    crl_file: ?[]const u8 = null,
+
+    /// Server name for SNI (client mode)
+    server_name: ?[]const u8 = null,
+
+    /// ALPN protocols (e.g., "h2,http/1.1")
+    alpn_protocols: ?[]const u8 = null,
+
+    /// Cipher suites (comma-separated)
+    cipher_suites: ?[]const u8 = null,
+
+    /// Minimum TLS version
+    min_version: TlsVersion = .tls_1_2,
+
+    /// Maximum TLS version
+    max_version: TlsVersion = .tls_1_3,
+};
+
+/// TLS protocol version enumeration.
+///
+/// **Supported Versions:**
+/// - `.tls_1_0`: TLS 1.0 (RFC 2246) - **DEPRECATED, insecure**
+/// - `.tls_1_1`: TLS 1.1 (RFC 4346) - **DEPRECATED, insecure**
+/// - `.tls_1_2`: TLS 1.2 (RFC 5246) - **Minimum recommended**
+/// - `.tls_1_3`: TLS 1.3 (RFC 8446) - **Preferred**
+///
+/// **Security Recommendation:**
+/// Use `min_version = .tls_1_2` at minimum. TLS 1.0/1.1 have known
+/// vulnerabilities and are deprecated by major browsers.
+pub const TlsVersion = enum {
+    tls_1_0,
+    tls_1_1,
+    tls_1_2,
+    tls_1_3,
+};
+
+/// TLS-specific error types for connection and cryptographic operations.
+///
+/// **Handshake Errors:**
+/// - `HandshakeFailed`: General handshake failure
+/// - `ProtocolVersionMismatch`: Version negotiation failed
+/// - `InvalidCipherSuite`: No common cipher suite
+///
+/// **Certificate Errors:**
+/// - `CertificateInvalid`: Malformed or corrupted certificate
+/// - `CertificateExpired`: Certificate validity period expired
+/// - `CertificateVerificationFailed`: Signature verification failed
+/// - `UntrustedCertificate`: Not signed by trusted CA
+/// - `HostnameMismatch`: Certificate CN/SAN doesn't match server_name
+///
+/// **State Errors:**
+/// - `InvalidState`: Operation invalid in current connection state
+/// - `AlertReceived`: Peer sent fatal alert
+/// - `BufferTooSmall`: Record too large for buffer
+/// - `WouldBlock`: Non-blocking operation would block
+/// - `TlsNotEnabled`: TLS support disabled at build time
+pub const TlsError = error{
+    HandshakeFailed,
+    CertificateInvalid,
+    CertificateExpired,
+    CertificateVerificationFailed,
+    UntrustedCertificate,
+    HostnameMismatch,
+    InvalidCipherSuite,
+    ProtocolVersionMismatch,
+    AlertReceived,
+    InvalidState,
+    BufferTooSmall,
+    WouldBlock,
+    TlsNotEnabled,
+};
+
+// OpenSSL backend is only imported when enabled at build time
+// When disabled, use a stub type to satisfy the type checker
+const OpenSslTls = @import("tls_openssl.zig").OpenSslTls;

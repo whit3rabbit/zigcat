@@ -1,0 +1,386 @@
+//! TCP connection utilities with timeout-aware I/O.
+//!
+//! This module provides TCP client and server functionality with:
+//! - Non-blocking connect with poll() timeout
+//! - Address family detection (IPv4/IPv6)
+//! - Multiple address fallback (tries all resolved addresses)
+//! - SO_ERROR checking after poll() (critical for connection validation)
+//! - TLS wrapper functions for encrypted connections
+//!
+//! Timeout safety:
+//! - All connect operations use non-blocking sockets
+//! - poll() enforces timeout in milliseconds
+//! - SO_ERROR checked after poll returns to detect async connection failures
+//! - See TIMEOUT_SAFETY.md for complete timeout patterns
+//!
+//! Critical pattern (from CLAUDE.md):
+//! ```zig
+//! socket.setNonBlocking(sock);
+//! const result = posix.connect(sock, &addr, len);
+//! // Handle WouldBlock/InProgress
+//! const ready = try poll_wrapper.poll(&pollfds, timeout_ms);
+//! if (ready == 0) return error.ConnectionTimeout;
+//! // CRITICAL: Check SO_ERROR after poll
+//! ```
+
+const std = @import("std");
+const posix = std.posix;
+const socket = @import("socket.zig");
+const tls_mod = @import("../tls/tls.zig");
+const TlsConfig = tls_mod.TlsConfig;
+const poll_wrapper = @import("../util/poll_wrapper.zig");
+const TlsConnection = tls_mod.TlsConnection;
+const proxy = @import("proxy/mod.zig");
+const config = @import("../config.zig");
+const logging = @import("../util/logging.zig");
+
+/// Open a TCP connection to host:port with timeout.
+///
+/// Implements robust connection logic:
+/// 1. Resolve hostname to list of addresses (IPv4/IPv6)
+/// 2. Try each address in order until one succeeds
+/// 3. For each attempt:
+///    a. Create non-blocking socket
+///    b. Initiate connect (expect WouldBlock/InProgress)
+///    c. Poll with timeout for writability
+///    d. Check SO_ERROR to verify connection success
+///
+/// Timeout enforcement:
+/// - Uses poll() with timeout_ms for each connection attempt
+/// - Returns ConnectionTimeout if poll times out
+/// - Tries next address on timeout or connection error
+///
+/// Address family handling:
+/// - Automatically detects IPv4 vs IPv6 from resolved addresses
+/// - Creates appropriate socket type for each address
+///
+/// Parameters:
+///   host: Hostname or IP address to connect to
+///   port: TCP port number
+///   timeout_ms: Connect timeout in milliseconds
+///
+/// Returns: Connected socket or error (UnknownHost, ConnectionTimeout, ConnectionFailed)
+pub fn openTcpClient(host: []const u8, port: u16, timeout_ms: u32) !socket.Socket {
+    // Resolve addresses first
+    const addr_list = try std.net.getAddressList(
+        std.heap.page_allocator,
+        host,
+        port,
+    );
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.UnknownHost;
+    }
+
+    var last_error: ?anyerror = null;
+    for (addr_list.addrs) |addr| {
+        // Create a fresh socket for each address attempt
+        const family = if (addr.any.family == posix.AF.INET)
+            socket.AddressFamily.ipv4
+        else
+            socket.AddressFamily.ipv6;
+
+        const sock = socket.createTcpSocket(family) catch |err| {
+            last_error = err;
+            continue;
+        };
+        errdefer socket.closeSocket(sock);
+
+        // Set non-blocking for timeout support
+        socket.setNonBlocking(sock) catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
+        const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
+
+        if (result) {
+            // Connected immediately
+            return sock;
+        } else |err| {
+            if (err == error.WouldBlock or err == error.InProgress) {
+                // Wait for connection with timeout
+                if (try waitForConnect(sock, timeout_ms)) {
+                    return sock;
+                }
+                socket.closeSocket(sock);
+                last_error = error.ConnectionTimeout;
+            } else {
+                socket.closeSocket(sock);
+                last_error = err;
+            }
+        }
+    }
+
+    return last_error orelse error.ConnectionFailed;
+}
+
+/// Wait for socket to become writable (connected) with timeout.
+///
+/// CRITICAL: This function implements the mandatory poll() + SO_ERROR pattern
+/// for reliable non-blocking connect. From CLAUDE.md:
+/// "Check SO_ERROR after poll (connection can fail even if poll returns ready)"
+///
+/// Process:
+/// 1. Poll socket for writability (POLL.OUT event)
+/// 2. If poll returns 0, connection timed out
+/// 3. If poll returns ready, check SO_ERROR to verify success
+/// 4. Return true only if SO_ERROR == 0 (connection succeeded)
+///
+/// Why SO_ERROR check is critical:
+/// - poll() may return ready even if async connect failed
+/// - SO_ERROR contains the actual connection result
+/// - Skipping this check causes silent connection failures
+///
+/// Parameters:
+///   sock: Non-blocking socket with connect() in progress
+///   timeout_ms: Timeout in milliseconds for poll()
+///
+/// Returns: true if connected, false if timed out, error on poll failure
+fn waitForConnect(sock: socket.Socket, timeout_ms: u32) !bool {
+    var pollfds = [_]poll_wrapper.pollfd{.{
+        .fd = sock,
+        .events = poll_wrapper.POLL.OUT,
+        .revents = 0,
+    }};
+
+    const ready = try poll_wrapper.poll(&pollfds, @intCast(timeout_ms));
+    if (ready == 0) return false; // Timeout
+
+    // Check if connection succeeded
+    var err: i32 = undefined;
+    const len: posix.socklen_t = @sizeOf(i32);
+    try posix.getsockopt(sock, posix.SOL.SOCKET, posix.SO.ERROR, std.mem.asBytes(&err)[0..len]);
+
+    return err == 0;
+}
+
+/// Create a TCP listening socket with SO_REUSEADDR and SO_REUSEPORT.
+///
+/// Server socket creation:
+/// 1. Detect address family from bind address string
+/// 2. Create TCP socket for detected family
+/// 3. Set SO_REUSEADDR for quick restart after close
+/// 4. Set SO_REUSEPORT for multi-process binding (Unix)
+/// 5. Bind to specified address and port
+/// 6. Listen with backlog of 128 connections
+///
+/// Address family detection:
+/// - Automatically handles IPv4, IPv6, or wildcard (0.0.0.0/::)
+/// - Uses socket.detectAddressFamily() helper
+///
+/// Parameters:
+///   bind_addr: Address to bind to (e.g., "0.0.0.0", "::", "192.168.1.1")
+///   port: TCP port number to listen on
+///
+/// Returns: Listening socket ready for accept() calls
+pub fn openTcpListener(bind_addr: []const u8, port: u16) !socket.Socket {
+    const family = socket.detectAddressFamily(bind_addr);
+    const sock = try socket.createTcpSocket(family);
+    errdefer socket.closeSocket(sock);
+
+    try socket.setReuseAddr(sock);
+    try socket.setReusePort(sock);
+
+    // Parse bind address
+    const addr = try std.net.Address.parseIp(bind_addr, port);
+
+    // Bind
+    try posix.bind(sock, &addr.any, addr.getOsSockLen());
+
+    // Listen
+    try posix.listen(sock, 128);
+
+    return sock;
+}
+
+/// Accept a connection from a listening socket with optional timeout.
+///
+/// Implements timeout-aware accept using poll():
+/// - If timeout_ms > 0: poll first, then accept
+/// - If timeout_ms == 0: blocking accept (no timeout)
+///
+/// Timeout enforcement:
+/// - poll() waits for incoming connection (POLL.IN event)
+/// - Returns Timeout error if poll times out
+/// - Only calls accept() after poll confirms connection available
+///
+/// Parameters:
+///   listener: Listening socket from openTcpListener()
+///   timeout_ms: Accept timeout in milliseconds (0 = no timeout)
+///
+/// Returns: Connected client socket or Timeout error
+pub fn acceptConnection(listener: socket.Socket, timeout_ms: u32) !socket.Socket {
+    if (timeout_ms > 0) {
+        var pollfds = [_]poll_wrapper.pollfd{.{
+            .fd = listener,
+            .events = poll_wrapper.POLL.IN,
+            .revents = 0,
+        }};
+
+        const ready = try poll_wrapper.poll(&pollfds, @intCast(timeout_ms));
+        if (ready == 0) return error.Timeout;
+    }
+
+    var addr: posix.sockaddr = undefined;
+    var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr);
+
+    return posix.accept(listener, &addr, &addr_len, 0) catch |err| {
+        logging.logDebug("Accept failed: {any}\n", .{err});
+        return err;
+    };
+}
+
+/// Connect to a TLS server
+pub fn connectTls(
+    allocator: std.mem.Allocator,
+    host: []const u8,
+    port: u16,
+    timeout_ms: u32,
+    tls_config: TlsConfig,
+) !TlsConnection {
+    // First establish TCP connection
+    const sock = try openTcpClient(host, port, timeout_ms);
+    errdefer socket.closeSocket(sock);
+
+    // Wrap with TLS
+    return tls_mod.connectTls(allocator, sock, tls_config) catch |err| {
+        socket.closeSocket(sock);
+        return err;
+    };
+}
+
+/// Accept a TLS connection
+pub fn acceptTls(
+    allocator: std.mem.Allocator,
+    listener: socket.Socket,
+    timeout_ms: u32,
+    tls_config: TlsConfig,
+) !TlsConnection {
+    // Accept TCP connection
+    const sock = try acceptConnection(listener, timeout_ms);
+    errdefer socket.closeSocket(sock);
+
+    // Wrap with TLS
+    return tls_mod.acceptTls(allocator, sock, tls_config) catch |err| {
+        socket.closeSocket(sock);
+        return err;
+    };
+}
+
+/// Open a TCP connection through a proxy
+pub fn openTcpClientWithProxy(
+    allocator: std.mem.Allocator,
+    cfg: *const config.Config,
+    host: []const u8,
+    port: u16,
+) !socket.Socket {
+    return try proxy.connectThroughProxy(allocator, cfg, host, port);
+}
+
+/// Open a TCP connection with specific source port (--keep-source-port flag).
+///
+/// This function binds to a specific source port before connecting, ensuring
+/// the client uses the requested port for outgoing connections. This is useful
+/// for firewall rules, port-based authentication, or debugging.
+///
+/// Implementation:
+/// 1. Create non-blocking socket
+/// 2. Bind to source port (0.0.0.0:source_port or :::source_port)
+/// 3. Connect to target with timeout
+/// 4. Check SO_ERROR after poll
+///
+/// Note: Binding to a specific source port may fail if:
+/// - Port is already in use
+/// - Port is privileged (<1024) and process lacks permissions
+/// - Multiple connections share the same source port (without SO_REUSEADDR)
+///
+/// Parameters:
+///   host: Target hostname or IP address
+///   port: Target TCP port
+///   timeout_ms: Connect timeout in milliseconds
+///   source_port: Source port to bind to (0 = auto-assign)
+///
+/// Returns: Connected socket or error
+pub fn openTcpClientWithSourcePort(
+    host: []const u8,
+    port: u16,
+    timeout_ms: u32,
+    source_port: u16,
+) !socket.Socket {
+    // Resolve target addresses first
+    const addr_list = try std.net.getAddressList(
+        std.heap.page_allocator,
+        host,
+        port,
+    );
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.UnknownHost;
+    }
+
+    var last_error: ?anyerror = null;
+    for (addr_list.addrs) |addr| {
+        // Create socket matching target address family
+        const family = if (addr.any.family == posix.AF.INET)
+            socket.AddressFamily.ipv4
+        else
+            socket.AddressFamily.ipv6;
+
+        const sock = socket.createTcpSocket(family) catch |err| {
+            last_error = err;
+            continue;
+        };
+        errdefer socket.closeSocket(sock);
+
+        // Enable SO_REUSEADDR to allow quick rebinding
+        socket.setReuseAddr(sock) catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
+        // Bind to specific source port
+        const bind_addr = if (family == socket.AddressFamily.ipv4)
+            try std.net.Address.parseIp("0.0.0.0", source_port)
+        else
+            try std.net.Address.parseIp("::", source_port);
+
+        posix.bind(sock, &bind_addr.any, bind_addr.getOsSockLen()) catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
+        // Set non-blocking for timeout support
+        socket.setNonBlocking(sock) catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
+        const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
+
+        if (result) {
+            // Connected immediately
+            return sock;
+        } else |err| {
+            if (err == error.WouldBlock or err == error.InProgress) {
+                // Wait for connection with timeout
+                if (try waitForConnect(sock, timeout_ms)) {
+                    return sock;
+                }
+                socket.closeSocket(sock);
+                last_error = error.ConnectionTimeout;
+            } else {
+                socket.closeSocket(sock);
+                last_error = err;
+            }
+        }
+    }
+
+    return last_error orelse error.ConnectionFailed;
+}

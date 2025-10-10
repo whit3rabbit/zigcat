@@ -1,0 +1,58 @@
+# FreeBSD-Only Test Configuration
+# BSD-specific testing and validation
+
+platforms:
+  - name: freebsd
+    base_image: freebsd/freebsd:14.0-RELEASE
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-freebsd
+    features:
+      - kqueue
+      - bsd_sockets
+      - jails
+      - capsicum
+    build_options:
+      - "-Dtarget-freebsd=14.0"
+      - "-Dcapsicum=true"
+
+test_suites:
+  bsd_specific:
+    timeout: 180
+    tests:
+      - kqueue-performance-test
+      - bsd-socket-options-test
+      - jail-networking-test
+      - capsicum-sandbox-test
+      - pfctl-integration-test
+  
+  compatibility:
+    timeout: 120
+    tests:
+      - freebsd-syscall-test
+      - signal-handling-test
+      - process-limits-test
+      - file-descriptor-test
+
+freebsd_versions:
+  - freebsd/freebsd:13.2-RELEASE
+  - freebsd/freebsd:14.0-RELEASE
+  - freebsd/freebsd:15.0-CURRENT
+
+security_features:
+  - capsicum_sandbox: true
+  - jail_networking: true
+  - mac_framework: false  # Not commonly used
+
+timeouts:
+  build: 600  # FreeBSD builds can be slower
+  test: 180
+  cleanup: 60
+  global: 1800
+
+notes: |
+  FreeBSD testing requires special considerations:
+  - Longer build times due to package installation
+  - Different signal handling behavior
+  - BSD-specific socket options and behavior
+  - Capsicum sandboxing capabilities

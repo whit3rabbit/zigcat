@@ -1,0 +1,48 @@
+# Development Configuration
+# For local development and debugging
+
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+    build_options:
+      - "-Doptimize=Debug"
+    debug:
+      enable_gdb: true
+      preserve_symbols: true
+
+test_suites:
+  debug:
+    timeout: 120
+    tests:
+      - tcp-echo-test
+      - connection-debug-test
+      - memory-leak-test
+    debug_options:
+      - verbose_output: true
+      - capture_core_dumps: true
+      - enable_sanitizers: true
+
+timeouts:
+  build: 600  # Longer for debug builds
+  test: 120
+  cleanup: 60
+  global: 1800
+
+development:
+  keep_containers: true
+  interactive_debugging: true
+  mount_source: true
+  hot_reload: false
+
+logging:
+  level: debug
+  capture_stdout: true
+  capture_stderr: true
+  save_build_logs: true
+  hex_dump: true
+
+# Usage for development:
+# ./run-tests.sh --config configs/examples/development.yml --verbose --keep-artifacts

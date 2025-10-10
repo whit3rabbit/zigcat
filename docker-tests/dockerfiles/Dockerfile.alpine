@@ -1,0 +1,93 @@
+# Multi-stage Dockerfile for Alpine/musl cross-compilation
+FROM --platform=$BUILDPLATFORM alpine:3.18 AS builder
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG ZIG_VERSION=0.13.0
+
+# Install system dependencies
+RUN apk add --no-cache \
+    wget \
+    xz \
+    ca-certificates \
+    bash
+
+# Install Zig compiler
+RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
+    && tar -xf zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
+    && mv zig-linux-x86_64-${ZIG_VERSION} /opt/zig \
+    && rm zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+
+ENV PATH="/opt/zig:$PATH"
+
+# Create build directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Platform-to-Zig target mapping script for musl
+RUN echo '#!/bin/bash\n\
+case "$1" in\n\
+  "linux/amd64") echo "x86_64-linux-musl" ;;\n\
+  "linux/arm64") echo "aarch64-linux-musl" ;;\n\
+  *) echo "x86_64-linux-musl" ;;\n\
+esac' > /usr/local/bin/platform-to-zig-target.sh \
+    && chmod +x /usr/local/bin/platform-to-zig-target.sh
+
+# Build for musl target
+RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
+    echo "Building for Zig target: $ZIG_TARGET" && \
+    zig build -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSafe
+
+# Run unit tests
+RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
+    echo "Running tests for Zig target: $ZIG_TARGET" && \
+    zig build test -Dtarget=$ZIG_TARGET
+
+# Export stage for artifacts
+FROM scratch AS artifacts
+COPY --from=builder /build/zig-out/bin/ /bin/
+COPY --from=builder /build/zig-out/ /artifacts/
+
+# Runtime stage for testing with musl
+FROM alpine:3.18 AS runtime
+
+# Install runtime dependencies for testing
+RUN apk add --no-cache \
+    netcat-openbsd \
+    curl \
+    wget \
+    bash \
+    bc \
+    procps \
+    iproute2 \
+    iputils \
+    busybox-extras \
+    socat \
+    strace \
+    tcpdump \
+    bind-tools \
+    ca-certificates
+
+# Install Zig for test execution
+ARG ZIG_VERSION=0.13.0
+RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
+    && tar -xf zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
+    && mv zig-linux-x86_64-${ZIG_VERSION} /opt/zig \
+    && rm zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+
+ENV PATH="/opt/zig:$PATH"
+
+# Create test user for security tests
+RUN adduser -D -s /bin/bash testuser
+
+# Copy built binaries
+COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
+
+# Create test directories
+RUN mkdir -p /test-results /test-logs /artifacts
+WORKDIR /test
+
+# Default command
+CMD ["/bin/bash", "-c", "sleep infinity"]

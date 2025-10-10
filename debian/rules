@@ -1,0 +1,28 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE ?= 0
+export ZIG_GLOBAL_CACHE_DIR = $(CURDIR)/debian/.cache/zig
+export ZIG_LOCAL_CACHE_DIR = $(CURDIR)/zig-cache
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	# No configure step required for Zig projects.
+	@true
+
+override_dh_auto_build:
+	zig build -Doptimize=ReleaseSafe
+
+override_dh_auto_test:
+ifneq ($(filter nocheck,$(DEB_BUILD_OPTIONS)),)
+	@echo "Skipping tests because nocheck is set."
+else
+	zig build test
+endif
+
+override_dh_auto_install:
+	:
+
+override_dh_auto_clean:
+	rm -rf zig-cache zig-out debian/.cache

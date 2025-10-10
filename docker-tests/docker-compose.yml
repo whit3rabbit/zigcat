@@ -1,0 +1,348 @@
+version: '3.8'
+
+# Docker Compose configuration for multi-client integration testing
+# Each test scenario has a dedicated broker/chat server and multiple client containers
+
+networks:
+  zigcat-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+services:
+  # ==========================================================================
+  # Test 1: Broker Mode - 2 Clients Data Relay
+  # ==========================================================================
+  broker-2client-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-2client-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.1.10
+    command: zigcat -l --broker 9001
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9001"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  broker-2client-client1:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-2client-client1
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.1.11
+    depends_on:
+      broker-2client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-2client-client1.sh
+    volumes:
+      - ./results:/results
+
+  broker-2client-client2:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-2client-client2
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.1.12
+    depends_on:
+      broker-2client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-2client-client2.sh
+    volumes:
+      - ./results:/results
+
+  # ==========================================================================
+  # Test 2: Broker Mode - 5 Clients Concurrent Relay
+  # ==========================================================================
+  broker-5client-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-5client-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.2.10
+    command: zigcat -l --broker 9002
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9002"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  broker-5client-client1:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-5client-client1
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.2.11
+    depends_on:
+      broker-5client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-5client-client.sh 1
+    volumes:
+      - ./results:/results
+
+  broker-5client-client2:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-5client-client2
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.2.12
+    depends_on:
+      broker-5client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-5client-client.sh 2
+    volumes:
+      - ./results:/results
+
+  broker-5client-client3:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-5client-client3
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.2.13
+    depends_on:
+      broker-5client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-5client-client.sh 3
+    volumes:
+      - ./results:/results
+
+  broker-5client-client4:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-5client-client4
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.2.14
+    depends_on:
+      broker-5client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-5client-client.sh 4
+    volumes:
+      - ./results:/results
+
+  broker-5client-client5:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-broker-5client-client5
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.2.15
+    depends_on:
+      broker-5client-server:
+        condition: service_healthy
+    command: /tests/scenarios/broker-5client-client.sh 5
+    volumes:
+      - ./results:/results
+
+  # ==========================================================================
+  # Test 3: Chat Mode - Nickname Assignment
+  # ==========================================================================
+  chat-nickname-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-chat-nickname-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.3.10
+    command: zigcat -l --chat 9003
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9003"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  chat-nickname-client1:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-chat-nickname-client1
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.3.11
+    depends_on:
+      chat-nickname-server:
+        condition: service_healthy
+    command: /tests/scenarios/chat-nickname-client1.sh
+    volumes:
+      - ./results:/results
+
+  chat-nickname-client2:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-chat-nickname-client2
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.3.12
+    depends_on:
+      chat-nickname-server:
+        condition: service_healthy
+    command: /tests/scenarios/chat-nickname-client2.sh
+    volumes:
+      - ./results:/results
+
+  # ==========================================================================
+  # Test 4: Chat Mode - Message Formatting
+  # ==========================================================================
+  chat-format-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-chat-format-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.4.10
+    command: zigcat -l --chat 9004
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9004"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  chat-format-client1:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-chat-format-client1
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.4.11
+    depends_on:
+      chat-format-server:
+        condition: service_healthy
+    command: /tests/scenarios/chat-format-client1.sh
+    volumes:
+      - ./results:/results
+
+  chat-format-client2:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-chat-format-client2
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.4.12
+    depends_on:
+      chat-format-server:
+        condition: service_healthy
+    command: /tests/scenarios/chat-format-client2.sh
+    volumes:
+      - ./results:/results
+
+  # ==========================================================================
+  # Test 5: Client Disconnection Cleanup
+  # ==========================================================================
+  disconnect-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-disconnect-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.5.10
+    command: zigcat -l --broker 9005
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9005"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  disconnect-client-test:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-disconnect-client-test
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.5.11
+    depends_on:
+      disconnect-server:
+        condition: service_healthy
+    command: /tests/scenarios/disconnect-test.sh
+    volumes:
+      - ./results:/results
+
+  # ==========================================================================
+  # Test 6: Maximum Client Limit (Broker)
+  # ==========================================================================
+  maxclients-broker-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-maxclients-broker-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.6.10
+    command: zigcat -l --broker --max-conns 3 9006
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9006"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  maxclients-broker-test:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-maxclients-broker-test
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.6.11
+    depends_on:
+      maxclients-broker-server:
+        condition: service_healthy
+    command: /tests/scenarios/maxclients-broker-test.sh
+    volumes:
+      - ./results:/results
+
+  # ==========================================================================
+  # Test 7: Maximum Client Limit (Chat)
+  # ==========================================================================
+  maxclients-chat-server:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-maxclients-chat-server
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.7.10
+    command: zigcat -l --chat --max-conns 2 9007
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9007"]
+      interval: 1s
+      timeout: 2s
+      retries: 5
+
+  maxclients-chat-test:
+    build:
+      context: ..
+      dockerfile: docker-tests/Dockerfile
+    container_name: zigcat-maxclients-chat-test
+    networks:
+      zigcat-test:
+        ipv4_address: 172.28.7.11
+    depends_on:
+      maxclients-chat-server:
+        condition: service_healthy
+    command: /tests/scenarios/maxclients-chat-test.sh
+    volumes:
+      - ./results:/results

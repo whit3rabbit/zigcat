@@ -1,0 +1,374 @@
+.TH ZIGCAT 1 "October 2025" "zigcat 0.1.0" "User Commands"
+.SH NAME
+zigcat \- Concatenate and redirect sockets
+.SH SYNOPSIS
+.B zigcat
+[\fIoptions\fR] [\fIhost\fR] [\fIport\fR]
+.br
+.B zigcat
+.BR -l " | " --listen
+[\fIoptions\fR] [\fIport\fR]
+.SH DESCRIPTION
+.B zigcat
+is a feature-rich network utility which reads and writes data across networks from the command line.
+It is a from-scratch implementation of
+.BR ncat ,
+written in Zig.
+.B zigcat
+can be used for a wide variety of tasks, including:
+.IP \(bu 2
+Connecting to a remote server
+.IP \(bu 2
+Listening for incoming connections
+.IP \(bu 2
+Transferring files
+.IP \(bu 2
+Port scanning
+.IP \(bu 2
+Acting as a proxy
+.SH OPTIONS
+.SS "CONNECT MODE (default)"
+.TP
+\fB<host> <port>\fR
+Connect to the specified host and port.
+.SS "LISTEN MODE"
+.TP
+.BR -l ", " --listen
+Listen for incoming connections.
+.TP
+.BR -k ", " --keep-open
+Keep listening after a client disconnects.
+.TP
+.BR -m ", " --max-conns " <n>"
+Maximum number of concurrent connections.
+.SS "BROKER/CHAT MODE"
+.TP
+.B --broker
+Enable broker mode. In this mode,
+.B zigcat
+relays data between all connected clients.
+.TP
+.B --chat
+Enable chat mode. This is similar to broker mode, but is line-oriented and includes nicknames for clients.
+.TP
+.BR --max-clients " <n>"
+Maximum number of clients for broker/chat mode. The default is 50.
+.SS "PROTOCOL OPTIONS"
+.TP
+.BR -u ", " --udp
+Use UDP instead of the default TCP.
+.TP
+.B --sctp
+Use SCTP instead of the default TCP.
+.TP
+.BR -U ", " --unixsock " <path>"
+Use a Unix domain socket.
+.TP
+.B -4
+Use IPv4 only.
+.TP
+.B -6
+Use IPv6 only.
+.SS "TIMING OPTIONS"
+.TP
+.BR -w ", " --wait " <secs>"
+Connect timeout in seconds.
+.TP
+.BR -i ", " --idle-timeout " <secs>"
+Idle timeout in seconds.
+.TP
+.BR -q ", " --close-on-eof
+Close the connection on EOF from stdin.
+.SS "TRANSFER OPTIONS"
+.TP
+.B --send-only
+Only send data, ignoring received data.
+.TP
+.B --recv-only
+Only receive data, ignoring sent data.
+.TP
+.BR -C ", " --crlf
+Convert LF to CRLF.
+.TP
+.BR -t ", " --telnet
+Act like a telnet client.
+.TP
+.B --no-shutdown
+Do not shutdown the write half of the socket after EOF on stdin.
+.TP
+.BR -d ", " --delay " <ms>"
+Wait between reads and writes to shape traffic.
+.SS "SSL/TLS OPTIONS"
+.TP
+.B --ssl
+Enable SSL/TLS.
+.TP
+.B --ssl-verify
+Verify the server certificate. This is the default.
+.TP
+.B --no-ssl-verify
+Do not verify the server certificate.
+.TP
+.BR --ssl-cert " <file>"
+The SSL certificate file to use in server mode.
+.TP
+.BR --ssl-key " <file>"
+The SSL private key file to use in server mode.
+.TP
+.BR --ssl-trustfile " <file>"
+The SSL CA certificate bundle.
+.TP
+.BR --ssl-crl " <file>"
+The Certificate Revocation List (CRL) file.
+.TP
+.BR --ssl-ciphers " <ciphers>"
+The SSL cipher suite list.
+.TP
+.BR --ssl-servername " <name>"
+The SNI server name for virtual hosting.
+.TP
+.BR --ssl-alpn " <protocols>"
+The ALPN protocol list (e.g., "h2,http/1.1").
+.SS "PROXY OPTIONS"
+.TP
+.BR --proxy " <url>"
+The proxy URL (e.g., http://host:port, socks5://host:port).
+.TP
+.BR --proxy-type " <type>"
+The proxy type (http, socks4, socks5).
+.TP
+.BR --proxy-auth " <user:pass>"
+The proxy authentication credentials.
+.TP
+.BR --proxy-dns " <mode>"
+The DNS resolution mode (local, remote, both).
+.SS "EXECUTION OPTIONS"
+.TP
+.BR -e ", " --exec " <cmd> " [\fIargs...\fR]
+Execute the given command with its arguments.
+.TP
+.BR -c ", " --sh-exec " <cmd>"
+Execute the given command via a shell.
+.TP
+.B --allow
+Allow dangerous operations.
+.SS "OUTPUT OPTIONS"
+.TP
+.BR -v ", " --verbose
+Enable verbose output. Use multiple times for more verbosity.
+.TP
+.BR -q ", " --quiet
+Suppress all output except for errors.
+.TP
+.BR -o ", " --output " <file>"
+Write received data to the specified file.
+.TP
+.B --append
+Append to the output file instead of truncating.
+.TP
+.BR -x ", " --hex-dump " [\fIfile\fR]"
+Display data in hex format, optionally to a file.
+.TP
+.B --append-output
+Append to the hex dump file instead of truncating.
+.SS "VERBOSITY LEVELS"
+.TP
+.B quiet (0)
+Silent except for errors.
+.TP
+.B normal (1)
+Connection events and warnings (default).
+.TP
+.B verbose (2)
+-v enables detailed connection info and transfer stats.
+.TP
+.B debug (3)
+-vv enables protocol-level details and hex dumps.
+.TP
+.B trace (4)
+-vvv enables all internal state and function tracing.
+.SS "ACCESS CONTROL"
+.TP
+.BR --allow-ip " <ips>"
+Allow specific IPs/CIDRs/hostnames (comma-separated).
+.TP
+.BR --deny-ip " <ips>"
+Deny specific IPs/CIDRs/hostnames (comma-separated).
+.TP
+.BR --allow-file " <file>"
+Read allow rules from a file (one per line).
+.TP
+.BR --deny-file " <file>"
+Read deny rules from a file (one per line).
+.TP
+.BR --drop-user " <user>"
+Drop privileges to the specified user after binding (Unix only).
+.SS "OTHER OPTIONS"
+.TP
+.BR -z ", " --zero-io
+Zero-I/O mode (for port scanning).
+.TP
+.B --keep-source-port
+Bind to a specific source port before connecting.
+.TP
+.B --
+End of options. All following arguments are treated as positional arguments.
+.TP
+.BR -h ", " --help
+Show the help message.
+.TP
+.B --version
+Show the version.
+.TP
+.B --version-all
+Show detailed version information (platform, features).
+.SH EXAMPLES
+.SS "Basic usage"
+.PP
+Connect to Google on port 80:
+.RS
+.EX
+zigcat google.com 80
+.EE
+.RE
+.PP
+Listen on port 8080:
+.RS
+.EX
+zigcat -l 8080
+.EE
+.RE
+.PP
+Listen on port 8080 and keep listening after a client disconnects:
+.RS
+.EX
+zigcat -l -k 8080
+.EE
+.RE
+.PP
+Connect to a DNS server using UDP:
+.RS
+.EX
+zigcat -u 192.168.1.1 53
+.EE
+.RE
+.SS "Verbosity control"
+.PP
+Verbose output:
+.RS
+.EX
+zigcat -v host 80
+.EE
+.RE
+.PP
+Debug output:
+.RS
+.EX
+zigcat -vv host 80
+.EE
+.RE
+.PP
+Trace output:
+.RS
+.EX
+zigcat -vvv host 80
+.EE
+.RE
+.PP
+Quiet output:
+.RS
+.EX
+zigcat -q host 80
+.EE
+.RE
+.SS "I/O control"
+.PP
+Only send data:
+.RS
+.EX
+zigcat --send-only host 80
+.EE
+.RE
+.PP
+Only receive data:
+.RS
+.EX
+zigcat --recv-only host 80
+.EE
+.RE
+.PP
+Save received data to a file:
+.RS
+.EX
+zigcat -o output.txt host 80
+.EE
+.RE
+.PP
+Display data in hex format:
+.RS
+.EX
+zigcat -x host 80
+.EE
+.RE
+.PP
+Save hex dump to a file:
+.RS
+.EX
+zigcat -x dump.hex host 80
+.EE
+.RE
+.SS "Advanced modes"
+.PP
+Broker mode on port 8080:
+.RS
+.EX
+zigcat -l --broker 8080
+.EE
+.RE
+.PP
+Chat mode on port 8080:
+.RS
+.EX
+zigcat -l --chat 8080
+.EE
+.RE
+.PP
+Broker with 100 max clients:
+.RS
+.EX
+zigcat -l --broker --max-clients 100 8080
+.EE
+.RE
+.PP
+Connect to a Unix socket:
+.RS
+.EX
+zigcat -U /tmp/socket
+.EE
+.RE
+.PP
+Listen on a Unix socket:
+.RS
+.EX
+zigcat -l -U /tmp/socket
+.EE
+.RE
+.SS "Command execution"
+.PP
+Execute grep (args without hyphens):
+.RS
+.EX
+zigcat -l -e grep foo
+.EE
+.RE
+.PP
+Execute grep with -v flag (using --):
+.RS
+.EX
+zigcat -l -e -- grep -v foo
+.EE
+.RE
+.SH "SEE ALSO"
+.BR ncat (1)
+.SH BUGS
+No known bugs.

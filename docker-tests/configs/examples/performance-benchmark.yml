@@ -1,0 +1,77 @@
+# Performance Benchmark Configuration
+# For performance testing and optimization
+
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+      arm64: aarch64-linux-gnu
+    build_options:
+      - "-Doptimize=ReleaseFast"
+      - "-Dcpu=native"
+  
+  - name: alpine
+    base_image: alpine:3.18
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    build_options:
+      - "-Doptimize=ReleaseFast"
+      - "-Dstrip=true"
+
+test_suites:
+  throughput:
+    timeout: 300
+    tests:
+      - tcp-throughput-1mb
+      - tcp-throughput-10mb
+      - tcp-throughput-100mb
+      - udp-throughput-test
+      - concurrent-connections-test
+    metrics:
+      - bytes_per_second
+      - connections_per_second
+      - cpu_usage
+      - memory_usage
+  
+  latency:
+    timeout: 180
+    tests:
+      - tcp-ping-test
+      - connection-establishment-time
+      - tls-handshake-time
+      - proxy-connection-time
+    metrics:
+      - round_trip_time
+      - connection_time
+      - handshake_time
+  
+  scalability:
+    timeout: 600
+    tests:
+      - max-concurrent-connections
+      - memory-scaling-test
+      - cpu-scaling-test
+      - file-descriptor-limits
+    metrics:
+      - max_connections
+      - memory_per_connection
+      - cpu_per_connection
+
+performance_targets:
+  tcp_throughput_mbps: 1000
+  max_connections: 10000
+  memory_per_connection_kb: 4
+  connection_time_ms: 10
+  handshake_time_ms: 50
+
+timeouts:
+  build: 300
+  test: 600
+  cleanup: 60
+  global: 2400
+
+# Usage: ./run-tests.sh --config configs/examples/performance-benchmark.yml

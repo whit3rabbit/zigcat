@@ -1,0 +1,30 @@
+# Ignore build artifacts and cache
+.zig-cache/
+zig-out/
+*.o
+*.a
+*.so
+*.dylib
+
+# Ignore test results
+docker-tests/results/
+docker-tests/logs/
+docker-tests/artifacts/
+
+# Ignore Git and development files
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+
+# Ignore documentation
+docs/
+docs-archive/
+*.md
+!CLAUDE.md
+!CLAUDE-FLOW.md
+
+# Ignore macOS files
+.DS_Store
+._*

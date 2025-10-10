@@ -1,0 +1,21 @@
+Source: zigcat
+Section: net
+Priority: optional
+Maintainer: Whit3Rabbit <whiterabbit@protonmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ zig (>= 0.15.1),
+ pkg-config,
+ libssl-dev
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/whit3rabbit/zigcat
+
+Package: zigcat
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: modern netcat clone written in Zig
+ Zigcat provides TCP and UDP client/server helpers, TLS support, proxy
+ awareness, and timeout-aware I/O in a compact standalone binary. It aims
+ to be a drop-in replacement for traditional netcat utilities while adding
+ cross-platform features and stricter error handling.

@@ -1,0 +1,10 @@
+{
+  "build_report": {
+    "timestamp": "2025-10-05T13:46:52Z",
+    "build_system": "zig",
+    "project": "zigcat",
+    "artifacts": [
+      {"build_id": "linux-amd64", "platform": "linux", "architecture": "amd64", "binary_exists": true, "binary_size": 1786984, "build_success": true, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat/docker-tests/artifacts/linux-amd64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat/docker-tests/logs/build-linux-amd64.log"}
+    ]
+  }
+}

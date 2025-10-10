@@ -1,0 +1,89 @@
+# Comprehensive Test Configuration
+# Full platform and feature coverage for thorough testing
+
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+      arm64: aarch64-linux-gnu
+    features:
+      - tls
+      - unix_sockets
+      - proxy
+  
+  - name: alpine
+    base_image: alpine:3.18
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    features:
+      - tls
+      - static_linking
+  
+  - name: freebsd
+    base_image: freebsd/freebsd:14.0-RELEASE
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-freebsd
+    features:
+      - bsd_sockets
+      - kqueue
+
+test_suites:
+  basic:
+    timeout: 60
+    tests:
+      - tcp-echo-test
+      - udp-echo-test
+      - connection-timeout-test
+      - ipv6-connectivity-test
+  
+  protocols:
+    timeout: 120
+    tests:
+      - tls-handshake-test
+      - tls-client-cert-test
+      - http-connect-proxy-test
+      - socks4-proxy-test
+      - socks5-proxy-test
+  
+  features:
+    timeout: 180
+    tests:
+      - file-transfer-test
+      - exec-command-test
+      - bidirectional-test
+      - multi-client-test
+      - unix-socket-test
+  
+  security:
+    timeout: 120
+    tests:
+      - access-control-test
+      - privilege-drop-test
+      - exec-safety-test
+      - buffer-overflow-test
+  
+  performance:
+    timeout: 300
+    tests:
+      - throughput-benchmark
+      - latency-benchmark
+      - memory-usage-test
+      - connection-scaling-test
+
+timeouts:
+  build: 600
+  test: 180
+  cleanup: 60
+  global: 3600
+
+logging:
+  level: info
+  capture_output: true
+  save_artifacts: true
+
+# Usage: ./run-tests.sh --config configs/examples/comprehensive-test.yml

@@ -1,0 +1,366 @@
+// Jenkins Pipeline for ZigCat Docker Test Suite
+// Place this file as Jenkinsfile in your repository root
+
+pipeline {
+    agent {
+        label 'docker'
+    }
+    
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timeout(time: 60, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+    }
+    
+    environment {
+        // Test configuration
+        ENABLE_CACHING = 'true'
+        PRESERVE_ARTIFACTS = 'true'
+        VERBOSE = 'false'
+        
+        // Docker configuration
+        DOCKER_BUILDKIT = '1'
+        COMPOSE_DOCKER_CLI_BUILD = '1'
+        
+        // CI system identification
+        CI_SYSTEM = 'jenkins'
+        BUILD_ID = "${env.BUILD_NUMBER}"
+        BRANCH_NAME = "${env.BRANCH_NAME}"
+        COMMIT_SHA = "${env.GIT_COMMIT}"
+    }
+    
+    stages {
+        stage('Preparation') {
+            steps {
+                script {
+                    // Clean workspace
+                    cleanWs()
+                    
+                    // Checkout code
+                    checkout scm
+                    
+                    // Install dependencies
+                    sh '''
+                        # Install Python dependencies
+                        pip3 install --user pyyaml
+                        
+                        # Verify Docker setup
+                        docker --version
+                        docker-compose --version
+                        
+                        # Set up Docker Buildx
+                        docker buildx create --use --driver docker-container || true
+                        docker buildx ls
+                    '''
+                    
+                    // Make scripts executable
+                    sh 'chmod +x docker-tests/scripts/*.sh'
+                }
+            }
+        }
+        
+        stage('Test Suites') {
+            parallel {
+                stage('Basic Tests') {
+                    steps {
+                        script {
+                            runTestSuite('basic')
+                        }
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'test-results-basic.xml, ci-artifacts-basic/**', allowEmptyArchive: true
+                            publishTestResults testResultsPattern: 'test-results-basic.xml'
+                        }
+                    }
+                }
+                
+                stage('Protocol Tests') {
+                    steps {
+                        script {
+                            runTestSuite('protocols')
+                        }
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'test-results-protocols.xml, ci-artifacts-protocols/**', allowEmptyArchive: true
+                            publishTestResults testResultsPattern: 'test-results-protocols.xml'
+                        }
+                    }
+                }
+                
+                stage('Feature Tests') {
+                    steps {
+                        script {
+                            runTestSuite('features')
+                        }
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'test-results-features.xml, ci-artifacts-features/**', allowEmptyArchive: true
+                            publishTestResults testResultsPattern: 'test-results-features.xml'
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Aggregate Results') {
+            steps {
+                script {
+                    sh '''
+                        # Combine all test results
+                        mkdir -p combined-results combined-artifacts combined-reports
+                        
+                        for suite in basic protocols features; do
+                            if [ -d "ci-artifacts-$suite" ]; then
+                                cp -r ci-artifacts-$suite/results/* combined-results/ 2>/dev/null || true
+                                cp -r ci-artifacts-$suite/artifacts/* combined-artifacts/ 2>/dev/null || true
+                                cp -r ci-artifacts-$suite/reports/* combined-reports/ 2>/dev/null || true
+                            fi
+                        done
+                        
+                        # Generate combined report
+                        docker-tests/scripts/generate-reports.sh \
+                            --results-dir combined-results \
+                            --artifacts-dir combined-artifacts \
+                            --output-dir combined-reports \
+                            --formats "json html text"
+                        
+                        # Generate trend analysis if we have historical data
+                        if [ -d "combined-reports" ] && [ $(ls combined-reports/test-report-*.json 2>/dev/null | wc -l) -gt 1 ]; then
+                            python3 docker-tests/scripts/trend-analyzer.py \
+                                --reports-dir combined-reports \
+                                --output-dir combined-reports \
+                                --formats "json html"
+                        fi
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'combined-results/**, combined-artifacts/**, combined-reports/**', allowEmptyArchive: true
+                    
+                    // Publish HTML reports
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'combined-reports',
+                        reportFiles: '*.html',
+                        reportName: 'Test Reports',
+                        reportTitles: 'ZigCat Docker Test Reports'
+                    ])
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                script {
+                    sh '''
+                        mkdir -p security-scan-results
+                        
+                        # Scan built binaries for security issues
+                        for binary in combined-artifacts/*/zigcat; do
+                            if [ -f "$binary" ]; then
+                                platform=$(basename $(dirname "$binary"))
+                                echo "Scanning $binary ($platform)"
+                                
+                                # Basic file analysis
+                                file "$binary" > "security-scan-results/file-analysis-$platform.txt"
+                                
+                                # Check for common security issues
+                                strings "$binary" | grep -E "(password|secret|key|token)" > "security-scan-results/strings-analysis-$platform.txt" || true
+                                
+                                # Binary size and permissions
+                                ls -la "$binary" >> "security-scan-results/binary-info.txt"
+                            fi
+                        done
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'security-scan-results/**', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('Performance Benchmark') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                }
+            }
+            steps {
+                script {
+                    sh '''
+                        mkdir -p benchmark-results
+                        
+                        # Run performance benchmarks
+                        for binary in combined-artifacts/*/zigcat; do
+                            if [ -f "$binary" ]; then
+                                platform=$(basename $(dirname "$binary"))
+                                echo "Benchmarking $binary ($platform)"
+                                
+                                # Startup time benchmark
+                                echo "=== Startup Time Benchmark ($platform) ===" >> benchmark-results/startup-times.txt
+                                for i in {1..5}; do
+                                    /usr/bin/time -f "Real: %e seconds" "$binary" --help 2>&1 | grep "Real:" >> benchmark-results/startup-times.txt || true
+                                done
+                                echo "" >> benchmark-results/startup-times.txt
+                                
+                                # Binary size
+                                echo "$platform: $(stat -c%s "$binary") bytes" >> benchmark-results/binary-sizes.txt
+                            fi
+                        done
+                        
+                        # Generate performance summary
+                        echo "Performance Benchmark Summary" > benchmark-results/summary.txt
+                        echo "=============================" >> benchmark-results/summary.txt
+                        echo "" >> benchmark-results/summary.txt
+                        echo "Binary Sizes:" >> benchmark-results/summary.txt
+                        cat benchmark-results/binary-sizes.txt >> benchmark-results/summary.txt
+                        echo "" >> benchmark-results/summary.txt
+                        echo "Startup Times:" >> benchmark-results/summary.txt
+                        cat benchmark-results/startup-times.txt >> benchmark-results/summary.txt
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'benchmark-results/**', allowEmptyArchive: true
+                }
+            }
+        }
+        
+        stage('Deploy') {
+            when {
+                anyOf {
+                    tag pattern: 'v\\d+\\.\\d+\\.\\d+', comparator: 'REGEXP'
+                    branch 'main'
+                }
+            }
+            steps {
+                script {
+                    // Create release artifacts
+                    sh '''
+                        mkdir -p release-artifacts
+                        
+                        # Copy binaries with version naming
+                        for binary in combined-artifacts/*/zigcat; do
+                            if [ -f "$binary" ]; then
+                                platform=$(basename $(dirname "$binary"))
+                                if [ -n "${TAG_NAME}" ]; then
+                                    cp "$binary" "release-artifacts/zigcat-${TAG_NAME}-${platform}"
+                                else
+                                    cp "$binary" "release-artifacts/zigcat-latest-${platform}"
+                                fi
+                            fi
+                        done
+                        
+                        # Copy test reports
+                        cp combined-reports/*.html release-artifacts/ 2>/dev/null || true
+                        cp combined-reports/*.json release-artifacts/ 2>/dev/null || true
+                        
+                        # Create checksums
+                        cd release-artifacts
+                        sha256sum * > checksums.txt
+                        cd ..
+                    '''
+                    
+                    // Archive release artifacts
+                    archiveArtifacts artifacts: 'release-artifacts/**', fingerprint: true
+                    
+                    // Publish to artifact repository (customize as needed)
+                    if (env.TAG_NAME) {
+                        echo "Publishing release ${env.TAG_NAME}"
+                        // Add your release publishing logic here
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Clean up Docker resources
+            sh '''
+                docker system prune -f --volumes || true
+                docker builder prune -f || true
+            '''
+            
+            // Send notifications
+            script {
+                def status = currentBuild.result ?: 'SUCCESS'
+                def color = status == 'SUCCESS' ? 'good' : 'danger'
+                def message = """
+                    ZigCat Docker Tests - ${status}
+                    Job: ${env.JOB_NAME}
+                    Build: ${env.BUILD_NUMBER}
+                    Branch: ${env.BRANCH_NAME}
+                    Commit: ${env.GIT_COMMIT?.take(8)}
+                    Duration: ${currentBuild.durationString}
+                """.stripIndent()
+                
+                // Customize notification method as needed
+                echo message
+            }
+        }
+        
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        
+        failure {
+            echo 'Pipeline failed!'
+            
+            // Collect failure artifacts
+            sh '''
+                mkdir -p failure-debug
+                
+                # Collect Docker logs
+                docker ps -a > failure-debug/docker-containers.txt || true
+                docker images > failure-debug/docker-images.txt || true
+                
+                # Collect system info
+                df -h > failure-debug/disk-usage.txt || true
+                free -h > failure-debug/memory-usage.txt || true
+                
+                # Collect recent logs
+                find docker-tests/logs -name "*.log" -mtime -1 -exec cp {} failure-debug/ \\; 2>/dev/null || true
+            '''
+            
+            archiveArtifacts artifacts: 'failure-debug/**', allowEmptyArchive: true
+        }
+        
+        unstable {
+            echo 'Pipeline completed with test failures!'
+        }
+    }
+}
+
+// Helper function to run test suites
+def runTestSuite(String testSuite) {
+    sh """
+        export SELECTED_TEST_SUITES="${testSuite}"
+        
+        docker-tests/scripts/ci-integration.sh run \
+            --ci-system jenkins \
+            --build-id ${env.BUILD_NUMBER} \
+            --branch-name "${env.BRANCH_NAME}" \
+            --commit-sha "${env.GIT_COMMIT}" \
+            --junit-output test-results-${testSuite}.xml \
+            --ci-artifacts-dir ci-artifacts-${testSuite} \
+            --verbose
+    """
+}

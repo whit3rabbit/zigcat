@@ -1,0 +1,24 @@
+# Minimal Test Configuration
+# For quick testing with basic functionality only
+
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+
+test_suites:
+  basic:
+    timeout: 30
+    tests:
+      - tcp-echo-test
+      - connection-timeout-test
+
+timeouts:
+  build: 180
+  test: 30
+  cleanup: 15
+  global: 300
+
+# Usage: ./run-tests.sh --config configs/examples/minimal-test.yml

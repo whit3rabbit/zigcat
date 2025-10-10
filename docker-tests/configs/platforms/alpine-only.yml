@@ -1,0 +1,68 @@
+# Alpine Linux-Only Test Configuration
+# Musl libc and minimal environment testing
+
+platforms:
+  - name: alpine
+    base_image: alpine:3.18
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    features:
+      - musl_libc
+      - static_linking
+      - minimal_environment
+      - busybox_tools
+    build_options:
+      - "-Dtarget-musl=1.2.4"
+      - "-Dstatic=true"
+      - "-Dstrip=true"
+
+test_suites:
+  musl_specific:
+    timeout: 120
+    tests:
+      - musl-compatibility-test
+      - static-linking-test
+      - minimal-deps-test
+      - busybox-integration-test
+      - dns-resolver-test
+  
+  portability:
+    timeout: 90
+    tests:
+      - cross-libc-test
+      - locale-minimal-test
+      - timezone-handling-test
+      - signal-handling-test
+
+alpine_versions:
+  - alpine:3.16  # musl 1.2.3
+  - alpine:3.17  # musl 1.2.3
+  - alpine:3.18  # musl 1.2.4
+  - alpine:3.19  # musl 1.2.4
+
+container_optimizations:
+  multi_stage_build: true
+  minimal_base: true
+  security_scanning: true
+  size_optimization: true
+
+expected_binary_size:
+  static_build_kb: 200
+  stripped_build_kb: 150
+  compressed_kb: 60
+
+timeouts:
+  build: 240  # Alpine builds are typically faster
+  test: 90
+  cleanup: 20
+  global: 600
+
+notes: |
+  Alpine Linux considerations:
+  - Musl libc differences from glibc
+  - Static linking preferred for portability
+  - Minimal package set available
+  - Different DNS resolution behavior
+  - Smaller attack surface
