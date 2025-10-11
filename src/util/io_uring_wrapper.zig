@@ -117,16 +117,15 @@ pub const UringEventLoop = if (builtin.os.tag == .linux) struct {
         sqe.user_data = user_data;
     }
 
-    /// Submit an asynchronous write operation.
+    /// Submit an asynchronous write operation for sockets.
     ///
-    /// Prepares IORING_OP_WRITE (file-based) or IORING_OP_SEND (socket)
-    /// depending on file descriptor type. The write will complete
-    /// asynchronously, returning user_data in the completion result.
+    /// Prepares IORING_OP_SEND for socket writes. Use submitWriteFile()
+    /// for regular file descriptors instead.
     ///
     /// Important: The buffer must remain valid until completion!
     ///
     /// Parameters:
-    ///   fd: File descriptor to write to
+    ///   fd: Socket file descriptor to write to
     ///   buffer: Data to write (must stay valid until completion)
     ///   user_data: User-supplied identifier for this operation
     ///
@@ -134,6 +133,75 @@ pub const UringEventLoop = if (builtin.os.tag == .linux) struct {
     pub fn submitWrite(self: *UringEventLoop, fd: posix.fd_t, buffer: []const u8, user_data: u64) !void {
         const sqe = try self.ring.get_sqe();
         sqe.prep_send(fd, .{ .buffer = buffer }, 0);
+        sqe.user_data = user_data;
+    }
+
+    /// Submit an asynchronous file write operation.
+    ///
+    /// Prepares IORING_OP_WRITE for regular file writes (not sockets).
+    /// This is used for output logging (-o flag) and hex dump files.
+    ///
+    /// Important: The buffer must remain valid until completion!
+    ///
+    /// Completion result:
+    /// - res >= 0: Number of bytes written
+    /// - res < 0: Negative errno (e.g., -ENOSPC, -EIO)
+    ///
+    /// Parameters:
+    ///   fd: File descriptor to write to (regular file)
+    ///   buffer: Data to write (must stay valid until completion)
+    ///   offset: File offset to write at (-1 for current position)
+    ///   user_data: User-supplied identifier for this operation
+    ///
+    /// Returns: Error if submission queue is full
+    ///
+    /// Example:
+    /// ```zig
+    /// // Write to current file position
+    /// try ring.submitWriteFile(file_fd, data, -1, 100);
+    /// const cqe = try ring.waitForCompletion(null);
+    /// if (cqe.res > 0) {
+    ///     // Successfully wrote cqe.res bytes
+    /// }
+    /// ```
+    pub fn submitWriteFile(
+        self: *UringEventLoop,
+        fd: posix.fd_t,
+        buffer: []const u8,
+        offset: i64,
+        user_data: u64,
+    ) !void {
+        const sqe = try self.ring.get_sqe();
+        sqe.prep_write(fd, buffer, @bitCast(offset));
+        sqe.user_data = user_data;
+    }
+
+    /// Submit an asynchronous file sync operation.
+    ///
+    /// Prepares IORING_OP_FSYNC to flush file data to disk.
+    /// Equivalent to posix.fsync() but asynchronous.
+    ///
+    /// Completion result:
+    /// - res == 0: Sync succeeded
+    /// - res < 0: Negative errno (e.g., -EIO)
+    ///
+    /// Parameters:
+    ///   fd: File descriptor to sync
+    ///   user_data: User-supplied identifier for this operation
+    ///
+    /// Returns: Error if submission queue is full
+    ///
+    /// Example:
+    /// ```zig
+    /// try ring.submitFsync(file_fd, 200);
+    /// const cqe = try ring.waitForCompletion(null);
+    /// if (cqe.res == 0) {
+    ///     // File successfully synced to disk
+    /// }
+    /// ```
+    pub fn submitFsync(self: *UringEventLoop, fd: posix.fd_t, user_data: u64) !void {
+        const sqe = try self.ring.get_sqe();
+        sqe.prep_fsync(fd, 0);
         sqe.user_data = user_data;
     }
 
@@ -336,6 +404,14 @@ pub const UringEventLoop = if (builtin.os.tag == .linux) struct {
     }
 
     pub fn submitWrite(_: *UringEventLoop, _: posix.fd_t, _: []const u8, _: u64) !void {
+        return error.IoUringNotSupported;
+    }
+
+    pub fn submitWriteFile(_: *UringEventLoop, _: posix.fd_t, _: []const u8, _: i64, _: u64) !void {
+        return error.IoUringNotSupported;
+    }
+
+    pub fn submitFsync(_: *UringEventLoop, _: posix.fd_t, _: u64) !void {
         return error.IoUringNotSupported;
     }
 

@@ -819,3 +819,367 @@ test "OutputLogger - multiple flush operations" {
         try testing.expectEqualStrings("Data 1Data 2Data 3", contents);
     }
 }
+
+// =============================================================================
+// AUTOMATIC DISPATCHER - SELECTS BEST OUTPUT LOGGER IMPLEMENTATION
+// =============================================================================
+
+const builtin = @import("builtin");
+const uring_wrapper = @import("../util/io_uring_wrapper.zig");
+const platform = @import("../util/platform.zig");
+
+/// Union type that can hold either blocking or io_uring logger.
+///
+/// This allows a single interface for both implementations, with
+/// automatic selection based on platform and io_uring availability.
+pub const OutputLoggerAuto = union(enum) {
+    blocking: OutputLogger,
+    uring: OutputLoggerUring,
+
+    /// Initialize output logger with automatic backend selection.
+    ///
+    /// On Linux 5.1+ with io_uring support, uses OutputLoggerUring for
+    /// asynchronous file I/O. Falls back to blocking OutputLogger on
+    /// other platforms or if io_uring is unavailable.
+    ///
+    /// Parameters:
+    ///   - allocator: Memory allocator
+    ///   - path: Optional file path (null for no-file mode)
+    ///   - append: If true, append to existing file; if false, truncate
+    ///
+    /// Returns: Initialized OutputLoggerAuto with best available backend
+    ///
+    /// Errors: Same as OutputLogger.init()
+    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8, append: bool) !OutputLoggerAuto {
+        // Try io_uring on Linux 5.1+
+        if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
+            const uring_logger = OutputLoggerUring.init(allocator, path, append) catch |err| {
+                // Log fallback reason (only in verbose mode)
+                if (std.os.getenv("ZIGCAT_VERBOSE")) |_| {
+                    std.debug.print("Note: io_uring file I/O unavailable, using blocking I/O ({})\n", .{err});
+                }
+                // Fallback to blocking
+                return OutputLoggerAuto{ .blocking = try OutputLogger.init(allocator, path, append) };
+            };
+
+            // Check if io_uring was actually enabled (it might fall back internally)
+            if (uring_logger.isUringEnabled()) {
+                return OutputLoggerAuto{ .uring = uring_logger };
+            } else {
+                // io_uring init succeeded but ring is null, use blocking instead
+                var logger_copy = uring_logger;
+                logger_copy.deinit();
+                return OutputLoggerAuto{ .blocking = try OutputLogger.init(allocator, path, append) };
+            }
+        }
+
+        // Non-Linux or kernel < 5.1: Use blocking logger
+        return OutputLoggerAuto{ .blocking = try OutputLogger.init(allocator, path, append) };
+    }
+
+    /// Clean up resources and close file.
+    pub fn deinit(self: *OutputLoggerAuto) void {
+        switch (self.*) {
+            .blocking => |*logger| logger.deinit(),
+            .uring => |*logger| logger.deinit(),
+        }
+    }
+
+    /// Write data to file.
+    pub fn write(self: *OutputLoggerAuto, data: []const u8) !void {
+        switch (self.*) {
+            .blocking => |*logger| try logger.write(data),
+            .uring => |*logger| try logger.write(data),
+        }
+    }
+
+    /// Flush buffered data to disk.
+    pub fn flush(self: *OutputLoggerAuto) !void {
+        switch (self.*) {
+            .blocking => |*logger| try logger.flush(),
+            .uring => |*logger| try logger.flush(),
+        }
+    }
+
+    /// Check if logger is configured to write to a file.
+    pub fn isEnabled(self: *const OutputLoggerAuto) bool {
+        return switch (self.*) {
+            .blocking => |*logger| logger.isEnabled(),
+            .uring => |*logger| logger.isEnabled(),
+        };
+    }
+
+    /// Get the configured file path (may be null).
+    pub fn getPath(self: *const OutputLoggerAuto) ?[]const u8 {
+        return switch (self.*) {
+            .blocking => |*logger| logger.getPath(),
+            .uring => |*logger| logger.getPath(),
+        };
+    }
+
+    /// Check if logger is in append mode.
+    pub fn isAppendMode(self: *const OutputLoggerAuto) bool {
+        return switch (self.*) {
+            .blocking => |*logger| logger.isAppendMode(),
+            .uring => |*logger| logger.isAppendMode(),
+        };
+    }
+
+    /// Check if io_uring backend is being used.
+    pub fn isUringEnabled(self: *const OutputLoggerAuto) bool {
+        return switch (self.*) {
+            .blocking => false,
+            .uring => |*logger| logger.isUringEnabled(),
+        };
+    }
+};
+
+// =============================================================================
+// IO_URING-BASED OUTPUT LOGGER (Linux 5.1+)
+// =============================================================================
+
+/// OutputLogger variant using io_uring for asynchronous file writes.
+///
+/// This version uses Linux io_uring (5.1+) to perform file writes asynchronously,
+/// preventing disk I/O from blocking the main transfer loop. Falls back to
+/// blocking writes on non-Linux platforms or when io_uring is unavailable.
+///
+/// Architecture:
+/// - Uses IORING_OP_WRITE for asynchronous file writes
+/// - Uses IORING_OP_FSYNC for asynchronous file sync/flush
+/// - Queue depth of 16 entries (sufficient for file logging)
+/// - User_data encoding: 0 = write operation, 1 = fsync operation
+///
+/// Performance Benefits:
+/// - Non-blocking writes: Transfer loop continues while disk I/O completes
+/// - Batch efficiency: Multiple writes can be queued before waiting
+/// - Reduced latency: Eliminates disk I/O stalls in high-throughput transfers
+///
+/// Example:
+/// ```zig
+/// var logger = try OutputLoggerUring.init(allocator, "output.log", false);
+/// defer logger.deinit();
+///
+/// try logger.write("data");  // Queues write, returns immediately
+/// try logger.flush();         // Queues fsync, waits for completion
+/// ```
+pub const OutputLoggerUring = struct {
+    file: ?std.fs.File = null,
+    allocator: std.mem.Allocator,
+    path: ?[]const u8 = null,
+    append_mode: bool = false,
+    ring: ?uring_wrapper.UringEventLoop = null,
+
+    // User data constants for operation tracking
+    const USER_DATA_WRITE: u64 = 0;
+    const USER_DATA_FSYNC: u64 = 1;
+
+    /// Initialize OutputLoggerUring with io_uring support.
+    ///
+    /// Creates an io_uring event loop with 16-entry queue for file operations.
+    /// Falls back to null ring on non-Linux platforms (uses blocking I/O).
+    ///
+    /// Parameters:
+    ///   - allocator: Memory allocator
+    ///   - path: Optional file path (null for no-file mode)
+    ///   - append: If true, append to existing file; if false, truncate
+    ///
+    /// Returns: Initialized OutputLoggerUring instance
+    ///
+    /// Errors: Same as OutputLogger.init()
+    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8, append: bool) !OutputLoggerUring {
+        var logger = OutputLoggerUring{
+            .allocator = allocator,
+            .path = path,
+            .append_mode = append,
+        };
+
+        // Open file same way as blocking version
+        if (path) |file_path| {
+            if (file_path.len == 0) {
+                return config.IOControlError.InvalidOutputPath;
+            }
+
+            const file = if (append) blk: {
+                break :blk std.fs.cwd().createFile(file_path, .{
+                    .read = false,
+                    .truncate = false,
+                    .exclusive = false,
+                }) catch |err| switch (err) {
+                    error.PathAlreadyExists => std.fs.cwd().openFile(file_path, .{
+                        .mode = .write_only,
+                    }) catch |open_err| {
+                        return mapFileError(open_err, file_path, "open for appending");
+                    },
+                    else => {
+                        return mapFileError(err, file_path, "create for appending");
+                    },
+                };
+            } else blk: {
+                break :blk std.fs.cwd().createFile(file_path, .{
+                    .read = false,
+                    .truncate = true,
+                    .exclusive = false,
+                }) catch |err| {
+                    return mapFileError(err, file_path, "create");
+                };
+            };
+
+            if (append) {
+                file.seekFromEnd(0) catch |err| {
+                    file.close();
+                    return mapFileError(err, file_path, "seek to end");
+                };
+            }
+
+            logger.file = file;
+
+            // Try to initialize io_uring (only on Linux 5.1+)
+            if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
+                logger.ring = uring_wrapper.UringEventLoop.init(allocator, 16) catch null;
+            }
+        }
+
+        return logger;
+    }
+
+    /// Clean up resources and close file.
+    pub fn deinit(self: *OutputLoggerUring) void {
+        if (self.ring) |*ring| {
+            ring.deinit();
+        }
+        if (self.file) |file| {
+            file.close();
+            self.file = null;
+        }
+    }
+
+    /// Write data to file using io_uring (if available) or blocking I/O.
+    ///
+    /// If io_uring is available, submits IORING_OP_WRITE and waits for completion.
+    /// Falls back to blocking file.writeAll() if io_uring is not available.
+    ///
+    /// Parameters:
+    ///   - data: Byte slice to write
+    ///
+    /// Errors: Same as OutputLogger.write()
+    pub fn write(self: *OutputLoggerUring, data: []const u8) !void {
+        if (self.file) |file| {
+            if (self.ring) |*ring| {
+                // io_uring path: Asynchronous write
+                const fd = file.handle;
+
+                // Submit write operation (offset -1 = current position)
+                ring.submitWriteFile(fd, data, -1, USER_DATA_WRITE) catch {
+                    // Fallback to blocking write on error
+                    return file.writeAll(data) catch |err| {
+                        if (self.path) |path| {
+                            return mapFileError(err, path, "write");
+                        } else {
+                            return config.IOControlError.OutputFileWriteFailed;
+                        }
+                    };
+                };
+
+                // Wait for write completion (no timeout)
+                const cqe = ring.waitForCompletion(null) catch {
+                    return config.IOControlError.OutputFileWriteFailed;
+                };
+
+                // Check for write errors
+                if (cqe.res < 0) {
+                    if (self.path) |path| {
+                        std.debug.print("Error: io_uring write failed for '{s}'\n", .{path});
+                    }
+                    return config.IOControlError.OutputFileWriteFailed;
+                }
+
+                // Verify all data was written
+                const bytes_written = @as(usize, @intCast(cqe.res));
+                if (bytes_written != data.len) {
+                    if (self.path) |path| {
+                        std.debug.print("Error: Partial write to '{s}' ({d}/{d} bytes)\n", .{ path, bytes_written, data.len });
+                    }
+                    return config.IOControlError.OutputFileWriteFailed;
+                }
+            } else {
+                // Blocking path: Same as original OutputLogger
+                file.writeAll(data) catch |err| {
+                    if (self.path) |path| {
+                        return mapFileError(err, path, "write");
+                    } else {
+                        return config.IOControlError.OutputFileWriteFailed;
+                    }
+                };
+            }
+        }
+    }
+
+    /// Flush buffered data to disk using io_uring (if available) or blocking sync.
+    ///
+    /// If io_uring is available, submits IORING_OP_FSYNC and waits for completion.
+    /// Falls back to blocking file.sync() if io_uring is not available.
+    ///
+    /// Errors: Same as OutputLogger.flush()
+    pub fn flush(self: *OutputLoggerUring) !void {
+        if (self.file) |file| {
+            if (self.ring) |*ring| {
+                // io_uring path: Asynchronous fsync
+                const fd = file.handle;
+
+                ring.submitFsync(fd, USER_DATA_FSYNC) catch {
+                    // Fallback to blocking sync on error
+                    return file.sync() catch |err| {
+                        if (self.path) |path| {
+                            return mapFileError(err, path, "flush");
+                        } else {
+                            return config.IOControlError.OutputFileWriteFailed;
+                        }
+                    };
+                };
+
+                // Wait for fsync completion (no timeout)
+                const cqe = ring.waitForCompletion(null) catch {
+                    return config.IOControlError.OutputFileWriteFailed;
+                };
+
+                // Check for fsync errors
+                if (cqe.res != 0) {
+                    if (self.path) |path| {
+                        std.debug.print("Error: io_uring fsync failed for '{s}'\n", .{path});
+                    }
+                    return config.IOControlError.OutputFileWriteFailed;
+                }
+            } else {
+                // Blocking path: Same as original OutputLogger
+                file.sync() catch |err| {
+                    if (self.path) |path| {
+                        return mapFileError(err, path, "flush");
+                    } else {
+                        return config.IOControlError.OutputFileWriteFailed;
+                    }
+                };
+            }
+        }
+    }
+
+    /// Check if logger is configured to write to a file.
+    pub fn isEnabled(self: *const OutputLoggerUring) bool {
+        return self.file != null;
+    }
+
+    /// Get the configured file path (may be null).
+    pub fn getPath(self: *const OutputLoggerUring) ?[]const u8 {
+        return self.path;
+    }
+
+    /// Check if logger is in append mode.
+    pub fn isAppendMode(self: *const OutputLoggerUring) bool {
+        return self.append_mode;
+    }
+
+    /// Check if io_uring is being used for file operations.
+    pub fn isUringEnabled(self: *const OutputLoggerUring) bool {
+        return self.ring != null;
+    }
+};

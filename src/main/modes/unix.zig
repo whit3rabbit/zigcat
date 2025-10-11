@@ -246,13 +246,13 @@ fn handleUnixSocketClient(
         return;
     }
 
-    var output_logger = output.OutputLogger.init(allocator, cfg.output_file, cfg.append_output) catch |err| {
+    var output_logger = output.OutputLoggerAuto.init(allocator, cfg.output_file, cfg.append_output) catch |err| {
         common.handleIOInitError(cfg, err, "output logger");
         return err;
     };
     defer output_logger.deinit();
 
-    var hex_dumper = hexdump.HexDumper.init(allocator, cfg.hex_dump_file) catch |err| {
+    var hex_dumper = hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file) catch |err| {
         common.handleIOInitError(cfg, err, "hex dumper");
         return err;
     };

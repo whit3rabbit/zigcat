@@ -29,8 +29,8 @@ pub fn bidirectionalTransfer(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,
     cfg: *const config.Config,
-    output_logger: ?*output.OutputLogger,
-    hex_dumper: ?*hexdump.HexDumper,
+    output_logger: ?*output.OutputLoggerAuto,
+    hex_dumper: ?*hexdump.HexDumperAuto,
 ) !void {
     // Try io_uring on Linux 5.1+ (10-50x lower CPU usage for bidirectional I/O)
     if (platform.isIoUringSupported()) {
@@ -62,8 +62,8 @@ pub fn bidirectionalTransferWindows(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,
     cfg: *const config.Config,
-    output_logger: ?*output.OutputLogger,
-    hex_dumper: ?*hexdump.HexDumper,
+    output_logger: ?*output.OutputLoggerAuto,
+    hex_dumper: ?*hexdump.HexDumperAuto,
 ) !void {
     var buffer1: [BUFFER_SIZE]u8 = undefined;
     var buffer2: [BUFFER_SIZE]u8 = undefined;
@@ -291,8 +291,8 @@ pub fn bidirectionalTransferPosix(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,
     cfg: *const config.Config,
-    output_logger: ?*output.OutputLogger,
-    hex_dumper: ?*hexdump.HexDumper,
+    output_logger: ?*output.OutputLoggerAuto,
+    hex_dumper: ?*hexdump.HexDumperAuto,
 ) !void {
     var buffer1: [BUFFER_SIZE]u8 = undefined;
     var buffer2: [BUFFER_SIZE]u8 = undefined;
@@ -540,8 +540,8 @@ pub fn bidirectionalTransferIoUring(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,
     cfg: *const config.Config,
-    output_logger: ?*output.OutputLogger,
-    hex_dumper: ?*hexdump.HexDumper,
+    output_logger: ?*output.OutputLoggerAuto,
+    hex_dumper: ?*hexdump.HexDumperAuto,
 ) !void {
     // Initialize io_uring with 32-entry queue (2 FDs × 16 operations)
     var ring = try UringEventLoop.init(allocator, 32);

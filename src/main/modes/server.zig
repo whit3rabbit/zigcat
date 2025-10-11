@@ -259,13 +259,13 @@ fn handleClient(
         return;
     }
 
-    var output_logger = output.OutputLogger.init(allocator, cfg.output_file, cfg.append_output) catch |err| {
+    var output_logger = output.OutputLoggerAuto.init(allocator, cfg.output_file, cfg.append_output) catch |err| {
         common.handleIOInitError(cfg, err, "output logger");
         return err;
     };
     defer output_logger.deinit();
 
-    var hex_dumper = hexdump.HexDumper.init(allocator, cfg.hex_dump_file) catch |err| {
+    var hex_dumper = hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file) catch |err| {
         common.handleIOInitError(cfg, err, "hex dumper");
         return err;
     };
@@ -430,19 +430,19 @@ fn handleUdpServer(
             const data = buffer[0..result.bytes];
             // Data output handled by output_logger and hex_dumper below
 
-            var output_logger = output.OutputLogger.init(allocator, cfg.output_file, cfg.append_output) catch |err| blk: {
+            var output_logger = output.OutputLoggerAuto.init(allocator, cfg.output_file, cfg.append_output) catch |err| blk: {
                 if (cfg.verbose) {
                     logging.logWarning("Failed to initialize output logger for UDP: {}\n", .{err});
                 }
-                break :blk output.OutputLogger.init(allocator, null, false) catch unreachable;
+                break :blk output.OutputLoggerAuto.init(allocator, null, false) catch unreachable;
             };
             defer output_logger.deinit();
 
-            var hex_dumper = hexdump.HexDumper.init(allocator, cfg.hex_dump_file) catch |err| blk: {
+            var hex_dumper = hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file) catch |err| blk: {
                 if (cfg.verbose) {
                     logging.logWarning("Failed to initialize hex dumper for UDP: {}\n", .{err});
                 }
-                break :blk hexdump.HexDumper.init(allocator, null) catch unreachable;
+                break :blk hexdump.HexDumperAuto.init(allocator, null) catch unreachable;
             };
             defer hex_dumper.deinit();
 

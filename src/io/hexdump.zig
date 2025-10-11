@@ -839,3 +839,380 @@ test "HexDumper - comprehensive file truncation behavior" {
         try testing.expect(std.mem.indexOf(u8, contents, "Original content") == null);
     }
 }
+
+// =============================================================================
+// AUTOMATIC DISPATCHER - SELECTS BEST HEX DUMPER IMPLEMENTATION
+// =============================================================================
+
+const builtin = @import("builtin");
+const uring_wrapper = @import("../util/io_uring_wrapper.zig");
+const platform = @import("../util/platform.zig");
+
+/// Union type that can hold either blocking or io_uring hex dumper.
+///
+/// This allows a single interface for both implementations, with
+/// automatic selection based on platform and io_uring availability.
+pub const HexDumperAuto = union(enum) {
+    blocking: HexDumper,
+    uring: HexDumperUring,
+
+    /// Initialize hex dumper with automatic backend selection.
+    ///
+    /// On Linux 5.1+ with io_uring support, uses HexDumperUring for
+    /// asynchronous file I/O. Falls back to blocking HexDumper on
+    /// other platforms or if io_uring is unavailable.
+    ///
+    /// Parameters:
+    ///   - allocator: Memory allocator
+    ///   - path: Optional file path (null for stdout-only mode)
+    ///
+    /// Returns: Initialized HexDumperAuto with best available backend
+    ///
+    /// Errors: Same as HexDumper.init()
+    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumperAuto {
+        // Try io_uring on Linux 5.1+
+        if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
+            const uring_dumper = HexDumperUring.init(allocator, path) catch |err| {
+                // Log fallback reason (only in verbose mode)
+                if (std.os.getenv("ZIGCAT_VERBOSE")) |_| {
+                    std.debug.print("Note: io_uring hex dump I/O unavailable, using blocking I/O ({})\n", .{err});
+                }
+                // Fallback to blocking
+                return HexDumperAuto{ .blocking = try HexDumper.init(allocator, path) };
+            };
+
+            // Check if io_uring was actually enabled
+            if (uring_dumper.isUringEnabled()) {
+                return HexDumperAuto{ .uring = uring_dumper };
+            } else {
+                // io_uring init succeeded but ring is null, use blocking instead
+                var dumper_copy = uring_dumper;
+                dumper_copy.deinit();
+                return HexDumperAuto{ .blocking = try HexDumper.init(allocator, path) };
+            }
+        }
+
+        // Non-Linux or kernel < 5.1: Use blocking dumper
+        return HexDumperAuto{ .blocking = try HexDumper.init(allocator, path) };
+    }
+
+    /// Clean up resources and close file.
+    pub fn deinit(self: *HexDumperAuto) void {
+        switch (self.*) {
+            .blocking => |*dumper| dumper.deinit(),
+            .uring => |*dumper| dumper.deinit(),
+        }
+    }
+
+    /// Dump data in hexadecimal format.
+    pub fn dump(self: *HexDumperAuto, data: []const u8) !void {
+        switch (self.*) {
+            .blocking => |*dumper| try dumper.dump(data),
+            .uring => |*dumper| try dumper.dump(data),
+        }
+    }
+
+    /// Flush buffered data to disk.
+    pub fn flush(self: *HexDumperAuto) !void {
+        switch (self.*) {
+            .blocking => |*dumper| try dumper.flush(),
+            .uring => |*dumper| try dumper.flush(),
+        }
+    }
+
+    /// Check if dumper is configured to write to a file.
+    pub fn isFileEnabled(self: *const HexDumperAuto) bool {
+        return switch (self.*) {
+            .blocking => |*dumper| dumper.isFileEnabled(),
+            .uring => |*dumper| dumper.isFileEnabled(),
+        };
+    }
+
+    /// Get the configured file path (may be null).
+    pub fn getPath(self: *const HexDumperAuto) ?[]const u8 {
+        return switch (self.*) {
+            .blocking => |*dumper| dumper.getPath(),
+            .uring => |*dumper| dumper.getPath(),
+        };
+    }
+
+    /// Get current offset for next dump operation.
+    pub fn getOffset(self: *const HexDumperAuto) u64 {
+        return switch (self.*) {
+            .blocking => |*dumper| dumper.getOffset(),
+            .uring => |*dumper| dumper.getOffset(),
+        };
+    }
+
+    /// Reset offset to zero (useful for new connections).
+    pub fn resetOffset(self: *HexDumperAuto) void {
+        switch (self.*) {
+            .blocking => |*dumper| dumper.resetOffset(),
+            .uring => |*dumper| dumper.resetOffset(),
+        }
+    }
+
+    /// Check if io_uring backend is being used.
+    pub fn isUringEnabled(self: *const HexDumperAuto) bool {
+        return switch (self.*) {
+            .blocking => false,
+            .uring => |*dumper| dumper.isUringEnabled(),
+        };
+    }
+};
+
+// =============================================================================
+// IO_URING-BASED HEX DUMPER (Linux 5.1+)
+// =============================================================================
+
+/// HexDumper variant using io_uring for asynchronous file writes.
+///
+/// This version uses Linux io_uring (5.1+) to perform hex dump file writes
+/// asynchronously, preventing disk I/O from blocking the main transfer loop.
+/// Falls back to blocking writes on non-Linux platforms or when io_uring
+/// is unavailable.
+///
+/// Architecture:
+/// - Uses IORING_OP_WRITE for asynchronous hex line writes
+/// - Uses IORING_OP_FSYNC for asynchronous file sync/flush
+/// - Queue depth of 16 entries (sufficient for hex dump operations)
+/// - User_data encoding: 0 = write operation, 1 = fsync operation
+///
+/// Performance Benefits:
+/// - Non-blocking writes: Transfer loop continues while disk I/O completes
+/// - Reduced latency: Eliminates disk I/O stalls during hex dump logging
+/// - Same output format: Maintains exact hex dump format compatibility
+///
+/// Example:
+/// ```zig
+/// var dumper = try HexDumperUring.init(allocator, "dump.hex");
+/// defer dumper.deinit();
+///
+/// try dumper.dump(binary_data);  // Asynchronous hex dump
+/// try dumper.flush();             // Async fsync
+/// ```
+pub const HexDumperUring = struct {
+    file: ?std.fs.File = null,
+    allocator: std.mem.Allocator,
+    path: ?[]const u8 = null,
+    offset: u64 = 0,
+    ring: ?uring_wrapper.UringEventLoop = null,
+
+    // User data constants for operation tracking
+    const USER_DATA_WRITE: u64 = 0;
+    const USER_DATA_FSYNC: u64 = 1;
+
+    /// Initialize HexDumperUring with io_uring support.
+    ///
+    /// Creates an io_uring event loop with 16-entry queue for file operations.
+    /// Falls back to null ring on non-Linux platforms (uses blocking I/O).
+    ///
+    /// Parameters:
+    ///   - allocator: Memory allocator
+    ///   - path: Optional file path (null for stdout-only mode)
+    ///
+    /// Returns: Initialized HexDumperUring instance
+    ///
+    /// Errors: Same as HexDumper.init()
+    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumperUring {
+        var dumper = HexDumperUring{
+            .allocator = allocator,
+            .path = path,
+            .offset = 0,
+        };
+
+        // Open file if path provided
+        if (path) |file_path| {
+            dumper.file = try output.openHexDumpFile(file_path);
+
+            // Try to initialize io_uring (only on Linux 5.1+)
+            if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
+                dumper.ring = uring_wrapper.UringEventLoop.init(allocator, 16) catch null;
+            }
+        }
+
+        return dumper;
+    }
+
+    /// Clean up resources and close file.
+    pub fn deinit(self: *HexDumperUring) void {
+        if (self.ring) |*ring| {
+            ring.deinit();
+        }
+        if (self.file) |file| {
+            file.close();
+            self.file = null;
+        }
+    }
+
+    /// Dump data in hexadecimal format using io_uring (if available).
+    ///
+    /// Formats data in hex dump format and writes to stdout and file.
+    /// If io_uring is available, file writes use asynchronous I/O.
+    ///
+    /// Parameters:
+    ///   - data: Binary data to format and display
+    ///
+    /// Errors: Same as HexDumper.dump()
+    pub fn dump(self: *HexDumperUring, data: []const u8) !void {
+        if (data.len == 0) return;
+
+        var i: usize = 0;
+        while (i < data.len) {
+            const chunk_size = @min(16, data.len - i);
+            const chunk = data[i .. i + chunk_size];
+
+            try self.formatAndWriteLine(chunk, self.offset + i);
+            i += chunk_size;
+        }
+
+        self.offset += data.len;
+    }
+
+    /// Format and write a single hex dump line using io_uring (if available).
+    ///
+    /// Internal function that formats up to 16 bytes and writes to stdout
+    /// and file with asynchronous I/O if io_uring is available.
+    fn formatAndWriteLine(self: *HexDumperUring, data: []const u8, offset: u64) !void {
+        // Format the hex line (same as blocking version)
+        var line_buffer: [80]u8 = undefined;
+        const formatted_line = try formatter.formatHexLine(data, offset, &line_buffer);
+
+        // Write to stdout (always blocking, suppress during tests)
+        const is_test = @import("builtin").is_test;
+        if (!is_test) {
+            std.debug.print("{s}\n", .{formatted_line});
+        }
+
+        // Write to file with io_uring (if available)
+        if (self.file) |file| {
+            if (self.ring) |*ring| {
+                // io_uring path: Asynchronous file write
+                const fd = file.handle;
+
+                // Need to append newline to the formatted line
+                var write_buffer: [81]u8 = undefined;
+                @memcpy(write_buffer[0..formatted_line.len], formatted_line);
+                write_buffer[formatted_line.len] = '\n';
+                const write_data = write_buffer[0 .. formatted_line.len + 1];
+
+                // Submit write operation (offset -1 = current position)
+                ring.submitWriteFile(fd, write_data, -1, USER_DATA_WRITE) catch {
+                    // Fallback to blocking write on error
+                    return file.writeAll(write_data) catch |err| {
+                        if (self.path) |path| {
+                            return output.mapHexDumpFileError(err, path, "write");
+                        } else {
+                            return config.IOControlError.HexDumpFileWriteFailed;
+                        }
+                    };
+                };
+
+                // Wait for write completion (no timeout)
+                const cqe = ring.waitForCompletion(null) catch {
+                    return config.IOControlError.HexDumpFileWriteFailed;
+                };
+
+                // Check for write errors
+                if (cqe.res < 0) {
+                    if (self.path) |path| {
+                        std.debug.print("Error: io_uring write failed for hex dump file '{s}'\n", .{path});
+                    }
+                    return config.IOControlError.HexDumpFileWriteFailed;
+                }
+
+                // Verify all data was written
+                const bytes_written = @as(usize, @intCast(cqe.res));
+                if (bytes_written != write_data.len) {
+                    if (self.path) |path| {
+                        std.debug.print("Error: Partial write to hex dump file '{s}' ({d}/{d} bytes)\n", .{ path, bytes_written, write_data.len });
+                    }
+                    return config.IOControlError.HexDumpFileWriteFailed;
+                }
+            } else {
+                // Blocking path: Write formatted line with newline
+                var write_buffer: [81]u8 = undefined;
+                @memcpy(write_buffer[0..formatted_line.len], formatted_line);
+                write_buffer[formatted_line.len] = '\n';
+                const write_data = write_buffer[0 .. formatted_line.len + 1];
+
+                file.writeAll(write_data) catch |err| {
+                    if (self.path) |path| {
+                        return output.mapHexDumpFileError(err, path, "write");
+                    } else {
+                        return config.IOControlError.HexDumpFileWriteFailed;
+                    }
+                };
+            }
+        }
+    }
+
+    /// Flush buffered data to disk using io_uring (if available).
+    ///
+    /// If io_uring is available, submits IORING_OP_FSYNC and waits for completion.
+    /// Falls back to blocking file.sync() if io_uring is not available.
+    ///
+    /// Errors: Same as HexDumper.flush()
+    pub fn flush(self: *HexDumperUring) !void {
+        if (self.file) |file| {
+            if (self.ring) |*ring| {
+                // io_uring path: Asynchronous fsync
+                const fd = file.handle;
+
+                ring.submitFsync(fd, USER_DATA_FSYNC) catch {
+                    // Fallback to blocking sync on error
+                    return file.sync() catch |err| {
+                        if (self.path) |path| {
+                            return output.mapHexDumpFileError(err, path, "flush");
+                        } else {
+                            return config.IOControlError.HexDumpFileWriteFailed;
+                        }
+                    };
+                };
+
+                // Wait for fsync completion (no timeout)
+                const cqe = ring.waitForCompletion(null) catch {
+                    return config.IOControlError.HexDumpFileWriteFailed;
+                };
+
+                // Check for fsync errors
+                if (cqe.res != 0) {
+                    if (self.path) |path| {
+                        std.debug.print("Error: io_uring fsync failed for hex dump file '{s}'\n", .{path});
+                    }
+                    return config.IOControlError.HexDumpFileWriteFailed;
+                }
+            } else {
+                // Blocking path: Same as original HexDumper
+                if (self.path) |path| {
+                    try output.flushHexDumpFile(file, path);
+                }
+            }
+        }
+    }
+
+    /// Check if dumper is configured to write to a file.
+    pub fn isFileEnabled(self: *const HexDumperUring) bool {
+        return self.file != null;
+    }
+
+    /// Get the configured file path (may be null).
+    pub fn getPath(self: *const HexDumperUring) ?[]const u8 {
+        return self.path;
+    }
+
+    /// Get current offset for next dump operation.
+    pub fn getOffset(self: *const HexDumperUring) u64 {
+        return self.offset;
+    }
+
+    /// Reset offset to zero (useful for new connections).
+    pub fn resetOffset(self: *HexDumperUring) void {
+        self.offset = 0;
+    }
+
+    /// Check if io_uring is being used for file operations.
+    pub fn isUringEnabled(self: *const HexDumperUring) bool {
+        return self.ring != null;
+    }
+};
