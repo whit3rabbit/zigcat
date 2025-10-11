@@ -76,27 +76,66 @@ Package metadata lives under `docs/packaging/`.
 
 ## TLS/SSL builds
 
-ZigCat supports TLS via OpenSSL.
+ZigCat supports TLS via two backends: **OpenSSL** (default, ubiquitous) and **wolfSSL** (lightweight, 60% smaller).
+
+### OpenSSL Backend (default)
 
 ```bash
-# Enable TLS support (default)
+# Enable TLS support with OpenSSL (default)
 make build-with-tls
 zig build -Dtls=true
 
-# Disable TLS support
-make build-no-tls
-zig build -Dtls=false
+# Explicitly select OpenSSL backend
+zig build -Dtls=true -Dtls-backend=openssl
 ```
 
-TLS prerequisites:
+**Prerequisites:**
 - macOS: `brew install openssl`
 - Debian/Ubuntu: `sudo apt install libssl-dev`
 - RHEL/Fedora: `sudo yum install openssl-devel`
 - Windows: use a prebuilt OpenSSL package (e.g., from slproweb.com)
 
-Expected size impact:
-- With TLS: ~2.0-2.2 MB (native dynamic build)
-- Without TLS: ~1.8 MB
+**Features:**
+- Full TLS 1.0-1.3 support
+- DTLS 1.0-1.3 support (Datagram TLS over UDP)
+- Ubiquitous, battle-tested library
+- Binary size: ~2.0-2.2 MB (native dynamic build)
+
+### wolfSSL Backend (opt-in)
+
+```bash
+# Enable TLS support with wolfSSL backend
+zig build -Dtls=true -Dtls-backend=wolfssl
+```
+
+**Prerequisites:**
+- macOS: `brew install wolfssl`
+- Debian/Ubuntu: `sudo apt install libwolfssl-dev`
+- RHEL/Fedora: `sudo yum install wolfssl-devel`
+- Build from source: https://www.wolfssl.com/download/
+
+**Features:**
+- Full TLS 1.0-1.3 support
+- **60% smaller binary** (2.4 MB vs 6 MB on macOS)
+- Lightweight, optimized for embedded systems
+- FIPS 140-2/140-3 certified versions available
+- **Note:** DTLS not yet implemented for wolfSSL backend
+
+**Size Comparison:**
+
+| Configuration | Backend | Binary Size | Notes |
+|--------------|---------|-------------|-------|
+| Native build | OpenSSL | ~2.0-2.2 MB | Default, includes DTLS |
+| Native build | wolfSSL | ~2.4 MB | 60% smaller, no DTLS |
+| No TLS | N/A | ~1.8 MB | Smallest |
+
+### Disable TLS support
+
+```bash
+# Disable TLS completely
+make build-no-tls
+zig build -Dtls=false
+```
 
 ## Static vs. dynamic linking
 

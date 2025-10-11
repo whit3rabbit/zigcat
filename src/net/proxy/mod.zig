@@ -98,7 +98,7 @@ pub fn connectThroughProxy(
             target_host,
             target_port,
             auth,
-            cfg.connect_timeout,
+            cfg,
         ),
         .socks5 => try socks5.connect(
             allocator,
@@ -107,7 +107,7 @@ pub fn connectThroughProxy(
             target_host,
             target_port,
             auth,
-            cfg.connect_timeout,
+            cfg,
         ),
         .socks4 => blk: {
             // SOCKS4 uses user_id instead of username/password
@@ -119,7 +119,7 @@ pub fn connectThroughProxy(
                 target_host,
                 target_port,
                 user_id,
-                cfg.connect_timeout,
+                cfg,
             );
         },
     };

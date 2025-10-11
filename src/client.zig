@@ -29,7 +29,42 @@ const udp = @import("net/udp.zig");
 const sctp = @import("net/sctp.zig");
 const unixsock = @import("net/unixsock.zig");
 const tls = @import("tls/tls.zig");
-const dtls = @import("tls/dtls/dtls.zig");
+
+// DTLS is currently only available with OpenSSL backend
+// wolfSSL support for DTLS is not yet implemented
+const build_options = @import("build_options");
+const dtls_enabled = build_options.enable_tls and (!@hasDecl(build_options, "use_wolfssl") or !build_options.use_wolfssl);
+const dtls = if (dtls_enabled) @import("tls/dtls/dtls.zig") else struct {
+    // Stub DtlsConnection that has compatible methods for defer blocks
+    pub const DtlsConnection = struct {
+        pub fn deinit(_: *DtlsConnection) void {}
+        pub fn close(_: *DtlsConnection) void {}
+        pub fn read(_: *DtlsConnection, _: []u8) !usize {
+            return error.DtlsNotAvailableWithWolfSSL;
+        }
+        pub fn write(_: *DtlsConnection, _: []const u8) !usize {
+            return error.DtlsNotAvailableWithWolfSSL;
+        }
+        pub fn getSocket(_: *DtlsConnection) posix.socket_t {
+            return 0;
+        }
+    };
+    pub const DtlsConfig = struct {
+        verify_peer: bool = true,
+        server_name: ?[]const u8 = null,
+        trust_file: ?[]const u8 = null,
+        crl_file: ?[]const u8 = null,
+        alpn_protocols: ?[]const u8 = null,
+        cipher_suites: ?[]const u8 = null,
+        mtu: u16 = 1200,
+        initial_timeout_ms: u32 = 1000,
+        replay_window: u64 = 64,
+    };
+    pub fn connectDtls(_: std.mem.Allocator, _: []const u8, _: u16, _: DtlsConfig) !*DtlsConnection {
+        return error.DtlsNotAvailableWithWolfSSL;
+    }
+};
+
 const transfer = @import("io/transfer.zig");
 const stream = @import("io/stream.zig");
 const output = @import("io/output.zig");
@@ -171,9 +206,9 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
                 // Handle --keep-source-port flag
                 if (cfg.keep_source_port) {
                     const src_port = cfg.source_port orelse 0;
-                    break :blk try tcp.openTcpClientWithSourcePort(host, port, timeout, src_port);
+                    break :blk try tcp.openTcpClientWithSourcePort(host, port, timeout, src_port, cfg);
                 } else {
-                    break :blk try tcp.openTcpClient(host, port, timeout);
+                    break :blk try tcp.openTcpClient(host, port, timeout, cfg);
                 }
             }
         }

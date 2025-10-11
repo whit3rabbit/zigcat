@@ -46,6 +46,7 @@ const posix = std.posix;
 const socket = @import("../socket.zig");
 const poll_wrapper = @import("../../util/poll_wrapper.zig");
 const logging = @import("../../util/logging.zig");
+const config = @import("../../config.zig");
 
 // SOCKS4 protocol constants
 const SOCKS4_VERSION: u8 = 0x04;
@@ -108,10 +109,10 @@ pub fn connect(
     target_host: []const u8,
     target_port: u16,
     user_id: []const u8,
-    timeout_ms: u32,
+    cfg: *const config.Config,
 ) !socket.Socket {
     // Step 1: Connect to SOCKS4 proxy
-    const sock = try connectToProxy(proxy_host, proxy_port, timeout_ms);
+    const sock = try connectToProxy(proxy_host, proxy_port, cfg);
     errdefer socket.closeSocket(sock);
 
     // Step 2: Resolve target to IPv4 (SOCKS4 requires IPv4)
@@ -127,13 +128,7 @@ pub fn connect(
     return sock;
 }
 
-fn connectToProxy(host: []const u8, port: u16, timeout_ms: u32) !socket.Socket {
-    const family = socket.detectAddressFamily(host);
-    const sock = try socket.createTcpSocket(family);
-    errdefer socket.closeSocket(sock);
-
-    try socket.setNonBlocking(sock);
-
+fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socket.Socket {
     const addr_list = try std.net.getAddressList(
         std.heap.page_allocator,
         host,
@@ -146,21 +141,56 @@ fn connectToProxy(host: []const u8, port: u16, timeout_ms: u32) !socket.Socket {
     }
 
     var last_error: ?anyerror = null;
+    var attempted_connection = false;
     for (addr_list.addrs) |addr| {
+        if (cfg.ipv6_only and addr.any.family != posix.AF.INET6) {
+            continue;
+        }
+        if (cfg.ipv4_only and addr.any.family != posix.AF.INET) {
+            continue;
+        }
+        attempted_connection = true;
+
+        const family = if (addr.any.family == posix.AF.INET)
+            socket.AddressFamily.ipv4
+        else
+            socket.AddressFamily.ipv6;
+
+        const sock = socket.createTcpSocket(family) catch |err| {
+            last_error = err;
+            continue;
+        };
+        errdefer socket.closeSocket(sock);
+
+        // Set non-blocking for timeout support
+        socket.setNonBlocking(sock) catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
         const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
 
         if (result) {
+            // Connected immediately
             return sock;
         } else |err| {
             if (err == error.WouldBlock or err == error.InProgress) {
-                if (try waitForConnect(sock, timeout_ms)) {
+                // Wait for connection with timeout
+                if (try waitForConnect(sock, cfg.connect_timeout)) {
                     return sock;
                 }
+                socket.closeSocket(sock);
                 last_error = error.ConnectionTimeout;
             } else {
+                socket.closeSocket(sock);
                 last_error = err;
             }
         }
+    }
+
+    if (!attempted_connection) {
+        return error.UnknownHost;
     }
 
     return last_error orelse error.ConnectionFailed;

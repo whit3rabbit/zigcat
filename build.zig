@@ -134,18 +134,39 @@ pub fn build(b: *std.Build) void {
     //   reducing its size.
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse true;
     //
+    // - `lto`: (Default: null/auto) Controls Link-Time Optimization mode for cross-module
+    //   optimization and binary size reduction. LTO works across Zig + C boundaries (including OpenSSL).
+    //   - null (auto): Enable LTO in release modes (recommended, default behavior)
+    //   - .full: Maximum optimization, slowest build (~20-30% slower, 15-20% smaller binary)
+    //   - .thin: Good optimization, faster build (~10-15% slower, 10-15% smaller binary)
+    //   - .none: Disable LTO (for debugging only)
+    //   Example: `zig build -Doptimize=ReleaseSmall -Dlto=full`
+    const lto_mode = b.option(
+        std.zig.LtoMode,
+        "lto",
+        "Link-Time Optimization mode: null/auto (default), full (max optimization), thin (balanced), none (disable)",
+    ) orelse null;
+    //
     // - `allow-legacy-tls`: (Default: false) If true, compiles in support for older,
     //   insecure TLS versions (1.0, 1.1). This should only be used for testing against
     //   legacy systems.
     const allow_legacy_tls = b.option(bool, "allow-legacy-tls", "Enable TLS 1.0/1.1 support (INSECURE, testing only)") orelse false;
+    //
+    // - `tls-backend`: (Default: openssl) Selects the TLS library backend.
+    //   - `openssl`: Default, ubiquitous, ~6MB binary with TLS
+    //   - `wolfssl`: Lightweight alternative, ~2.5-3MB binary with TLS (92% smaller library)
+    //   Example: `zig build -Dtls-backend=wolfssl`
+    const TlsBackendOption = enum { openssl, wolfssl };
+    const tls_backend = b.option(TlsBackendOption, "tls-backend", "TLS backend: openssl (default), wolfssl (lightweight)") orelse .openssl;
+    const use_wolfssl = (tls_backend == .wolfssl);
 
-    // CRITICAL: Validate that `static` and `tls` are not enabled simultaneously.
-    // Statically linking OpenSSL is complex and platform-dependent, so we enforce
-    // that static builds must be compiled without TLS support.
-    if (static and enable_tls) {
+    // CRITICAL: Validate that `static` and `tls` with OpenSSL are not enabled simultaneously.
+    // Statically linking OpenSSL is complex and platform-dependent.
+    // wolfSSL supports static linking, so allow static + wolfssl combination.
+    if (static and enable_tls and !use_wolfssl) {
         std.log.err("", .{});
         std.log.err("=====================================================================", .{});
-        std.log.err("ERROR: Static builds with TLS are not supported", .{});
+        std.log.err("ERROR: Static builds with OpenSSL are not supported", .{});
         std.log.err("=====================================================================", .{});
         std.log.err("", .{});
         std.log.err("Static linking (-Dstatic=true) produces fully portable binaries with", .{});
@@ -156,10 +177,13 @@ pub fn build(b: *std.Build) void {
         std.log.err("must be built separately for each target architecture.", .{});
         std.log.err("", .{});
         std.log.err("Solutions:", .{});
-        std.log.err("  1. Build static without TLS (recommended):", .{});
+        std.log.err("  1. Build static with wolfSSL (NEW - enables TLS in static builds):", .{});
+        std.log.err("     zig build -Dtarget=x86_64-linux-musl -Dstatic=true -Dtls-backend=wolfssl", .{});
+        std.log.err("", .{});
+        std.log.err("  2. Build static without TLS:", .{});
         std.log.err("     zig build -Dtarget=x86_64-linux-musl -Dstatic=true -Dtls=false", .{});
         std.log.err("", .{});
-        std.log.err("  2. Build dynamic with TLS:", .{});
+        std.log.err("  3. Build dynamic with OpenSSL:", .{});
         std.log.err("     zig build -Dtarget=x86_64-linux-gnu -Dtls=true", .{});
         std.log.err("", .{});
         std.log.err("Static binary characteristics:", .{});
@@ -179,18 +203,27 @@ pub fn build(b: *std.Build) void {
     }
 
     if (enable_tls) {
-        const openssl_available = detectOpenSSL(b);
-        if (!openssl_available) {
-            std.log.err("TLS support requested but OpenSSL not found.", .{});
-            std.log.err("", .{});
-            std.log.err("To install OpenSSL development libraries:", .{});
-            std.log.err("  Ubuntu/Debian: sudo apt-get install libssl-dev", .{});
-            std.log.err("  RHEL/CentOS:   sudo yum install openssl-devel", .{});
-            std.log.err("  macOS:         brew install openssl", .{});
-            std.log.err("  Windows:       Install OpenSSL from https://slproweb.com/products/Win32OpenSSL.html", .{});
-            std.log.err("", .{});
-            std.log.err("Or build without TLS support: zig build -Dtls=false", .{});
-            return;
+        if (use_wolfssl) {
+            // wolfSSL detection is done at link time
+            // If wolfSSL is not installed, linking will fail with clear error
+            std.debug.print("[TLS Backend] Using wolfSSL (lightweight, 92% smaller)\n", .{});
+        } else {
+            const openssl_available = detectOpenSSL(b);
+            if (!openssl_available) {
+                std.log.err("TLS support requested but OpenSSL not found.", .{});
+                std.log.err("", .{});
+                std.log.err("To install OpenSSL development libraries:", .{});
+                std.log.err("  Ubuntu/Debian: sudo apt-get install libssl-dev", .{});
+                std.log.err("  RHEL/CentOS:   sudo yum install openssl-devel", .{});
+                std.log.err("  macOS:         brew install openssl", .{});
+                std.log.err("  Windows:       Install OpenSSL from https://slproweb.com/products/Win32OpenSSL.html", .{});
+                std.log.err("", .{});
+                std.log.err("Alternatively:", .{});
+                std.log.err("  - Use wolfSSL backend: zig build -Dtls-backend=wolfssl", .{});
+                std.log.err("  - Disable TLS: zig build -Dtls=false", .{});
+                return;
+            }
+            std.debug.print("[TLS Backend] Using OpenSSL (default, ubiquitous)\n", .{});
         }
     }
 
@@ -200,6 +233,7 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "enable_tls", enable_tls);
     options.addOption(bool, "enable_unixsock", enable_unixsock);
     options.addOption(bool, "allow_legacy_tls", allow_legacy_tls);
+    options.addOption(bool, "use_wolfssl", use_wolfssl);
 
     const exe = b.addExecutable(.{
         .name = "zigcat",
@@ -214,6 +248,21 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addOptions("build_options", options);
     exe.linkLibC();
 
+    // Apply LTO configuration
+    exe.lto = lto_mode;
+
+    // Log LTO mode for transparency
+    if (lto_mode) |mode| {
+        const mode_str = switch (mode) {
+            .full => "full (maximum optimization, slower build)",
+            .thin => "thin (balanced optimization, moderate build time)",
+            .none => "none (LTO disabled)",
+        };
+        std.debug.print("[Build] LTO mode: {s}\n", .{mode_str});
+    } else {
+        std.debug.print("[Build] LTO mode: auto (enabled in release modes)\n", .{});
+    }
+
     if (static) {
         exe.linkage = .static;
         if (target.result.os.tag == .linux) {
@@ -222,8 +271,36 @@ pub fn build(b: *std.Build) void {
     }
 
     if (enable_tls) {
-        exe.linkSystemLibrary("ssl");
-        exe.linkSystemLibrary("crypto");
+        if (use_wolfssl) {
+            exe.linkSystemLibrary("wolfssl");
+
+            // Add Homebrew paths for wolfSSL on macOS
+            if (target.result.os.tag == .macos) {
+                // Check both Apple Silicon and Intel paths
+                const homebrew_paths = [_][]const u8{
+                    "/opt/homebrew/opt/wolfssl", // Apple Silicon
+                    "/usr/local/opt/wolfssl",    // Intel
+                };
+
+                for (homebrew_paths) |base_path| {
+                    const include_path = std.fmt.allocPrint(b.allocator, "{s}/include", .{base_path}) catch continue;
+                    const lib_path = std.fmt.allocPrint(b.allocator, "{s}/lib", .{base_path}) catch continue;
+                    defer b.allocator.free(include_path);
+                    defer b.allocator.free(lib_path);
+
+                    // Check if this path exists
+                    std.fs.accessAbsolute(lib_path, .{}) catch continue;
+
+                    exe.addSystemIncludePath(.{ .cwd_relative = include_path });
+                    exe.addLibraryPath(.{ .cwd_relative = lib_path });
+                    std.debug.print("[wolfSSL] Using Homebrew path: {s}\n", .{base_path});
+                    break;
+                }
+            }
+        } else {
+            exe.linkSystemLibrary("ssl");
+            exe.linkSystemLibrary("crypto");
+        }
     }
 
     b.installArtifact(exe);
@@ -246,6 +323,31 @@ pub fn build(b: *std.Build) void {
     // These tests focus on core logic, parsing, and data structures.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+
+    //--- Net Tests ---
+    const net_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/net_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    net_test_module.addImport("zigcat", exe.root_module);
+    const net_tests = b.addTest(.{ .root_module = net_test_module });
+    net_tests.linkLibC();
+    const run_net_tests = b.addRunArtifact(net_tests);
+    const net_test_step = b.step("test-net", "Run net tests");
+    net_test_step.dependOn(&run_net_tests.step);
+
+    //--- Integration Tests ---
+    const integration_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const integration_tests = b.addTest(.{ .root_module = integration_test_module });
+    integration_tests.linkLibC();
+    const run_integration_tests = b.addRunArtifact(integration_tests);
+    const integration_test_step = b.step("test-integration", "Run integration tests");
+    integration_test_step.dependOn(&run_integration_tests.step);
 
     //--- Timeout Tests ---
     // This suite covers various timeout scenarios, ensuring that idle, connection,

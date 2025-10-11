@@ -9,19 +9,14 @@ const expectEqualStrings = testing.expectEqualStrings;
 const expectError = testing.expectError;
 const net = std.net;
 const os = std.os;
+const socket = @import("zigcat").socket;
 
-// Import modules under test
-// const network = @import("../src/net/socket.zig");
-// const addr = @import("../src/net/addr.zig");
-// const tcp = @import("../src/net/tcp.zig");
-// const udp = @import("../src/net/udp.zig");
 
 // =============================================================================
 // ADDRESS PARSING TESTS
 // =============================================================================
 
 test "parse IPv4 address - basic" {
-    const allocator = testing.allocator;
 
     // Test parsing "192.168.1.1:8080"
     // const result = try addr.parse(allocator, "192.168.1.1:8080");
@@ -32,7 +27,6 @@ test "parse IPv4 address - basic" {
 }
 
 test "parse IPv4 address - localhost" {
-    const allocator = testing.allocator;
 
     // Test parsing "127.0.0.1:80"
     // const result = try addr.parse(allocator, "127.0.0.1:80");
@@ -42,29 +36,30 @@ test "parse IPv4 address - localhost" {
 }
 
 test "parse IPv6 address - basic" {
-    const allocator = testing.allocator;
-
-    // Test parsing "[::1]:8080"
-    // const result = try addr.parse(allocator, "[::1]:8080");
-    // defer result.deinit(allocator);
-    //
-    // try expectEqual(net.Address.Family.ipv6, result.family);
-    // try expectEqual(@as(u16, 8080), result.port);
+    const addr = try net.Address.parseIp("::1", 8080);
+    try expect(addr.any.family == std.posix.AF.INET6);
+    try expectEqual(@as(u16, 8080), addr.getPort());
 }
 
 test "parse IPv6 address - full form" {
-    const allocator = testing.allocator;
+    const addr = try net.Address.parseIp("2001:0db8::1", 443);
+    try expect(addr.any.family == std.posix.AF.INET6);
+    try expectEqual(@as(u16, 443), addr.getPort());
+}
 
-    // Test parsing "[2001:0db8::1]:443"
-    // const result = try addr.parse(allocator, "[2001:0db8::1]:443");
-    // defer result.deinit(allocator);
-    //
-    // try expectEqual(net.Address.Family.ipv6, result.family);
-    // try expectEqual(@as(u16, 443), result.port);
+test "parse IPv6 address - with scope ID" {
+    // NOTE: std.net.Address.parseIp does not support scope IDs in the string.
+    // The scope ID is a property of the address itself.
+    const addr = try net.Address.parseIp("fe80::1", 8080);
+    var ip6_addr = addr.in6;
+    ip6_addr.sa.scope_id = 5; // e.g. eth0
+    const final_addr = net.Address{ .in6 = ip6_addr };
+
+    try expect(final_addr.any.family == std.posix.AF.INET6);
+    try expectEqual(@as(u32, 5), final_addr.in6.sa.scope_id);
 }
 
 test "parse hostname - requires DNS" {
-    const allocator = testing.allocator;
 
     // Test parsing "example.com:80"
     // This should trigger DNS resolution
@@ -75,21 +70,18 @@ test "parse hostname - requires DNS" {
 }
 
 test "parse invalid address - malformed IPv4" {
-    const allocator = testing.allocator;
 
     // Test parsing "999.999.999.999:80"
     // try expectError(error.InvalidIPAddress, addr.parse(allocator, "999.999.999.999:80"));
 }
 
 test "parse invalid address - missing port" {
-    const allocator = testing.allocator;
 
     // Test parsing "192.168.1.1" without port
     // try expectError(error.MissingPort, addr.parse(allocator, "192.168.1.1"));
 }
 
 test "parse invalid address - invalid port" {
-    const allocator = testing.allocator;
 
     // Test parsing "192.168.1.1:99999"
     // try expectError(error.InvalidPort, addr.parse(allocator, "192.168.1.1:99999"));
@@ -100,7 +92,6 @@ test "parse invalid address - invalid port" {
 // =============================================================================
 
 test "create TCP socket - IPv4" {
-    const allocator = testing.allocator;
 
     // Test creating an IPv4 TCP socket
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -110,17 +101,12 @@ test "create TCP socket - IPv4" {
 }
 
 test "create TCP socket - IPv6" {
-    const allocator = testing.allocator;
-
-    // Test creating an IPv6 TCP socket
-    // const socket = try tcp.createSocket(allocator, .ipv6);
-    // defer socket.close();
-    //
-    // try expect(socket.fd >= 0);
+    const sock = try socket.createTcpSocket(.ipv6);
+    defer socket.closeSocket(sock);
+    try expect(sock >= 0);
 }
 
 test "TCP socket - set SO_REUSEADDR" {
-    const allocator = testing.allocator;
 
     // Test that we can set SO_REUSEADDR option
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -134,7 +120,6 @@ test "TCP socket - set SO_REUSEADDR" {
 }
 
 test "TCP socket - set SO_KEEPALIVE" {
-    const allocator = testing.allocator;
 
     // Test setting SO_KEEPALIVE option
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -147,7 +132,6 @@ test "TCP socket - set SO_KEEPALIVE" {
 }
 
 test "TCP socket - set SO_LINGER" {
-    const allocator = testing.allocator;
 
     // Test setting SO_LINGER option
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -157,7 +141,6 @@ test "TCP socket - set SO_LINGER" {
 }
 
 test "TCP socket - set non-blocking" {
-    const allocator = testing.allocator;
 
     // Test setting non-blocking mode
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -170,8 +153,42 @@ test "TCP socket - set non-blocking" {
 // TCP BIND AND LISTEN TESTS
 // =============================================================================
 
+test "TCP bind - localhost IPv6" {
+    const sock = try socket.createTcpSocket(.ipv6);
+    defer socket.closeSocket(sock);
+
+    const addr = try net.Address.parseIp("::1", 0);
+    try std.posix.bind(sock, &addr.any, addr.getOsSockLen());
+
+    // Get the actual bound port
+    var bound_addr_storage: std.posix.sockaddr.storage = undefined;
+    var bound_addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
+    try std.posix.getsockname(sock, @ptrCast(&bound_addr_storage), &bound_addr_len);
+    const bound_addr = blk: {
+        const family = @as(*const std.posix.sockaddr, @ptrCast(&bound_addr_storage)).family;
+        if (family == std.posix.AF.INET) {
+            const addr4 = @as(*const std.posix.sockaddr.in, @ptrCast(&bound_addr_storage));
+            break :blk std.net.Address.initIp4(
+                @bitCast(addr4.addr),
+                @byteSwap(addr4.port),
+            );
+        } else if (family == std.posix.AF.INET6) {
+            const addr6 = @as(*const std.posix.sockaddr.in6, @ptrCast(&bound_addr_storage));
+            break :blk std.net.Address.initIp6(
+                addr6.addr,
+                @byteSwap(addr6.port),
+                addr6.flowinfo,
+                addr6.scope_id,
+            );
+        } else {
+            unreachable;
+        }
+    };
+
+    try expect(bound_addr.getPort() > 0);
+}
+
 test "TCP bind - localhost IPv4" {
-    const allocator = testing.allocator;
 
     // Test binding to 127.0.0.1:0 (random port)
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -186,7 +203,6 @@ test "TCP bind - localhost IPv4" {
 }
 
 test "TCP bind - specific port" {
-    const allocator = testing.allocator;
 
     // Test binding to a specific port
     // Note: This might fail if port is already in use
@@ -202,7 +218,6 @@ test "TCP bind - specific port" {
 }
 
 test "TCP bind - port already in use" {
-    const allocator = testing.allocator;
 
     // Test that binding to an in-use port fails
     // const socket1 = try tcp.createSocket(allocator, .ipv4);
@@ -220,7 +235,6 @@ test "TCP bind - port already in use" {
 }
 
 test "TCP listen - basic" {
-    const allocator = testing.allocator;
 
     // Test putting socket in listen mode
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -232,7 +246,6 @@ test "TCP listen - basic" {
 }
 
 test "TCP listen - large backlog" {
-    const allocator = testing.allocator;
 
     // Test listen with large backlog
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -248,7 +261,6 @@ test "TCP listen - large backlog" {
 // =============================================================================
 
 test "TCP connect - to localhost listener" {
-    const allocator = testing.allocator;
 
     // Create listener
     // const listener = try tcp.createSocket(allocator, .ipv4);
@@ -268,7 +280,6 @@ test "TCP connect - to localhost listener" {
 }
 
 test "TCP connect - connection refused" {
-    const allocator = testing.allocator;
 
     // Try to connect to a port with no listener
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -279,7 +290,6 @@ test "TCP connect - connection refused" {
 }
 
 test "TCP connect - with timeout" {
-    const allocator = testing.allocator;
 
     // Test connection with timeout
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -297,7 +307,6 @@ test "TCP connect - with timeout" {
 // =============================================================================
 
 test "TCP accept - basic connection" {
-    const allocator = testing.allocator;
 
     // Create listener
     // const listener = try tcp.createSocket(allocator, .ipv4);
@@ -323,7 +332,6 @@ test "TCP accept - basic connection" {
 }
 
 test "TCP accept - get peer address" {
-    const allocator = testing.allocator;
 
     // Accept connection and verify peer address
     // const listener = try tcp.createSocket(allocator, .ipv4);
@@ -351,7 +359,6 @@ test "TCP accept - get peer address" {
 // =============================================================================
 
 test "create UDP socket - IPv4" {
-    const allocator = testing.allocator;
 
     // Test creating an IPv4 UDP socket
     // const socket = try udp.createSocket(allocator, .ipv4);
@@ -361,7 +368,6 @@ test "create UDP socket - IPv4" {
 }
 
 test "create UDP socket - IPv6" {
-    const allocator = testing.allocator;
 
     // Test creating an IPv6 UDP socket
     // const socket = try udp.createSocket(allocator, .ipv6);
@@ -371,7 +377,6 @@ test "create UDP socket - IPv6" {
 }
 
 test "UDP bind - basic" {
-    const allocator = testing.allocator;
 
     // Test UDP bind
     // const socket = try udp.createSocket(allocator, .ipv4);
@@ -382,7 +387,6 @@ test "UDP bind - basic" {
 }
 
 test "UDP sendto/recvfrom - loopback" {
-    const allocator = testing.allocator;
 
     // Test UDP send and receive on loopback
     // const receiver = try udp.createSocket(allocator, .ipv4);
@@ -405,7 +409,6 @@ test "UDP sendto/recvfrom - loopback" {
 }
 
 test "UDP connected socket - send/recv" {
-    const allocator = testing.allocator;
 
     // Test UDP with connect() for default destination
     // const socket1 = try udp.createSocket(allocator, .ipv4);
@@ -435,7 +438,6 @@ test "UDP connected socket - send/recv" {
 // =============================================================================
 
 test "socket receive timeout" {
-    const allocator = testing.allocator;
 
     // Test SO_RCVTIMEO
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -449,7 +451,6 @@ test "socket receive timeout" {
 }
 
 test "socket send timeout" {
-    const allocator = testing.allocator;
 
     // Test SO_SNDTIMEO
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -463,7 +464,6 @@ test "socket send timeout" {
 // =============================================================================
 
 test "error - ECONNREFUSED" {
-    const allocator = testing.allocator;
 
     // Try to connect to closed port
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -474,7 +474,6 @@ test "error - ECONNREFUSED" {
 }
 
 test "error - EADDRINUSE" {
-    const allocator = testing.allocator;
 
     // Test address already in use error
     // const socket1 = try tcp.createSocket(allocator, .ipv4);
@@ -491,7 +490,6 @@ test "error - EADDRINUSE" {
 }
 
 test "error - ETIMEDOUT" {
-    const allocator = testing.allocator;
 
     // Test connection timeout to non-routable address
     // const socket = try tcp.createSocket(allocator, .ipv4);
@@ -505,7 +503,6 @@ test "error - ETIMEDOUT" {
 }
 
 test "error - EPIPE on closed socket" {
-    const allocator = testing.allocator;
 
     // Test writing to a socket after peer closed
     // const listener = try tcp.createSocket(allocator, .ipv4);
@@ -530,7 +527,6 @@ test "error - EPIPE on closed socket" {
 }
 
 test "error - EACCES on privileged port" {
-    const allocator = testing.allocator;
 
     // Try to bind to port 80 (requires root on Unix)
     // This should fail unless running as root
@@ -552,7 +548,7 @@ test "error - EACCES on privileged port" {
 // =============================================================================
 
 test "Windows - WSAStartup initialization" {
-    if (std.Target.current.os.tag != .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag != .windows) return error.SkipZigTest;
 
     // On Windows, verify WSAStartup is called
     // This should be automatic in our implementation
@@ -562,8 +558,9 @@ test "Windows - WSAStartup initialization" {
     // try expect(socket.fd >= 0);
 }
 
+
 test "Unix - SO_REUSEPORT support" {
-    if (std.Target.current.os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
 
     // Test SO_REUSEPORT on platforms that support it
     // const socket = try tcp.createSocket(testing.allocator, .ipv4);
@@ -577,7 +574,7 @@ test "Unix - SO_REUSEPORT support" {
 }
 
 test "Unix - SIGPIPE handling" {
-    if (std.Target.current.os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
 
     // On Unix, verify SIGPIPE is ignored or MSG_NOSIGNAL is used
     // This prevents process termination on broken pipe
@@ -607,7 +604,6 @@ test "Unix - SIGPIPE handling" {
 // =============================================================================
 
 test "IPv6 - connect to localhost" {
-    const allocator = testing.allocator;
 
     // Test IPv6 loopback connection
     // const listener = try tcp.createSocket(allocator, .ipv6);
@@ -626,7 +622,6 @@ test "IPv6 - connect to localhost" {
 }
 
 test "IPv6 - dual stack support" {
-    const allocator = testing.allocator;
 
     // Test if IPv6 socket can accept IPv4 connections
     // This depends on IPV6_V6ONLY socket option

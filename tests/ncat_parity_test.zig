@@ -112,7 +112,7 @@ test "delay flag timing validation" {
     var i: usize = 0;
     while (i < 5) : (i += 1) {
         // Sleep for delay_ms
-        std.time.sleep(@as(u64, @intCast(delay_ms)) * std.time.ns_per_ms);
+        std.Thread.sleep(@as(u64, @intCast(delay_ms)) * std.time.ns_per_ms);
     }
 
     const elapsed = std.time.milliTimestamp() - start_time;

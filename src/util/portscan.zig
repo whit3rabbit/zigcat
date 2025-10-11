@@ -274,12 +274,15 @@ pub fn scanPort(
     port: u16,
     timeout_ms: u32,
 ) !bool {
-    _ = allocator;
-
     // CRITICAL: Ensure timeout is reasonable (min 10ms, max 60s)
     const safe_timeout = @max(10, @min(timeout_ms, 60000));
 
-    const sock = tcp.openTcpClient(host, port, safe_timeout) catch {
+    // Create minimal config for port scanning (no IPv4/IPv6 restrictions)
+    const config = @import("../config.zig");
+    var cfg = config.Config.init(allocator);
+    defer cfg.deinit(allocator);
+
+    const sock = tcp.openTcpClient(host, port, safe_timeout, &cfg) catch {
         std.debug.print( "Port {any} closed (connection refused or timeout)\n", .{port});
         return false; // Connection refused or timeout = port closed/unreachable
     };

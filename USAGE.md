@@ -57,8 +57,9 @@ This command will create two files:
 - `-u`, `--udp` *(flag)* - use UDP instead of TCP. Example: `zigcat --udp 198.51.100.5 53`
 - `--sctp` *(flag)* - use SCTP transport. Example: `zigcat --sctp example.com 9899`
 - `-U`, `--unixsock <path>` *(string path)* - use a Unix domain socket. Example: `zigcat -U /tmp/zigcat.sock`
-- `-4` *(flag)* - force IPv4. Example: `zigcat -4 example.com 80`
-- `-6` *(flag)* - force IPv6. Example: `zigcat -6 ipv6.example.com 80`
+- `-4` *(flag)* - force IPv4. In client mode, only attempts to connect to IPv4 addresses. In server mode, listens only on IPv4. Example: `zigcat -4 example.com 80`
+- `-6` *(flag)* - force IPv6. In client mode, only attempts to connect to IPv6 addresses. In server mode, listens only on IPv6. Example: `zigcat -6 ipv6.example.com 80`
+- **Dual-Stack Listening**: By default, if no bind address or IP version flag is specified in listen mode, `zigcat` will listen on both IPv4 (`0.0.0.0`) and IPv6 (`::`) simultaneously.
 - `-s`, `--source <addr>` *(string)* - bind to a local source address. Example: `zigcat --source 192.0.2.10 example.com 80`
 - `-p`, `--source-port <port>` *(u16)* - bind to a specific local port. Example: `zigcat --source-port 55000 example.com 80`
 - `--keep-source-port` *(flag)* - retry connections without changing the bound source port. Example: `zigcat --keep-source-port --source-port 55000 example.com 80`
@@ -145,11 +146,18 @@ zigcat --ssl localhost 1234
 - `--deny-ip <list>` *(comma-separated strings)* - inline blocklist of CIDRs or addresses. Example: `zigcat -l 9000 --deny-ip 0.0.0.0/0`
 
 ## TLS/DTLS Options
+
+**TLS Backend:** ZigCat supports two TLS backends selected at build time:
+- **OpenSSL** (default): Full TLS 1.0-1.3 + DTLS 1.0-1.3 support
+- **wolfSSL** (opt-in via `-Dtls-backend=wolfssl`): TLS 1.0-1.3 only, 60% smaller binary
+
+All TLS flags work with both backends. DTLS flags only work with OpenSSL backend.
+
 - `--ssl` *(flag)* - enable TLS (TCP) or DTLS (UDP). Example: `zigcat --ssl example.com 443`
-- `--dtls` *(flag)* - enable DTLS (Datagram TLS over UDP). Example: `zigcat --dtls example.com 4433`
-- `--dtls-mtu <bytes>` *(u16)* - set DTLS path MTU (default: 1200 bytes). Example: `zigcat --dtls --dtls-mtu 1400 example.com 4433`
-- `--dtls-version <version>` *(enum: 1.0|1.2|1.3)* - set DTLS protocol version (default: 1.2). Example: `zigcat --dtls --dtls-version 1.3 example.com 4433`
-- `--dtls-timeout <ms>` *(u32 milliseconds)* - set initial DTLS retransmission timeout (default: 1000ms). Example: `zigcat --dtls --dtls-timeout 2000 example.com 4433`
+- `--dtls` *(flag)* - enable DTLS (Datagram TLS over UDP, OpenSSL backend only). Example: `zigcat --dtls example.com 4433`
+- `--dtls-mtu <bytes>` *(u16)* - set DTLS path MTU (default: 1200 bytes, OpenSSL backend only). Example: `zigcat --dtls --dtls-mtu 1400 example.com 4433`
+- `--dtls-version <version>` *(enum: 1.0|1.2|1.3)* - set DTLS protocol version (default: 1.2, OpenSSL backend only). Example: `zigcat --dtls --dtls-version 1.3 example.com 4433`
+- `--dtls-timeout <ms>` *(u32 milliseconds)* - set initial DTLS retransmission timeout (default: 1000ms, OpenSSL backend only). Example: `zigcat --dtls --dtls-timeout 2000 example.com 4433`
 - `--ssl-verify` *(flag)* - force certificate verification (explicit opt-in). Example: `zigcat --ssl --ssl-verify example.com 443`
 - `--no-ssl-verify` *(flag)* - disable certificate verification (insecure). Example: `zigcat --ssl --no-ssl-verify example.com 443`
 - `--ssl-verify=false` *(flag)* - alternate form to disable verification. Example: `zigcat --ssl --ssl-verify=false example.com 443`
@@ -164,6 +172,10 @@ zigcat --ssl localhost 1234
 ### DTLS Usage Notes
 
 **DTLS (Datagram Transport Layer Security)** extends TLS to UDP connections, preserving message boundaries while providing encryption.
+
+**⚠️ Backend Compatibility:**
+- **OpenSSL backend**: Full DTLS 1.0/1.2/1.3 support
+- **wolfSSL backend**: DTLS not yet implemented (use `--ssl` for TLS over TCP only)
 
 **Client Mode:**
 ```bash
@@ -189,6 +201,7 @@ zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem --ssl-verify --ssl-trustf
 **Requirements:**
 - DTLS 1.0/1.2: OpenSSL 1.0.2 or later
 - DTLS 1.3: OpenSSL 3.2.0 or later
+- wolfSSL backend: DTLS not supported (returns `DtlsNotAvailableWithWolfSSL` error)
 
 **Key Differences from TLS:**
 - Operates over UDP instead of TCP

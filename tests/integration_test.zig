@@ -7,10 +7,34 @@ const expect = testing.expect;
 const expectEqual = testing.expectEqual;
 const expectEqualStrings = testing.expectEqualStrings;
 const expectError = testing.expectError;
-const ChildProcess = std.ChildProcess;
+const ChildProcess = std.process.Child;
 
-// Path to the zig-nc binary (will be set by test runner)
-const zigcat_binary = "zig-out/bin/zig-nc";
+// Path to the zigcat binary (will be set by test runner)
+const zigcat_binary = "zig-out/bin/zigcat";
+
+var network_check_done = false;
+var network_available = false;
+
+fn ensureNetworkAccess() !void {
+    if (!network_check_done) {
+        network_available = probeNetworkAccess() catch |err| switch (err) {
+            error.AccessDenied, error.PermissionDenied => false,
+            else => return err,
+        };
+        network_check_done = true;
+    }
+
+    if (!network_available) {
+        return error.SkipZigTest;
+    }
+}
+
+fn probeNetworkAccess() !bool {
+    const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+    var server = try addr.listen(.{ .reuse_address = true });
+    defer server.deinit();
+    return true;
+}
 
 // =============================================================================
 // BASIC CONNECT/LISTEN TESTS
@@ -18,8 +42,9 @@ const zigcat_binary = "zig-out/bin/zig-nc";
 
 test "integration - basic TCP echo server" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener: zig-nc -l 12345
+    // Start listener: zigcat -l 12345
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12345" }, allocator);
     listener.stdin_behavior = .Pipe;
     listener.stdout_behavior = .Pipe;
@@ -29,9 +54,9 @@ test "integration - basic TCP echo server" {
     defer _ = listener.kill() catch {};
 
     // Give listener time to start
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
-    // Connect: zig-nc localhost 12345
+    // Connect: zigcat localhost 12345
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12345" }, allocator);
     client.stdin_behavior = .Pipe;
     client.stdout_behavior = .Pipe;
@@ -53,19 +78,20 @@ test "integration - basic TCP echo server" {
 
 test "integration - file transfer via pipe" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Test: cat file | zig-nc -l 12346 &
-    //       zig-nc localhost 12346 > received_file
+    // Test: cat file | zigcat -l 12346 &
+    //       zigcat localhost 12346 > received_file
 
     const test_data = "This is test file data\nWith multiple lines\n";
 
-    // Start receiver: zig-nc localhost 12346 > output
+    // Start receiver: zigcat localhost 12346 > output
     var receiver = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12346" }, allocator);
     receiver.stdin_behavior = .Ignore;
     receiver.stdout_behavior = .Pipe;
     receiver.stderr_behavior = .Ignore;
 
-    // Start sender: zig-nc -l 12346
+    // Start sender: zigcat -l 12346
     var sender = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12346" }, allocator);
     sender.stdin_behavior = .Pipe;
     sender.stdout_behavior = .Ignore;
@@ -74,7 +100,7 @@ test "integration - file transfer via pipe" {
     try sender.spawn();
     defer _ = sender.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     try receiver.spawn();
     defer _ = receiver.kill() catch {};
@@ -91,13 +117,92 @@ test "integration - file transfer via pipe" {
 }
 
 // =============================================================================
+// IPv6 TESTS
+// =============================================================================
+
+test "integration - pure IPv6 client and server" {
+    const allocator = testing.allocator;
+    try ensureNetworkAccess();
+
+    // Start listener: zigcat -6 -l ::1 12361
+    var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "-l", "::1", "12361" }, allocator);
+    listener.stdin_behavior = .Pipe;
+    listener.stdout_behavior = .Pipe;
+    listener.stderr_behavior = .Ignore;
+
+    try listener.spawn();
+    defer _ = listener.kill() catch {};
+
+    // Give listener time to start
+    std.Thread.sleep(100 * std.time.ns_per_ms);
+
+    // Connect: zigcat -6 ::1 12361
+    var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "::1", "12361" }, allocator);
+    client.stdin_behavior = .Pipe;
+    client.stdout_behavior = .Pipe;
+    client.stderr_behavior = .Ignore;
+
+    try client.spawn();
+    defer _ = client.kill() catch {};
+
+    // Send data from client
+    const test_data = "Hello, IPv6!\n";
+    _ = try client.stdin.?.write(test_data);
+
+    // Read on server side
+    var buffer: [1024]u8 = undefined;
+    const received = try listener.stdout.?.read(&buffer);
+
+    try expectEqualStrings(test_data, buffer[0..received]);
+}
+
+test "integration - file transfer over IPv6" {
+    const allocator = testing.allocator;
+    try ensureNetworkAccess();
+
+    const test_data = "IPv6 file transfer test\n";
+
+    // Start receiver: zigcat -6 -l ::1 12362
+    var receiver = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "-l", "::1", "12362" }, allocator);
+    receiver.stdin_behavior = .Ignore;
+    receiver.stdout_behavior = .Pipe;
+    receiver.stderr_behavior = .Ignore;
+
+    // Start sender: zigcat -6 ::1 12362
+    var sender = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "::1", "12362" }, allocator);
+    sender.stdin_behavior = .Pipe;
+    sender.stdout_behavior = .Ignore;
+    sender.stderr_behavior = .Ignore;
+
+    try receiver.spawn();
+    defer _ = receiver.kill() catch {};
+
+    std.Thread.sleep(100 * std.time.ns_per_ms);
+
+    try sender.spawn();
+    defer _ = sender.kill() catch {};
+
+    // Send data
+    _ = try sender.stdin.?.write(test_data);
+    sender.stdin.?.close();
+
+    // Receive data
+    var buffer: [1024]u8 = undefined;
+    const received = try receiver.stdout.?.read(&buffer);
+
+    try expectEqualStrings(test_data, buffer[0..received]);
+}
+
+
+// =============================================================================
 // UDP TESTS
 // =============================================================================
 
 test "integration - UDP echo" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start UDP listener: zig-nc -u -l 12347
+    // Start UDP listener: zigcat -u -l 12347
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-u", "-l", "12347" }, allocator);
     listener.stdin_behavior = .Pipe;
     listener.stdout_behavior = .Pipe;
@@ -106,9 +211,9 @@ test "integration - UDP echo" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
-    // Send UDP message: echo "test" | zig-nc -u localhost 12347
+    // Send UDP message: echo "test" | zigcat -u localhost 12347
     var sender = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-u", "localhost", "12347" }, allocator);
     sender.stdin_behavior = .Pipe;
     sender.stdout_behavior = .Pipe;
@@ -133,8 +238,9 @@ test "integration - UDP echo" {
 
 test "integration - keep-open accepts multiple clients" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener with -k: zig-nc -l -k 12348
+    // Start listener with -k: zigcat -l -k 12348
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "-k", "12348" }, allocator);
     listener.stdin_behavior = .Ignore;
     listener.stdout_behavior = .Pipe;
@@ -143,7 +249,7 @@ test "integration - keep-open accepts multiple clients" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // First client
     var client1 = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12348" }, allocator);
@@ -181,6 +287,7 @@ test "integration - keep-open accepts multiple clients" {
 
 test "integration - zero-io port scanning - open port" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
     // Start listener on port 12349
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12349" }, allocator);
@@ -191,9 +298,9 @@ test "integration - zero-io port scanning - open port" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
-    // Scan with -z: zig-nc -z localhost 12349
+    // Scan with -z: zigcat -z localhost 12349
     var scanner = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-z", "localhost", "12349" }, allocator);
     scanner.stdin_behavior = .Ignore;
     scanner.stdout_behavior = .Ignore;
@@ -209,8 +316,9 @@ test "integration - zero-io port scanning - open port" {
 
 test "integration - zero-io port scanning - closed port" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Scan port with no listener: zig-nc -z localhost 1
+    // Scan port with no listener: zigcat -z localhost 1
     var scanner = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-z", "localhost", "1" }, allocator);
     scanner.stdin_behavior = .Ignore;
     scanner.stdout_behavior = .Ignore;
@@ -226,6 +334,7 @@ test "integration - zero-io port scanning - closed port" {
 
 test "integration - zero-io scan multiple ports" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
     // Start listeners on multiple ports
     var listener1 = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12350" }, allocator);
@@ -236,7 +345,7 @@ test "integration - zero-io scan multiple ports" {
     try listener2.spawn();
     defer _ = listener2.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Scan range (would need loop in shell script, but shows concept)
     const ports = [_][]const u8{ "12350", "12351", "12352" };
@@ -261,9 +370,10 @@ test "integration - zero-io scan multiple ports" {
 
 test "integration - connect timeout on unresponsive host" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
     // Try to connect to non-routable address with timeout
-    // zig-nc -w 1 192.0.2.1 80
+    // zigcat -w 1 192.0.2.1 80
     var client = ChildProcess.init(&[_][]const u8{
         zigcat_binary,
         "-w",
@@ -286,13 +396,14 @@ test "integration - connect timeout on unresponsive host" {
 
 test "integration - idle timeout closes connection" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener with idle timeout: zig-nc -l -i 2 12353
+    // Start listener with idle timeout: zigcat -l -i 2 12353
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "-i", "2", "12353" }, allocator);
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect but don't send data
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12353" }, allocator);
@@ -312,15 +423,16 @@ test "integration - idle timeout closes connection" {
 
 test "integration - quit-after-eof delay" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener: zig-nc -l 12354
+    // Start listener: zigcat -l 12354
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12354" }, allocator);
     listener.stdin_behavior = .Ignore;
     listener.stdout_behavior = .Ignore;
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect with -q 2 (wait 2 seconds after EOF)
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-q", "2", "localhost", "12354" }, allocator);
@@ -347,11 +459,12 @@ test "integration - quit-after-eof delay" {
 // =============================================================================
 
 test "integration - exec spawns command on connect" {
-    if (std.Target.current.os.tag == .windows) return error.SkipZigTest;
+    if (@import("builtin").target.os.tag == .windows) return error.SkipZigTest;
 
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener with exec: zig-nc -l -e /bin/cat 12355
+    // Start listener with exec: zigcat -l -e /bin/cat 12355
     var listener = ChildProcess.init(&[_][]const u8{
         zigcat_binary,
         "-l",
@@ -363,7 +476,7 @@ test "integration - exec spawns command on connect" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect and send data
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12355" }, allocator);
@@ -387,6 +500,7 @@ test "integration - exec spawns command on connect" {
 
 test "integration - exec security warning logged" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
     // When using -e, a warning should be printed to stderr
     var listener = ChildProcess.init(&[_][]const u8{
@@ -401,7 +515,7 @@ test "integration - exec security warning logged" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Read stderr
     var buffer: [4096]u8 = undefined;
@@ -417,8 +531,9 @@ test "integration - exec security warning logged" {
 
 test "integration - broker mode relays between clients" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start broker: zig-nc -l --broker 12357
+    // Start broker: zigcat -l --broker 12357
     var broker = ChildProcess.init(&[_][]const u8{
         zigcat_binary,
         "-l",
@@ -429,7 +544,7 @@ test "integration - broker mode relays between clients" {
     try broker.spawn();
     defer _ = broker.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect client 1
     var client1 = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12357" }, allocator);
@@ -447,7 +562,7 @@ test "integration - broker mode relays between clients" {
     try client2.spawn();
     defer _ = client2.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Client 1 sends message
     const msg = "Hello from client 1\n";
@@ -466,8 +581,9 @@ test "integration - broker mode relays between clients" {
 
 test "integration - allow list permits connection" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener with allow list: zig-nc -l --allow 127.0.0.1 12358
+    // Start listener with allow list: zigcat -l --allow 127.0.0.1 12358
     var listener = ChildProcess.init(&[_][]const u8{
         zigcat_binary,
         "-l",
@@ -479,7 +595,7 @@ test "integration - allow list permits connection" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect from localhost (should be allowed)
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12358" }, allocator);
@@ -497,8 +613,9 @@ test "integration - allow list permits connection" {
 
 test "integration - deny list blocks connection" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener with deny list: zig-nc -l --deny 127.0.0.1 12359
+    // Start listener with deny list: zigcat -l --deny 127.0.0.1 12359
     var listener = ChildProcess.init(&[_][]const u8{
         zigcat_binary,
         "-l",
@@ -510,7 +627,7 @@ test "integration - deny list blocks connection" {
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect from localhost (should be denied)
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12359" }, allocator);
@@ -529,21 +646,22 @@ test "integration - deny list blocks connection" {
 
 test "integration - verbose output shows connection info" {
     const allocator = testing.allocator;
+    try ensureNetworkAccess();
 
-    // Start listener with -v: zig-nc -l -v 12360
+    // Start listener with -v: zigcat -l -v 12360
     var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "-v", "12360" }, allocator);
     listener.stderr_behavior = .Pipe;
 
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Connect
     var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12360" }, allocator);
     try client.spawn();
 
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     _ = try client.kill();
 
@@ -565,17 +683,19 @@ test "integration - help flag shows usage" {
 
     var help = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-h" }, allocator);
     help.stdout_behavior = .Pipe;
+    help.stderr_behavior = .Pipe;
 
     try help.spawn();
 
     var buffer: [8192]u8 = undefined;
-    const output = try help.stdout.?.read(&buffer);
+    const output = try help.stderr.?.read(&buffer);
 
     _ = try help.wait();
 
     // Should contain usage information
-    try expect(std.mem.indexOf(u8, buffer[0..output], "Usage:") != null);
-    try expect(std.mem.indexOf(u8, buffer[0..output], "zig-nc") != null);
+    try expect(output > 0);
+    try expect(std.mem.indexOf(u8, buffer[0..output], "USAGE:") != null);
+    try expect(std.mem.indexOf(u8, buffer[0..output], "zigcat") != null);
 }
 
 test "integration - version flag shows version" {
@@ -583,15 +703,16 @@ test "integration - version flag shows version" {
 
     var version = ChildProcess.init(&[_][]const u8{ zigcat_binary, "--version" }, allocator);
     version.stdout_behavior = .Pipe;
+    version.stderr_behavior = .Pipe;
 
     try version.spawn();
 
     var buffer: [1024]u8 = undefined;
-    const output = try version.stdout.?.read(&buffer);
+    const output = try version.stderr.?.read(&buffer);
 
     _ = try version.wait();
 
     // Should contain version number
-    try expect(std.mem.indexOf(u8, buffer[0..output], "zig-nc") != null);
     try expect(output > 0);
+    try expect(std.mem.indexOf(u8, buffer[0..output], "zigcat") != null);
 }

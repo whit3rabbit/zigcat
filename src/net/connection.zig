@@ -118,10 +118,7 @@ pub const Connection = union(enum) {
     pub fn getSocket(self: *Connection) socket_mod.Socket {
         return switch (self.*) {
             .plain => |sock| sock,
-            .tls => |*conn| switch (conn.backend) {
-                .openssl => |openssl_tls| openssl_tls.socket,
-                .disabled => unreachable,
-            },
+            .tls => |*conn| conn.getSocket(),
             .unix_socket => |unix_conn| unix_conn.socket,
         };
     }

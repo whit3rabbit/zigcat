@@ -276,7 +276,7 @@ test "validateTimeout - clamps to valid range" {
 
 test "TestTimer - measures elapsed time" {
     var timer = TestTimer.start();
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
     const elapsed_time = timer.elapsed();
 
     // Should be close to 100ms (±50ms tolerance)

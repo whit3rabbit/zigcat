@@ -91,10 +91,13 @@ Use SCTP instead of the default TCP.
 Use a Unix domain socket.
 .TP
 .B -4
-Use IPv4 only.
+Use IPv4 only. In client mode, only attempts to connect to IPv4 addresses. In server mode, listens only on IPv4.
 .TP
 .B -6
-Use IPv6 only.
+Use IPv6 only. In client mode, only attempts to connect to IPv6 addresses. In server mode, listens only on IPv6.
+.TP
+.B Dual-Stack Listening
+By default, if no bind address or IP version flag is specified in listen mode, zigcat will listen on both IPv4 (0.0.0.0) and IPv6 (::) simultaneously.
 .TP
 .BR -s ", " --source " <addr>"
 Bind to the specified local source address before connecting.
@@ -137,21 +140,32 @@ Do not shutdown the write half of the socket after EOF on stdin.
 .BR -d ", " --delay " <ms>"
 Wait between reads and writes to shape traffic (milliseconds, u32).
 .SS "SSL/TLS/DTLS OPTIONS"
+.PP
+.B zigcat
+supports two TLS backends selected at build time:
+.IP \(bu 2
+.B OpenSSL
+(default): Full TLS 1.0-1.3 + DTLS 1.0-1.3 support
+.IP \(bu 2
+.B wolfSSL
+(opt-in via -Dtls-backend=wolfssl): TLS 1.0-1.3 only, 60% smaller binary
+.PP
+All TLS flags work with both backends. DTLS flags only work with OpenSSL backend.
 .TP
 .B --ssl
 Enable SSL/TLS (TCP) or DTLS (UDP).
 .TP
 .B --dtls
-Enable DTLS (Datagram Transport Layer Security over UDP).
+Enable DTLS (Datagram Transport Layer Security over UDP). OpenSSL backend only.
 .TP
 .BR --dtls-mtu " <bytes>"
-Set DTLS path MTU in bytes (default: 1200, range: 296-65507).
+Set DTLS path MTU in bytes (default: 1200, range: 296-65507). OpenSSL backend only.
 .TP
 .BR --dtls-version " <version>"
-Set DTLS protocol version. Accepted values are 1.0, 1.2, 1.3. Default is 1.2. Note that DTLS 1.3 requires OpenSSL 3.2.0 or later.
+Set DTLS protocol version. Accepted values are 1.0, 1.2, 1.3. Default is 1.2. Note that DTLS 1.3 requires OpenSSL 3.2.0 or later. OpenSSL backend only.
 .TP
 .BR --dtls-timeout " <ms>"
-Set initial DTLS retransmission timeout in milliseconds (default: 1000).
+Set initial DTLS retransmission timeout in milliseconds (default: 1000). OpenSSL backend only.
 .TP
 .B --ssl-verify
 Verify the server certificate. This is the default.
@@ -463,6 +477,14 @@ zigcat -z --scan-parallel --scan-delay 100 target.example 1-65535
 .EE
 .RE
 .SS "DTLS connections"
+.PP
+.B Note:
+DTLS requires the OpenSSL backend. If
+.B zigcat
+was built with the wolfSSL backend
+.RI ( -Dtls-backend=wolfssl ),
+DTLS operations will fail with
+.IR DtlsNotAvailableWithWolfSSL .
 .PP
 Basic DTLS client connection:
 .RS

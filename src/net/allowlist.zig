@@ -429,7 +429,7 @@ test "hostname resolution and caching" {
     try std.testing.expectEqual(addresses.ptr, cached_addresses.ptr);
 
     // Wait for TTL to expire
-    std.time.sleep(2 * std.time.ns_per_s);
+    std.Thread.sleep(2 * std.time.ns_per_s);
 
     // Check that the entry is expired and a new resolution happens
     const new_addresses = try cache.resolve("localhost");

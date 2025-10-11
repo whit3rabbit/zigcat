@@ -1,15 +1,24 @@
 //! TLS abstraction interface providing a uniform API for TLS operations.
 //!
-//! This module defines the TLS connection trait using OpenSSL for secure
-//! TLS operations. It provides:
+//! This module defines the TLS connection trait that supports multiple backends:
+//! - **OpenSSL** (default): Ubiquitous, production-ready TLS library
+//! - **wolfSSL** (opt-in): Lightweight TLS library for size-critical builds
+//!
+//! **Features:**
 //! - Encrypted read/write operations
 //! - Connection lifecycle management
 //! - Error types for TLS operations
 //! - Configuration structures
+//! - Backend selection at build time
+//!
+//! **Backend Selection:**
+//! ```bash
+//! zig build -Dtls-backend=openssl  # Default, ubiquitous
+//! zig build -Dtls-backend=wolfssl  # Lightweight, 92% smaller
+//! ```
 //!
 //! **Security:**
-//! This interface uses OpenSSL exclusively to ensure proper encryption.
-//! The insecure built-in TLS implementation has been removed.
+//! Both backends provide production-ready encryption and certificate validation.
 //!
 //! **Thread Safety:**
 //! TlsConnection is NOT thread-safe. Each connection should be accessed
@@ -21,12 +30,13 @@ const build_options = @import("build_options");
 /// TLS connection interface that wraps socket operations with encryption.
 ///
 /// **Backend Support:**
-/// - `.openssl`: OpenSSL/LibreSSL backend (production-ready, secure)
+/// - `.openssl`: OpenSSL/LibreSSL backend (default, production-ready)
+/// - `.wolfssl`: wolfSSL backend (opt-in, lightweight, 92% smaller)
 /// - `.disabled`: Stub backend when TLS is disabled at build time
 ///
-/// **Security:**
-/// This interface uses OpenSSL exclusively for all TLS operations to ensure
-/// proper encryption and certificate validation.
+/// **Backend Selection:**
+/// The backend is selected at build time via the `tls_backend` build option.
+/// Both backends provide full TLS 1.2/1.3 support with modern cipher suites.
 ///
 /// **Lifecycle:**
 /// 1. Create via `tls.connectTls()` or `tls.acceptTls()`
@@ -40,7 +50,12 @@ pub const TlsConnection = struct {
     allocator: std.mem.Allocator,
     backend: Backend,
 
-    pub const Backend = union(enum) {
+    // Backend union is compile-time generated based on which backend is enabled
+    // This avoids requiring both backend types to be valid even when only one is used
+    pub const Backend = if (use_wolfssl) union(enum) {
+        wolfssl: *WolfSslTls,
+        disabled: void,
+    } else union(enum) {
         openssl: *OpenSslTls,
         disabled: void,
     };
@@ -58,10 +73,17 @@ pub const TlsConnection = struct {
     /// @param buffer The buffer to store the decrypted plaintext data.
     /// @return The number of bytes read into `buffer`, or any `TlsError`.
     pub fn read(self: *TlsConnection, buffer: []u8) !usize {
-        return switch (self.backend) {
-            .openssl => |tls| try tls.read(buffer),
-            .disabled => error.TlsNotEnabled,
-        };
+        if (use_wolfssl) {
+            return switch (self.backend) {
+                .wolfssl => |tls| try tls.read(buffer),
+                .disabled => error.TlsNotEnabled,
+            };
+        } else {
+            return switch (self.backend) {
+                .openssl => |tls| try tls.read(buffer),
+                .disabled => error.TlsNotEnabled,
+            };
+        }
     }
 
     /// Encrypts and writes data to the TLS stream.
@@ -77,10 +99,17 @@ pub const TlsConnection = struct {
     /// @param data The plaintext data to encrypt and send.
     /// @return The number of bytes from `data` that were written, or any `TlsError`.
     pub fn write(self: *TlsConnection, data: []const u8) !usize {
-        return switch (self.backend) {
-            .openssl => |tls| try tls.write(data),
-            .disabled => error.TlsNotEnabled,
-        };
+        if (use_wolfssl) {
+            return switch (self.backend) {
+                .wolfssl => |tls| try tls.write(data),
+                .disabled => error.TlsNotEnabled,
+            };
+        } else {
+            return switch (self.backend) {
+                .openssl => |tls| try tls.write(data),
+                .disabled => error.TlsNotEnabled,
+            };
+        }
     }
 
     /// Initiates a graceful shutdown of the TLS connection.
@@ -97,9 +126,16 @@ pub const TlsConnection = struct {
     ///
     /// @param self The `TlsConnection` instance.
     pub fn close(self: *TlsConnection) void {
-        switch (self.backend) {
-            .openssl => |tls| tls.close(),
-            .disabled => {},
+        if (use_wolfssl) {
+            switch (self.backend) {
+                .wolfssl => |tls| tls.close(),
+                .disabled => {},
+            }
+        } else {
+            switch (self.backend) {
+                .openssl => |tls| tls.close(),
+                .disabled => {},
+            }
         }
     }
 
@@ -120,12 +156,22 @@ pub const TlsConnection = struct {
     /// defer tls_conn.deinit();  // Idiomatic cleanup
     /// ```
     pub fn deinit(self: *TlsConnection) void {
-        switch (self.backend) {
-            .openssl => |tls| {
-                tls.deinit();
-                self.allocator.destroy(tls);
-            },
-            .disabled => {},
+        if (use_wolfssl) {
+            switch (self.backend) {
+                .wolfssl => |tls| {
+                    tls.deinit();
+                    self.allocator.destroy(tls);
+                },
+                .disabled => {},
+            }
+        } else {
+            switch (self.backend) {
+                .openssl => |tls| {
+                    tls.deinit();
+                    self.allocator.destroy(tls);
+                },
+                .disabled => {},
+            }
         }
     }
 
@@ -143,10 +189,17 @@ pub const TlsConnection = struct {
     /// - Do NOT close this socket directly - use `close()` instead
     /// - Do NOT perform I/O on this socket - use `read()`/`write()` instead
     pub fn getSocket(self: *TlsConnection) std.posix.socket_t {
-        return switch (self.backend) {
-            .openssl => |tls| tls.socket,
-            .disabled => unreachable,
-        };
+        if (use_wolfssl) {
+            return switch (self.backend) {
+                .wolfssl => |tls| tls.socket,
+                .disabled => unreachable,
+            };
+        } else {
+            return switch (self.backend) {
+                .openssl => |tls| tls.socket,
+                .disabled => unreachable,
+            };
+        }
     }
 };
 
@@ -307,6 +360,9 @@ pub const TlsError = error{
     TlsNotEnabled,
 };
 
-// OpenSSL backend is only imported when enabled at build time
-// When disabled, use a stub type to satisfy the type checker
-const OpenSslTls = @import("tls_openssl.zig").OpenSslTls;
+// TLS backend imports - conditional based on build options
+// Backend is selected at build time via -Dtls-backend flag
+// Only import the backend that's actually enabled to avoid linking unused libraries
+const use_wolfssl = @hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl;
+const OpenSslTls = if (!use_wolfssl) @import("tls_openssl.zig").OpenSslTls else void;
+const WolfSslTls = if (use_wolfssl) @import("tls_wolfssl.zig").WolfSslTls else void;

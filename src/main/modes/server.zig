@@ -27,6 +27,111 @@ const TelnetConnection = @import("../../protocol/telnet_connection.zig").TelnetC
 const broker_mode = @import("broker.zig");
 const unix_mode = @import("unix.zig");
 
+fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, port: u16) !void {
+    var server_v4 = std.net.Address.parseIp("0.0.0.0", port) catch |err| {
+        logging.logError(err, "parsing IPv4 address");
+        return err;
+    };
+    var listener_v4 = server_v4.listen(.{ .reuse_address = true }) catch |err| {
+        logging.logError(err, "listening on IPv4");
+        return err;
+    };
+    defer listener_v4.deinit();
+
+    var server_v6 = std.net.Address.parseIp("::", port) catch |err| {
+        logging.logError(err, "parsing IPv6 address");
+        return err;
+    };
+    var listener_v6 = server_v6.listen(.{ .reuse_address = true }) catch |err| {
+        logging.logError(err, "listening on IPv6");
+        return err;
+    };
+    defer listener_v6.deinit();
+
+    logging.logNormal(cfg, "Listening on 0.0.0.0:{d} and :::_:{d} (dual-stack)...\n", .{ port, port });
+
+    var access_list_obj: ?allowlist.AccessList = null;
+    if (cfg.allow_list.items.len > 0 or cfg.deny_list.items.len > 0 or cfg.allow_file != null or cfg.deny_file != null) {
+        access_list_obj = try listen.createAccessListFromConfig(allocator, cfg);
+    }
+    defer if (access_list_obj) |*al| al.deinit();
+
+    var pollfds = [_]std.posix.pollfd{
+        .{ .fd = listener_v4.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = listener_v6.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
+    };
+
+    var connection_count: u32 = 0;
+    while (!common.shutdown_requested.load(.seq_cst)) {
+        const ready = std.posix.poll(&pollfds, -1) catch |err| {
+            if (common.shutdown_requested.load(.seq_cst)) break;
+            return err;
+        };
+
+        if (ready == 0) continue;
+
+        if (pollfds[0].revents != 0) {
+            const conn = if (access_list_obj) |*al|
+                listen.acceptWithAccessControl(allocator, &listener_v4, al, cfg.verbose) catch {
+                    if (common.shutdown_requested.load(.seq_cst)) break;
+                    continue;
+                }
+            else
+                listener_v4.accept() catch {
+                    if (common.shutdown_requested.load(.seq_cst)) break;
+                    continue;
+                };
+            connection_count += 1;
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "Accepted connection #{any} from {any} (IPv4)\n", .{ connection_count, conn.address });
+            }
+            if (cfg.max_conns > 0) {
+                const ctx = try allocator.create(ThreadContext);
+                ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg };
+                var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
+                thread.detach();
+            } else {
+                handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
+                    logging.logError(err, "handling client");
+                };
+                conn.stream.close();
+            }
+        }
+
+        if (pollfds[1].revents != 0) {
+            const conn = if (access_list_obj) |*al|
+                listen.acceptWithAccessControl(allocator, &listener_v6, al, cfg.verbose) catch {
+                    if (common.shutdown_requested.load(.seq_cst)) break;
+                    continue;
+                }
+            else
+                listener_v6.accept() catch {
+                    if (common.shutdown_requested.load(.seq_cst)) break;
+                    continue;
+                };
+            connection_count += 1;
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "Accepted connection #{any} from {any} (IPv6)\n", .{ connection_count, conn.address });
+            }
+            if (cfg.max_conns > 0) {
+                const ctx = try allocator.create(ThreadContext);
+                ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg };
+                var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
+                thread.detach();
+            } else {
+                handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
+                    logging.logError(err, "handling client");
+                };
+                conn.stream.close();
+            }
+        }
+
+        if (!cfg.keep_listening and connection_count > 0) {
+            break;
+        }
+    }
+}
+
 pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void {
     if (cfg.unix_socket_path) |socket_path| {
         return unix_mode.runUnixSocketServer(allocator, cfg, socket_path);
@@ -42,9 +147,15 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     else if (cfg.listen_mode and cfg.positional_args.len > 1)
         cfg.positional_args[1]
     else
-        "0.0.0.0";
+        null;
 
-    const bind_addr = try std.net.Address.resolveIp(bind_addr_str, port);
+    if (bind_addr_str == null and !cfg.ipv4_only and !cfg.ipv6_only) {
+        return runDualStackServer(allocator, cfg, port);
+    }
+
+    const final_bind_addr_str = if (bind_addr_str) |s| s else if (cfg.ipv6_only) "::" else "0.0.0.0";
+
+    const bind_addr = try std.net.Address.resolveIp(final_bind_addr_str, port);
 
     const should_drop_privileges = cfg.drop_privileges_user != null;
     const is_privileged_port = port < 1024;
@@ -55,7 +166,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
 
     if (cfg.verbose) {
         logging.logVerbose(cfg, "Server configuration:\n", .{});
-        logging.logVerbose(cfg, "  Bind address: {s}:{d}\n", .{ bind_addr_str, port });
+        logging.logVerbose(cfg, "  Bind address: {s}:{d}\n", .{ final_bind_addr_str, port });
         logging.logVerbose(cfg, "  Protocol: {s}\n", .{if (cfg.udp_mode) "UDP" else "TCP"});
         logging.logVerbose(cfg, "  Keep-open: {}\n", .{cfg.keep_listening});
         logging.logVerbose(cfg, "  Max connections: {}\n", .{cfg.max_conns});
@@ -70,14 +181,14 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     const has_access_control = cfg.allow_list.items.len > 0 or cfg.deny_list.items.len > 0 or cfg.allow_file != null or cfg.deny_file != null;
 
     if (cfg.udp_mode) {
-        const udp_socket = try udp.openUdpServer(bind_addr_str, port);
+        const udp_socket = try udp.openUdpServer(final_bind_addr_str, port);
         defer net.closeSocket(udp_socket);
 
         if (should_drop_privileges and is_privileged_port) {
             try security.dropPrivileges(cfg.drop_privileges_user.?);
         }
 
-        logging.logNormal(cfg, "Listening on {s}:{d} (UDP)...\n", .{ bind_addr_str, port });
+        logging.logNormal(cfg, "Listening on {s}:{d} (UDP)...\n", .{ final_bind_addr_str, port });
         try handleUdpServer(allocator, udp_socket, cfg);
         return;
     }
@@ -113,7 +224,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         return;
     }
 
-    logging.logNormal(cfg, "Listening on {s}:{d}...\n", .{ bind_addr_str, port });
+    logging.logNormal(cfg, "Listening on {s}:{d}...\n", .{ final_bind_addr_str, port });
 
     var connection_count: u32 = 0;
 

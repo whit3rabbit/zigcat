@@ -17,7 +17,7 @@
 //!   when its completion is received.
 //! - **`waitForCompletion()`**: The primary method for retrieving results. It submits
 //!   any pending operations and blocks until a completion queue entry (CQE) is
--   //!   available, returning it as a `CompletionResult`. It also supports timeouts.
+//!   available, returning it as a `CompletionResult`. It also supports timeouts.
 //! - **`CompletionResult`**: A struct that contains the `user_data` of the completed
 //!   operation and its result code (`res`), which is typically the number of bytes
 //!   transferred or a negative `errno` value on error.

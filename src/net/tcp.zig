@@ -62,7 +62,7 @@ const platform = @import("../util/platform.zig");
 ///   timeout_ms: Connect timeout in milliseconds
 ///
 /// Returns: Connected socket or error (UnknownHost, ConnectionTimeout, ConnectionFailed)
-fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32) !socket.Socket {
+fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32, cfg: *const config.Config) !socket.Socket {
     // Resolve addresses first
     const addr_list = try std.net.getAddressList(
         std.heap.page_allocator,
@@ -76,7 +76,15 @@ fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32) !socket.Socke
     }
 
     var last_error: ?anyerror = null;
+    var attempted_connection = false;
     for (addr_list.addrs) |addr| {
+        if (cfg.ipv6_only and addr.any.family != posix.AF.INET6) {
+            continue;
+        }
+        if (cfg.ipv4_only and addr.any.family != posix.AF.INET) {
+            continue;
+        }
+        attempted_connection = true;
         // Create a fresh socket for each address attempt
         const family = if (addr.any.family == posix.AF.INET)
             socket.AddressFamily.ipv4
@@ -116,6 +124,10 @@ fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32) !socket.Socke
         }
     }
 
+    if (!attempted_connection) {
+        return error.UnknownHost;
+    }
+
     return last_error orelse error.ConnectionFailed;
 }
 
@@ -150,7 +162,7 @@ fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32) !socket.Socke
 ///   timeout_ms: Connect timeout in milliseconds
 ///
 /// Returns: Connected socket or error (UnknownHost, ConnectionTimeout, ConnectionFailed, IoUringNotSupported)
-fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32) !socket.Socket {
+fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *const config.Config) !socket.Socket {
     // Compile-time check: io_uring only available on Linux
     if (builtin.os.tag != .linux) {
         return error.IoUringNotSupported;
@@ -172,7 +184,15 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32) !socket.So
     const safe_timeout = @max(10, @min(timeout_ms, 60000));
 
     var last_error: ?anyerror = null;
+    var attempted_connection = false;
     for (addr_list.addrs) |addr| {
+        if (cfg.ipv6_only and addr.any.family != posix.AF.INET6) {
+            continue;
+        }
+        if (cfg.ipv4_only and addr.any.family != posix.AF.INET) {
+            continue;
+        }
+        attempted_connection = true;
         // Create a fresh socket for each address attempt
         const family = if (addr.any.family == posix.AF.INET)
             socket.AddressFamily.ipv4
@@ -274,6 +294,10 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32) !socket.So
         }
     }
 
+    if (!attempted_connection) {
+        return error.UnknownHost;
+    }
+
     return last_error orelse error.ConnectionFailed;
 }
 
@@ -299,22 +323,22 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32) !socket.So
 ///   timeout_ms: Connect timeout in milliseconds
 ///
 /// Returns: Connected socket or error (UnknownHost, ConnectionTimeout, ConnectionFailed)
-pub fn openTcpClient(host: []const u8, port: u16, timeout_ms: u32) !socket.Socket {
+pub fn openTcpClient(host: []const u8, port: u16, timeout_ms: u32, cfg: *const config.Config) !socket.Socket {
     // Check for io_uring support at runtime
     if (platform.isIoUringSupported()) {
         // Try io_uring first for best performance
-        return openTcpClientIoUring(host, port, timeout_ms) catch |err| {
+        return openTcpClientIoUring(host, port, timeout_ms, cfg) catch |err| {
             // Fall back to poll on io_uring errors
             if (err == error.IoUringNotSupported) {
-                std.debug.print( "io_uring not supported, using poll() for connect\n", .{});
-                return openTcpClientPoll(host, port, timeout_ms);
+                std.debug.print("io_uring not supported, using poll() for connect\n", .{});
+                return openTcpClientPoll(host, port, timeout_ms, cfg);
             }
             return err;
         };
     }
 
     // Use poll-based implementation as default/fallback
-    return openTcpClientPoll(host, port, timeout_ms);
+    return openTcpClientPoll(host, port, timeout_ms, cfg);
 }
 
 /// Wait for socket to become writable (connected) with timeout.
@@ -440,9 +464,10 @@ pub fn connectTls(
     port: u16,
     timeout_ms: u32,
     tls_config: TlsConfig,
+    cfg: *const config.Config,
 ) !TlsConnection {
     // First establish TCP connection
-    const sock = try openTcpClient(host, port, timeout_ms);
+    const sock = try openTcpClient(host, port, timeout_ms, cfg);
     errdefer socket.closeSocket(sock);
 
     // Wrap with TLS
@@ -509,6 +534,7 @@ pub fn openTcpClientWithSourcePort(
     port: u16,
     timeout_ms: u32,
     source_port: u16,
+    cfg: *const config.Config,
 ) !socket.Socket {
     // Resolve target addresses first
     const addr_list = try std.net.getAddressList(
@@ -523,7 +549,15 @@ pub fn openTcpClientWithSourcePort(
     }
 
     var last_error: ?anyerror = null;
+    var attempted_connection = false;
     for (addr_list.addrs) |addr| {
+        if (cfg.ipv6_only and addr.any.family != posix.AF.INET6) {
+            continue;
+        }
+        if (cfg.ipv4_only and addr.any.family != posix.AF.INET) {
+            continue;
+        }
+        attempted_connection = true;
         // Create socket matching target address family
         const family = if (addr.any.family == posix.AF.INET)
             socket.AddressFamily.ipv4
@@ -580,6 +614,10 @@ pub fn openTcpClientWithSourcePort(
                 last_error = err;
             }
         }
+    }
+
+    if (!attempted_connection) {
+        return error.UnknownHost;
     }
 
     return last_error orelse error.ConnectionFailed;

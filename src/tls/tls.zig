@@ -1,7 +1,11 @@
-//! TLS interface for secure network connections using OpenSSL.
+//! TLS interface for secure network connections.
 //!
 //! Provides client and server TLS functionality with configuration validation.
-//! Requires OpenSSL development libraries and `-Dtls=true` build flag.
+//! Supports multiple TLS backends:
+//! - **OpenSSL** (default): `-Dtls=true -Dtls-backend=openssl`
+//! - **wolfSSL** (opt-in): `-Dtls=true -Dtls-backend=wolfssl`
+//!
+//! Backend is selected at build time via the `tls_backend` build option.
 
 pub const TlsConnection = @import("tls_iface.zig").TlsConnection;
 pub const TlsConfig = @import("tls_iface.zig").TlsConfig;
@@ -17,10 +21,31 @@ pub const getSecureServerDefaults = @import("tls_config.zig").getSecureServerDef
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
-const OpenSslTls = @import("tls_openssl.zig").OpenSslTls;
+
+// Conditional backend imports: Only import the backend that's actually enabled
+// This prevents compiling unused TLS backends and their dependencies
+const use_wolfssl = @hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl;
+const OpenSslTls = if (!use_wolfssl) @import("tls_openssl.zig").OpenSslTls else void;
+const WolfSslTls = if (use_wolfssl) @import("tls_wolfssl.zig").WolfSslTls else void;
+
 const tls_config = @import("tls_config.zig");
 const posix = std.posix;
 const logging = @import("../util/logging.zig");
+
+/// TLS backend selection type
+pub const TlsBackend = enum {
+    openssl,
+    wolfssl,
+
+    /// Get the active TLS backend from build options
+    pub fn active() TlsBackend {
+        // Default to openssl if use_wolfssl is not defined
+        return if (@hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl)
+            .wolfssl
+        else
+            .openssl;
+    }
+};
 
 /// Create a TLS client connection wrapping an existing socket.
 /// Validates configuration before attempting connection.
@@ -66,11 +91,20 @@ pub fn connectTls(
         }
     };
 
-    const tls = try OpenSslTls.initClient(allocator, socket, config);
-    return TlsConnection{
-        .allocator = allocator,
-        .backend = .{ .openssl = tls },
-    };
+    // Select TLS backend at compile time to avoid linking unused libraries
+    if (use_wolfssl) {
+        const tls = try WolfSslTls.initClient(allocator, socket, config);
+        return TlsConnection{
+            .allocator = allocator,
+            .backend = .{ .wolfssl = tls },
+        };
+    } else {
+        const tls = try OpenSslTls.initClient(allocator, socket, config);
+        return TlsConnection{
+            .allocator = allocator,
+            .backend = .{ .openssl = tls },
+        };
+    }
 }
 
 /// Create a TLS server connection for an accepted client socket.
@@ -117,11 +151,20 @@ pub fn acceptTls(
         }
     };
 
-    const tls = try OpenSslTls.initServer(allocator, socket, config);
-    return TlsConnection{
-        .allocator = allocator,
-        .backend = .{ .openssl = tls },
-    };
+    // Select TLS backend at compile time to avoid linking unused libraries
+    if (use_wolfssl) {
+        const tls = try WolfSslTls.initServer(allocator, socket, config);
+        return TlsConnection{
+            .allocator = allocator,
+            .backend = .{ .wolfssl = tls },
+        };
+    } else {
+        const tls = try OpenSslTls.initServer(allocator, socket, config);
+        return TlsConnection{
+            .allocator = allocator,
+            .backend = .{ .openssl = tls },
+        };
+    }
 }
 
 /// Check if TLS support is enabled at build time.
