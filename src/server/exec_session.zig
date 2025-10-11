@@ -1,4 +1,4 @@
-//! Poll-driven exec session that manages child I/O with flow control.
+//! Poll-driven and io_uring exec session that manages child I/O with flow control.
 const std = @import("std");
 const builtin = @import("builtin");
 const mem = std.mem;
@@ -10,6 +10,7 @@ const TimeoutTracker = @import("../util/timeout_tracker.zig").TimeoutTracker;
 const ExecSessionConfig = @import("./exec_types.zig").ExecSessionConfig;
 const ExecError = @import("./exec_types.zig").ExecError;
 const TelnetConnection = @import("../protocol/telnet_connection.zig").TelnetConnection;
+const UringEventLoop = @import("../util/io_uring_wrapper.zig").UringEventLoop;
 
 /// Set a POSIX file descriptor to non-blocking mode.
 fn setFdNonBlocking(fd: posix.fd_t) !void {
@@ -68,6 +69,13 @@ pub const ExecSession = struct {
     const child_stdout_index: usize = 2;
     const child_stderr_index: usize = 3;
 
+    // User data constants for io_uring operation tracking
+    const USER_DATA_SOCKET_READ: u64 = 1;
+    const USER_DATA_SOCKET_WRITE: u64 = 2;
+    const USER_DATA_STDIN_WRITE: u64 = 3;
+    const USER_DATA_STDOUT_READ: u64 = 4;
+    const USER_DATA_STDERR_READ: u64 = 5;
+
     allocator: std.mem.Allocator,
     telnet_conn: *TelnetConnection,
     socket_fd: posix.fd_t,
@@ -89,6 +97,14 @@ pub const ExecSession = struct {
     child_stdout_closed: bool = false,
     child_stderr_closed: bool = false,
     flow_enabled: bool = true,
+    ring: ?UringEventLoop = null,
+    use_uring: bool = false,
+    // Pending async operations tracking for io_uring
+    socket_read_pending: bool = false,
+    socket_write_pending: bool = false,
+    stdin_write_pending: bool = false,
+    stdout_read_pending: bool = false,
+    stderr_read_pending: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -185,7 +201,32 @@ pub const ExecSession = struct {
         return session;
     }
 
+    pub fn initIoUring(
+        allocator: std.mem.Allocator,
+        telnet_conn: *TelnetConnection,
+        child: *std.process.Child,
+        cfg: ExecSessionConfig,
+    ) !ExecSession {
+        // Initialize with poll-based setup first
+        var session = try init(allocator, telnet_conn, child, cfg);
+        errdefer session.deinit();
+
+        // Only attempt io_uring on Linux
+        if (builtin.os.tag != .linux) {
+            return error.IoUringNotSupported;
+        }
+
+        // Initialize io_uring with 64-entry queue (enough for exec session)
+        session.ring = try UringEventLoop.init(allocator, 64);
+        session.use_uring = true;
+
+        return session;
+    }
+
     pub fn deinit(self: *ExecSession) void {
+        if (self.ring) |*r| {
+            r.deinit();
+        }
         self.stdin_buffer.deinit();
         self.stdout_buffer.deinit();
         self.stderr_buffer.deinit();
@@ -230,6 +271,49 @@ pub const ExecSession = struct {
         self.handleSocketWritable() catch {
             // Socket may already be closed, that's OK
         };
+        self.maybeShutdownSocketWrite();
+    }
+
+    pub fn runIoUring(self: *ExecSession) !void {
+        if (builtin.os.tag != .linux) {
+            return error.IoUringNotSupported;
+        }
+
+        var ring = self.ring orelse return error.IoUringNotSupported;
+
+        // Submit initial read operations for all open FDs
+        try self.submitUringReads(&ring);
+
+        while (self.shouldContinue()) {
+            try self.checkTimeouts();
+
+            // Compute timeout for io_uring wait
+            const timeout_ms = self.computeUringTimeout();
+            const timeout_spec = if (timeout_ms >= 0) blk: {
+                const timeout_ns = @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms;
+                break :blk std.os.linux.kernel_timespec{
+                    .tv_sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
+                    .tv_nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
+                };
+            } else null;
+
+            // Wait for completion
+            const cqe = ring.waitForCompletion(if (timeout_ms >= 0) &timeout_spec else null) catch |err| {
+                if (err == error.Timeout) {
+                    try self.checkTimeouts();
+                    continue;
+                }
+                return ExecError.PollFailed;
+            };
+
+            // Process completion
+            try self.handleUringCompletion(&ring, cqe);
+
+            try self.checkTimeouts();
+        }
+
+        // Final flush
+        self.flushUringBuffers(&ring) catch {};
         self.maybeShutdownSocketWrite();
     }
 
@@ -575,6 +659,254 @@ pub const ExecSession = struct {
         }
         self.socket_write_closed = true;
     }
+
+    // ========================================================================
+    // io_uring-specific methods
+    // ========================================================================
+
+    fn computeUringTimeout(self: *ExecSession) i32 {
+        return self.computePollTimeout();
+    }
+
+    fn submitUringReads(self: *ExecSession, ring: *UringEventLoop) !void {
+        const pause_reads = self.flow_enabled and self.flow_state.shouldPause();
+
+        // Submit socket read if needed
+        if (!self.socket_read_closed and !pause_reads and !self.child_stdin_closed and
+            self.stdin_buffer.availableWrite() > 0 and !self.socket_read_pending)
+        {
+            const writable = self.stdin_buffer.writableSlice();
+            if (writable.len > 0) {
+                try ring.submitRead(self.socket_fd, writable, USER_DATA_SOCKET_READ);
+                self.socket_read_pending = true;
+            }
+        }
+
+        // Submit child stdout read if needed
+        if (!self.child_stdout_closed and !pause_reads and
+            self.stdout_buffer.availableWrite() > 0 and !self.stdout_read_pending)
+        {
+            const writable = self.stdout_buffer.writableSlice();
+            if (writable.len > 0) {
+                try ring.submitRead(self.stdout_fd, writable, USER_DATA_STDOUT_READ);
+                self.stdout_read_pending = true;
+            }
+        }
+
+        // Submit child stderr read if needed
+        if (!self.child_stderr_closed and !pause_reads and
+            self.stderr_buffer.availableWrite() > 0 and !self.stderr_read_pending)
+        {
+            const writable = self.stderr_buffer.writableSlice();
+            if (writable.len > 0) {
+                try ring.submitRead(self.stderr_fd, writable, USER_DATA_STDERR_READ);
+                self.stderr_read_pending = true;
+            }
+        }
+
+        // Submit writes if there's data buffered
+        try self.submitUringWrites(ring);
+    }
+
+    fn submitUringWrites(self: *ExecSession, ring: *UringEventLoop) !void {
+        // Submit socket write if we have stdout/stderr data
+        if (!self.socket_write_closed and !self.socket_write_pending) {
+            // Prioritize stdout over stderr
+            if (self.stdout_buffer.availableRead() > 0) {
+                const chunk = self.stdout_buffer.readableSlice();
+                if (chunk.len > 0) {
+                    try ring.submitWrite(self.socket_fd, chunk, USER_DATA_SOCKET_WRITE);
+                    self.socket_write_pending = true;
+                }
+            } else if (self.stderr_buffer.availableRead() > 0) {
+                const chunk = self.stderr_buffer.readableSlice();
+                if (chunk.len > 0) {
+                    try ring.submitWrite(self.socket_fd, chunk, USER_DATA_SOCKET_WRITE);
+                    self.socket_write_pending = true;
+                }
+            }
+        }
+
+        // Submit child stdin write if we have socket data buffered
+        if (!self.child_stdin_closed and !self.stdin_write_pending and
+            self.stdin_buffer.availableRead() > 0)
+        {
+            const chunk = self.stdin_buffer.readableSlice();
+            if (chunk.len > 0) {
+                try ring.submitWrite(self.stdin_fd, chunk, USER_DATA_STDIN_WRITE);
+                self.stdin_write_pending = true;
+            }
+        }
+    }
+
+    fn handleUringCompletion(self: *ExecSession, ring: *UringEventLoop, cqe: UringEventLoop.CompletionResult) !void {
+        switch (cqe.user_data) {
+            USER_DATA_SOCKET_READ => {
+                self.socket_read_pending = false;
+                try self.handleUringSocketRead(ring, cqe.res);
+            },
+            USER_DATA_SOCKET_WRITE => {
+                self.socket_write_pending = false;
+                try self.handleUringSocketWrite(ring, cqe.res);
+            },
+            USER_DATA_STDIN_WRITE => {
+                self.stdin_write_pending = false;
+                try self.handleUringStdinWrite(ring, cqe.res);
+            },
+            USER_DATA_STDOUT_READ => {
+                self.stdout_read_pending = false;
+                try self.handleUringStdoutRead(ring, cqe.res);
+            },
+            USER_DATA_STDERR_READ => {
+                self.stderr_read_pending = false;
+                try self.handleUringStderrRead(ring, cqe.res);
+            },
+            else => {},
+        }
+    }
+
+    fn handleUringSocketRead(self: *ExecSession, ring: *UringEventLoop, res: i32) !void {
+        if (res < 0) {
+            // Error occurred (negative errno)
+            self.socket_read_closed = true;
+            return;
+        }
+
+        if (res == 0) {
+            // EOF - socket closed by peer
+            self.socket_read_closed = true;
+            return;
+        }
+
+        const bytes_read = @as(usize, @intCast(res));
+        self.stdin_buffer.commitWrite(bytes_read);
+        self.tracker.markActivity();
+        try self.updateFlow();
+
+        // Resubmit socket read if still open
+        try self.submitUringReads(ring);
+    }
+
+    fn handleUringSocketWrite(self: *ExecSession, ring: *UringEventLoop, res: i32) !void {
+        if (res < 0) {
+            // Error occurred
+            self.socket_write_closed = true;
+            return;
+        }
+
+        const bytes_written = @as(usize, @intCast(res));
+
+        // Consume from whichever buffer we were writing from
+        if (self.stdout_buffer.availableRead() > 0) {
+            const chunk = self.stdout_buffer.readableSlice();
+            const consumed = @min(bytes_written, chunk.len);
+            self.stdout_buffer.consume(consumed);
+        } else if (self.stderr_buffer.availableRead() > 0) {
+            const chunk = self.stderr_buffer.readableSlice();
+            const consumed = @min(bytes_written, chunk.len);
+            self.stderr_buffer.consume(consumed);
+        }
+
+        self.tracker.markActivity();
+        try self.updateFlow();
+
+        // Resubmit writes if more data available
+        try self.submitUringWrites(ring);
+    }
+
+    fn handleUringStdinWrite(self: *ExecSession, ring: *UringEventLoop, res: i32) !void {
+        if (res < 0) {
+            // Error occurred - child stdin closed
+            self.closeChildStdin();
+            return;
+        }
+
+        const bytes_written = @as(usize, @intCast(res));
+        self.stdin_buffer.consume(bytes_written);
+        self.tracker.markActivity();
+        try self.updateFlow();
+
+        // Close stdin if socket read closed and buffer empty
+        if (self.socket_read_closed and self.stdin_buffer.availableRead() == 0) {
+            self.closeChildStdin();
+        }
+
+        // Resubmit writes if more data available
+        try self.submitUringWrites(ring);
+    }
+
+    fn handleUringStdoutRead(self: *ExecSession, ring: *UringEventLoop, res: i32) !void {
+        if (res < 0) {
+            // Error occurred
+            self.closeChildStdout();
+            return;
+        }
+
+        if (res == 0) {
+            // EOF - child stdout closed
+            self.closeChildStdout();
+            return;
+        }
+
+        const bytes_read = @as(usize, @intCast(res));
+        self.stdout_buffer.commitWrite(bytes_read);
+        self.tracker.markActivity();
+        try self.updateFlow();
+
+        // Resubmit reads and trigger writes
+        try self.submitUringReads(ring);
+        try self.submitUringWrites(ring);
+    }
+
+    fn handleUringStderrRead(self: *ExecSession, ring: *UringEventLoop, res: i32) !void {
+        if (res < 0) {
+            // Error occurred
+            self.closeChildStderr();
+            return;
+        }
+
+        if (res == 0) {
+            // EOF - child stderr closed
+            self.closeChildStderr();
+            return;
+        }
+
+        const bytes_read = @as(usize, @intCast(res));
+        self.stderr_buffer.commitWrite(bytes_read);
+        self.tracker.markActivity();
+        try self.updateFlow();
+
+        // Resubmit reads and trigger writes
+        try self.submitUringReads(ring);
+        try self.submitUringWrites(ring);
+    }
+
+    fn flushUringBuffers(self: *ExecSession, ring: *UringEventLoop) !void {
+        // Attempt to flush any remaining buffered data
+        while (!self.socket_write_closed and
+            (self.stdout_buffer.availableRead() > 0 or self.stderr_buffer.availableRead() > 0))
+        {
+            if (!self.socket_write_pending) {
+                try self.submitUringWrites(ring);
+            }
+
+            // Wait for write completion with short timeout
+            const timeout_spec = std.os.linux.kernel_timespec{
+                .tv_sec = 0,
+                .tv_nsec = 100 * std.time.ns_per_ms, // 100ms timeout
+            };
+
+            const cqe = ring.waitForCompletion(&timeout_spec) catch break;
+            try self.handleUringCompletion(ring, cqe);
+
+            // Prevent infinite loop
+            if (cqe.user_data != USER_DATA_SOCKET_WRITE) break;
+        }
+    }
+
+    // ========================================================================
+    // Poll-based event dispatchers
+    // ========================================================================
 
     fn dispatchSocketEvents(self: *ExecSession, revents: i16) !void {
         if (revents == 0) return;

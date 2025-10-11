@@ -3,11 +3,37 @@
 zigcat \- Concatenate and redirect sockets
 .SH SYNOPSIS
 .B zigcat
-[\fIoptions\fR] [\fIhost\fR] [\fIport\fR]
+[\fIoptions\fR] \fIhost\fR \fIport\fR
 .br
 .B zigcat
 .BR -l " | " --listen
 [\fIoptions\fR] [\fIport\fR]
+.br
+.B zigcat
+.BR -U " " \fIpath\fR
+[\fIoptions\fR]
+.br
+.B zigcat
+.BR -l " | " --listen
+.BR -U " " \fIpath\fR
+[\fIoptions\fR]
+.br
+.B zigcat
+.BR -z " | " --zero-io
+[\fIscan-options\fR] \fIhost\fR \fB{\fR\fIport\fR\fB|\fR\fIrange\fR\fB}\fR
+.br
+.B zigcat
+.BR -l " | " --listen
+[\fIoptions\fR]
+.BR -e " " \fIcommand\fR " [" \fIargs\fR "...]"
+.br
+.B zigcat
+.BR -l " | " --listen
+[\fIoptions\fR]
+.BR -c " " \fIcommand\fR
+.br
+.B zigcat
+.BR --help " | " --version " | " --version-all
 .SH DESCRIPTION
 .B zigcat
 is a feature-rich network utility which reads and writes data across networks from the command line.

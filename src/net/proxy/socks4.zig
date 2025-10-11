@@ -275,7 +275,7 @@ fn readConnectResponse(sock: socket.Socket) !void {
             REP_IDENT_MISMATCH => "Request rejected because identd reported different user-id",
             else => "Unknown error",
         };
-        logging.logVerbose(null, "SOCKS4 error: {s}\n", .{err_msg});
+        std.debug.print( "SOCKS4 error: {s}\n", .{err_msg});
         return error.Socks4ConnectionFailed;
     }
 }

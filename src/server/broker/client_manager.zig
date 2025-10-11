@@ -103,6 +103,9 @@ pub const ClientInfo = struct {
     /// Total bytes sent to this client
     bytes_sent: u64 = 0,
 
+    /// Number of failed nickname attempts (chat mode)
+    nickname_attempts: u8 = 0,
+
     /// Initialize a new ClientInfo with the given connection.
     ///
     /// ## Parameters

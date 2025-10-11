@@ -11,6 +11,7 @@ const logging = @import("../util/logging.zig");
 const session = @import("./exec_session.zig");
 const threaded = @import("./exec_threaded.zig");
 const types = @import("./exec_types.zig");
+const platform = @import("../util/platform.zig");
 
 pub const ExecMode = types.ExecMode;
 pub const ExecBufferConfig = types.ExecBufferConfig;
@@ -95,6 +96,7 @@ pub fn executeWithConnection(
 
     try child.spawn();
     errdefer {
+        closeChildPipes(&child);
         _ = child.kill() catch {};
         _ = child.wait() catch {};
     }
@@ -106,14 +108,49 @@ pub fn executeWithConnection(
             return err;
         };
     } else {
-        var exec_session = try session.ExecSession.init(allocator, socket, &child, exec_config.session_config);
-        defer exec_session.deinit();
+        // Wrap socket in Connection and TelnetConnection for protocol handling
+        const connection = @import("../net/connection.zig").Connection.fromSocket(socket.handle);
+        var telnet_conn = try @import("../protocol/telnet_connection.zig").fromConnection(connection, allocator);
+        defer telnet_conn.deinit();
 
-        exec_session.run() catch |err| {
-            closeChildPipes(&child);
-            _ = child.kill() catch {};
-            return err;
-        };
+        // Try io_uring on Linux 5.1+, fall back to poll-based on other platforms
+        if (platform.isIoUringSupported()) {
+            var exec_session = session.ExecSession.initIoUring(allocator, &telnet_conn, &child, exec_config.session_config) catch |err| {
+                // Fall back to poll if io_uring init fails
+                if (err == error.IoUringNotSupported) {
+                    logging.log(2, "io_uring not supported, falling back to poll\n", .{});
+                    var poll_session = try session.ExecSession.init(allocator, &telnet_conn, &child, exec_config.session_config);
+                    defer poll_session.deinit();
+                    poll_session.run() catch |poll_err| {
+                        closeChildPipes(&child);
+                        _ = child.kill() catch {};
+                        return poll_err;
+                    };
+                    closeChildPipes(&child);
+                    const term = try child.wait();
+                    logChildTermination(term);
+                    return;
+                }
+                return err;
+            };
+            defer exec_session.deinit();
+
+            logging.log(2, "Using io_uring for exec session\n", .{});
+            exec_session.runIoUring() catch |err| {
+                closeChildPipes(&child);
+                _ = child.kill() catch {};
+                return err;
+            };
+        } else {
+            var exec_session = try session.ExecSession.init(allocator, &telnet_conn, &child, exec_config.session_config);
+            defer exec_session.deinit();
+
+            exec_session.run() catch |err| {
+                closeChildPipes(&child);
+                _ = child.kill() catch {};
+                return err;
+            };
+        }
     }
 
     closeChildPipes(&child);
@@ -126,12 +163,7 @@ pub fn executeWithConnection(
         return err;
     };
 
-    switch (term) {
-        .Exited => |code| logging.log(1, "Child process exited with code: {any}\n", .{code}),
-        .Signal => |sig| logging.log(1, "Child process terminated by signal: {any}\n", .{sig}),
-        .Stopped => |sig| logging.log(1, "Child process stopped by signal: {any}\n", .{sig}),
-        .Unknown => |code| logging.log(1, "Child process exited with unknown status: {any}\n", .{code}),
-    }
+    logChildTermination(term);
 }
 
 /// Ensure child process pipes are closed and optionals cleared.
@@ -147,6 +179,16 @@ pub fn closeChildPipes(child: *std.process.Child) void {
     if (child.stderr) |file| {
         file.close();
         child.stderr = null;
+    }
+}
+
+/// Log child process termination status
+fn logChildTermination(term: std.process.Child.Term) void {
+    switch (term) {
+        .Exited => |code| logging.log(1, "Child process exited with code: {any}\n", .{code}),
+        .Signal => |sig| logging.log(1, "Child process terminated by signal: {any}\n", .{sig}),
+        .Stopped => |sig| logging.log(1, "Child process stopped by signal: {any}\n", .{sig}),
+        .Unknown => |code| logging.log(1, "Child process exited with unknown status: {any}\n", .{code}),
     }
 }
 
@@ -222,18 +264,49 @@ pub fn executeWithTelnetConnection(
 
     try child.spawn();
     errdefer {
+        closeChildPipes(&child);
         _ = child.kill() catch {};
         _ = child.wait() catch {};
     }
 
-    var exec_session = try session.ExecSession.init(allocator, telnet_conn, &child, exec_config.session_config);
-    defer exec_session.deinit();
+    // Try io_uring on Linux 5.1+, fall back to poll-based on other platforms
+    if (platform.isIoUringSupported()) {
+        var exec_session = session.ExecSession.initIoUring(allocator, telnet_conn, &child, exec_config.session_config) catch |err| {
+            // Fall back to poll if io_uring init fails
+            if (err == error.IoUringNotSupported) {
+                logging.log(2, "io_uring not supported, falling back to poll\n", .{});
+                var poll_session = try session.ExecSession.init(allocator, telnet_conn, &child, exec_config.session_config);
+                defer poll_session.deinit();
+                poll_session.run() catch |poll_err| {
+                    closeChildPipes(&child);
+                    _ = child.kill() catch {};
+                    return poll_err;
+                };
+                closeChildPipes(&child);
+                const term = try child.wait();
+                logChildTermination(term);
+                return;
+            }
+            return err;
+        };
+        defer exec_session.deinit();
 
-    exec_session.run() catch |err| {
-        closeChildPipes(&child);
-        _ = child.kill() catch {};
-        return err;
-    };
+        logging.log(2, "Using io_uring for Telnet exec session\n", .{});
+        exec_session.runIoUring() catch |err| {
+            closeChildPipes(&child);
+            _ = child.kill() catch {};
+            return err;
+        };
+    } else {
+        var exec_session = try session.ExecSession.init(allocator, telnet_conn, &child, exec_config.session_config);
+        defer exec_session.deinit();
+
+        exec_session.run() catch |err| {
+            closeChildPipes(&child);
+            _ = child.kill() catch {};
+            return err;
+        };
+    }
 
     closeChildPipes(&child);
 
@@ -245,10 +318,5 @@ pub fn executeWithTelnetConnection(
         return err;
     };
 
-    switch (term) {
-        .Exited => |code| logging.log(1, "Child process exited with code: {any}\n", .{code}),
-        .Signal => |sig| logging.log(1, "Child process terminated by signal: {any}\n", .{sig}),
-        .Stopped => |sig| logging.log(1, "Child process stopped by signal: {any}\n", .{sig}),
-        .Unknown => |code| logging.log(1, "Child process exited with unknown status: {any}\n", .{code}),
-    }
+    logChildTermination(term);
 }

@@ -233,6 +233,8 @@ pub const AccessList = struct {
     /// 1. Check deny list first - if matched, DENY immediately
     /// 2. If allow list empty, ALLOW (permissive default)
     /// 3. Check allow list - if matched, ALLOW, otherwise DENY
+    ///
+    /// NOTE: Requires mutable self because DNS cache may be updated during hostname resolution
     pub fn isAllowed(self: *AccessList, addr: std.net.Address) bool {
         // Check deny list first - deny takes precedence
         for (self.deny_rules.items) |rule| {
@@ -386,7 +388,7 @@ test "hostname resolution and caching" {
     // Test DNS resolution for localhost
     const addresses = cache.resolve("localhost") catch |err| {
         // DNS resolution can fail in test environments
-        logging.logVerbose(null, "DNS resolution failed (expected in some environments): {any}\n", .{err});
+        std.debug.print( "DNS resolution failed (expected in some environments): {any}\n", .{err});
         return;
     };
 
@@ -450,7 +452,7 @@ test "hostname matching in AccessList" {
     const is_allowed = (&access_list).isAllowed(loopback_v4);
 
     // Log result for debugging (test may pass or fail depending on DNS availability)
-    logging.logVerbose(null, "Hostname matching test: localhost -> 127.0.0.1 allowed={any}\n", .{is_allowed});
+    std.debug.print( "Hostname matching test: localhost -> 127.0.0.1 allowed={any}\n", .{is_allowed});
 
     // We can't assert true/false reliably because DNS may be unavailable
     // The test passes if it doesn't crash - actual functionality validated manually

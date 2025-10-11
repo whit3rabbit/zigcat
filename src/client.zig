@@ -150,7 +150,7 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
                 break :blk try udp.openUdpClient(host, port);
             } else if (cfg.sctp_mode) {
                 const timeout = if (cfg.wait_time > 0) cfg.wait_time else cfg.connect_timeout;
-                break :blk try sctp.openSctpClient(host, port, timeout);
+                break :blk try sctp.openSctpClient(host, port, @intCast(timeout));
             } else {
                 // Use wait_time if set via -w, otherwise fall back to connect_timeout default
                 const timeout = if (cfg.wait_time > 0) cfg.wait_time else cfg.connect_timeout;
@@ -180,8 +180,8 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     if (cfg.ssl and !cfg.udp_mode) {
         // Security warning if certificate verification is disabled
         if (!cfg.ssl_verify) {
-            logging.logWarn("⚠️  SSL certificate verification is DISABLED. Connection is NOT secure!", .{});
-            logging.logWarn("⚠️  Use --ssl-verify to enable certificate validation.", .{});
+            logging.logWarning("⚠️  SSL certificate verification is DISABLED. Connection is NOT secure!", .{});
+            logging.logWarning("⚠️  Use --ssl-verify to enable certificate validation.", .{});
         }
 
         if (cfg.verbose) {
@@ -203,7 +203,7 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             logging.logVerbose(cfg, "TLS handshake complete.\n", .{});
         }
     } else if (cfg.ssl and cfg.udp_mode) {
-        logging.logWarn("TLS not supported with UDP, continuing without encryption", .{});
+        logging.logWarning("TLS not supported with UDP, continuing without encryption", .{});
     }
 
     // 4. Execute command if specified

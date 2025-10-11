@@ -295,7 +295,7 @@ fn readConnectResponse(_: std.mem.Allocator, sock: socket.Socket) !void {
     const status_code = std.fmt.parseInt(u16, status_code_str, 10) catch return error.InvalidProxyResponse;
 
     if (status_code != 200) {
-        logging.logVerbose(null, "Proxy returned status code: {d}\n", .{status_code});
+        std.debug.print("Proxy returned status code: {d}\n", .{status_code});
         return error.ProxyConnectionFailed;
     }
 }

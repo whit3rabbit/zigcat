@@ -2,7 +2,9 @@ const std = @import("std");
 const broker = @import("../broker.zig");
 const logging = @import("../../util/logging.zig");
 
-pub fn initializeChatClient(self: *broker.BrokerServer, client_id: u32) !void {
+/// Initialize a new chat client with welcome message and nickname prompt
+/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+pub fn initializeChatClient(self: *broker.BrokerServer, client_id: u64) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     const welcome_msg = "Welcome to ZigCat chat! Please enter your nickname: ";

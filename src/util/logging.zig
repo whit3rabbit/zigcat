@@ -72,7 +72,7 @@ pub fn getVerbosity() u8 {
 /// Note: Only prints if current verbose_level >= level
 pub fn log(comptime level: u8, comptime fmt: []const u8, args: anytype) void {
     if (level <= verbose_level) {
-        std.debug.print(fmt, args);
+        logInternal("INFO", fmt, args);
     }
 }
 
@@ -87,7 +87,7 @@ pub fn log(comptime level: u8, comptime fmt: []const u8, args: anytype) void {
 /// Example output: "[ACCEPT] Connection from 127.0.0.1:54321"
 pub fn logConnection(address: std.net.Address, action: []const u8) void {
     if (verbose_level > 0) {
-        std.debug.print("[{s}] Connection from {any}\n", .{ action, address });
+        std.debug.print("[{s}] Connection from {any}\n", .{action, address});
     }
 }
 
@@ -103,7 +103,7 @@ pub fn logConnection(address: std.net.Address, action: []const u8) void {
 /// Example output: "[CONNECT] google.com:80"
 pub fn logConnectionString(host: []const u8, port: u16, action: []const u8) void {
     if (verbose_level > 0) {
-        std.debug.print("[{s}] {s}:{d}\n", .{ action, host, port });
+        logInternal(action, "{s}:{d}\n", .{ host, port });
     }
 }
 
@@ -117,7 +117,7 @@ pub fn logConnectionString(host: []const u8, port: u16, action: []const u8) void
 ///
 /// Example output: "Error in connect: ConnectionRefused"
 pub fn logError(err: anyerror, context: []const u8) void {
-    std.debug.print("Error in {s}: {}\n", .{ context, err });
+    logInternal("ERROR", "in {s}: {}\n", .{ context, err });
 }
 
 /// Log warning messages (level 0)
@@ -130,8 +130,7 @@ pub fn logError(err: anyerror, context: []const u8) void {
 ///
 /// Example output: "Warning: TLS verification disabled"
 pub fn logWarning(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("Warning: ", .{});
-    std.debug.print(fmt, args);
+    logInternal("WARN", fmt, args);
 }
 
 /// Log debug messages (level 2+)
@@ -145,8 +144,7 @@ pub fn logWarning(comptime fmt: []const u8, args: anytype) void {
 /// Example output: "[DEBUG] Socket buffer size: 8192"
 pub fn logDebug(comptime fmt: []const u8, args: anytype) void {
     if (verbose_level >= 2) {
-        std.debug.print("[DEBUG] ", .{});
-        std.debug.print(fmt, args);
+        logInternal("DEBUG", fmt, args);
     }
 }
 
@@ -161,8 +159,7 @@ pub fn logDebug(comptime fmt: []const u8, args: anytype) void {
 /// Example output: "[TRACE] TLS handshake: ClientHello sent"
 pub fn logTrace(comptime fmt: []const u8, args: anytype) void {
     if (verbose_level >= 3) {
-        std.debug.print("[TRACE] ", .{});
-        std.debug.print(fmt, args);
+        logInternal("TRACE", fmt, args);
     }
 }
 
@@ -268,7 +265,7 @@ pub fn isVerbosityEnabled(cfg: *const config.Config, comptime level: config.Verb
 /// - args: Format arguments
 pub fn logNormal(cfg: *const config.Config, comptime fmt: []const u8, args: anytype) void {
     if (isVerbosityEnabled(cfg, .normal)) {
-        std.debug.print(fmt, args);
+        logInternal("INFO", fmt, args);
     }
 }
 
@@ -283,8 +280,14 @@ pub fn logNormal(cfg: *const config.Config, comptime fmt: []const u8, args: anyt
 /// - args: Format arguments
 pub fn logVerbose(cfg: *const config.Config, comptime fmt: []const u8, args: anytype) void {
     if (isVerbosityEnabled(cfg, .verbose)) {
-        std.debug.print(fmt, args);
+        logInternal("VERBOSE", fmt, args);
     }
+}
+
+fn logInternal(comptime level_str: []const u8, comptime fmt: []const u8, args: anytype) void {
+    const timestamp = std.time.timestamp();
+    std.debug.print("[{d}] [{s}] ", .{ timestamp, level_str });
+    std.debug.print(fmt, args);
 }
 
 /// Log debug message (level 3 - debug)
@@ -298,8 +301,7 @@ pub fn logVerbose(cfg: *const config.Config, comptime fmt: []const u8, args: any
 /// - args: Format arguments
 pub fn logDebugCfg(cfg: *const config.Config, comptime fmt: []const u8, args: anytype) void {
     if (isVerbosityEnabled(cfg, .debug)) {
-        std.debug.print("[DEBUG] ", .{});
-        std.debug.print(fmt, args);
+        logInternal("DEBUG", fmt, args);
     }
 }
 
@@ -314,7 +316,6 @@ pub fn logDebugCfg(cfg: *const config.Config, comptime fmt: []const u8, args: an
 /// - args: Format arguments
 pub fn logTraceCfg(cfg: *const config.Config, comptime fmt: []const u8, args: anytype) void {
     if (isVerbosityEnabled(cfg, .trace)) {
-        std.debug.print("[TRACE] ", .{});
-        std.debug.print(fmt, args);
+        logInternal("TRACE", fmt, args);
     }
 }

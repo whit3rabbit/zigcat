@@ -83,7 +83,8 @@ pub const FlowControlLevel = enum {
 /// Client flow control state
 pub const ClientFlowState = struct {
     /// Client ID
-    client_id: u32,
+    /// SECURITY FIX (2025-10-10): Changed from u32 to u64 to prevent overflow after 4.3B connections
+    client_id: u64,
     /// Bytes sent in current time window
     bytes_sent_window: u64 = 0,
     /// Bytes pending to be sent
@@ -98,7 +99,7 @@ pub const ClientFlowState = struct {
     priority: u8 = 128, // Default medium priority
 
     /// Initialize client flow state
-    pub fn init(client_id: u32) ClientFlowState {
+    pub fn init(client_id: u64) ClientFlowState {
         return ClientFlowState{
             .client_id = client_id,
             .window_start = std.time.timestamp(),
@@ -219,7 +220,7 @@ pub const FlowControlManager = struct {
     /// Configuration
     config: FlowControlConfig,
     /// Client flow states
-    client_states: std.AutoHashMap(u32, ClientFlowState),
+    client_states: std.AutoHashMap(u64, ClientFlowState),
     /// Current resource information
     resource_info: ResourceInfo = ResourceInfo{},
     /// Flow control statistics
@@ -239,7 +240,7 @@ pub const FlowControlManager = struct {
         return FlowControlManager{
             .allocator = allocator,
             .config = config,
-            .client_states = std.AutoHashMap(u32, ClientFlowState).init(allocator),
+            .client_states = std.AutoHashMap(u64, ClientFlowState).init(allocator),
             .last_cleanup = now,
             .level_change_time = now,
         };
@@ -251,7 +252,7 @@ pub const FlowControlManager = struct {
     }
 
     /// Add a client to flow control tracking
-    pub fn addClient(self: *FlowControlManager, client_id: u32) !void {
+    pub fn addClient(self: *FlowControlManager, client_id: u64) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -261,7 +262,7 @@ pub const FlowControlManager = struct {
     }
 
     /// Remove a client from flow control tracking
-    pub fn removeClient(self: *FlowControlManager, client_id: u32) void {
+    pub fn removeClient(self: *FlowControlManager, client_id: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -273,7 +274,7 @@ pub const FlowControlManager = struct {
     }
 
     /// Check if data should be sent to a client
-    pub fn shouldSendData(self: *FlowControlManager, client_id: u32, data_size: u64) bool {
+    pub fn shouldSendData(self: *FlowControlManager, client_id: u64, data_size: u64) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -314,7 +315,7 @@ pub const FlowControlManager = struct {
     }
 
     /// Record data sent to a client
-    pub fn recordDataSent(self: *FlowControlManager, client_id: u32, bytes_sent: u64) void {
+    pub fn recordDataSent(self: *FlowControlManager, client_id: u64, bytes_sent: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -331,7 +332,7 @@ pub const FlowControlManager = struct {
     }
 
     /// Record data pending for a client
-    pub fn recordDataPending(self: *FlowControlManager, client_id: u32, bytes_pending: u64) void {
+    pub fn recordDataPending(self: *FlowControlManager, client_id: u64, bytes_pending: u64) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -461,7 +462,7 @@ pub const FlowControlManager = struct {
     }
 
     /// Set client priority
-    pub fn setClientPriority(self: *FlowControlManager, client_id: u32, priority: u8) void {
+    pub fn setClientPriority(self: *FlowControlManager, client_id: u64, priority: u8) void {
         self.mutex.lock();
         defer self.mutex.unlock();
 

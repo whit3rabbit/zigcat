@@ -87,13 +87,16 @@ pub const BrokerError = error{
     InvalidConfiguration,
     /// Message exceeds maximum buffer size
     MessageTooLong,
+
+    /// Client disconnected after too many failed nickname attempts
+    TooManyFailedAttempts,
 };
 
 /// DoS Protection: Maximum lines to process per poll tick
 /// Prevents unbounded message processing that can freeze the server
 /// with rapid message flooding (e.g., 5000 newlines causing 41-second freeze).
 /// Remaining lines stay buffered for next poll event.
-const MAX_LINES_PER_TICK: usize = 100;
+pub const MAX_LINES_PER_TICK: usize = 100;
 
 /// Poll context for I/O multiplexing
 const PollContext = struct {
@@ -102,7 +105,8 @@ const PollContext = struct {
     /// Client socket poll descriptors
     client_fds: std.ArrayList(std.posix.pollfd),
     /// Mapping from socket descriptor to client ID
-    client_id_map: std.AutoHashMap(std.posix.socket_t, u32),
+    /// SECURITY FIX (2025-10-10): Changed from u32 to u64 to match ClientPool.addClient() return type
+    client_id_map: std.AutoHashMap(std.posix.socket_t, u64),
     /// Persistent cache for poll array (optimization to avoid repeated allocations)
     /// This cache is reused across poll() calls, only reallocating when growing
     poll_fds_cache: std.ArrayList(std.posix.pollfd),
@@ -118,7 +122,7 @@ const PollContext = struct {
                 .revents = 0,
             },
             .client_fds = std.ArrayList(std.posix.pollfd){},
-            .client_id_map = std.AutoHashMap(std.posix.socket_t, u32).init(allocator),
+            .client_id_map = std.AutoHashMap(std.posix.socket_t, u64).init(allocator),
             .poll_fds_cache = std.ArrayList(std.posix.pollfd){},
             .allocator = allocator,
         };
@@ -132,7 +136,7 @@ const PollContext = struct {
     }
 
     /// Add a client socket to the poll set
-    pub fn addClient(self: *PollContext, socket: std.posix.socket_t, client_id: u32) !void {
+    pub fn addClient(self: *PollContext, socket: std.posix.socket_t, client_id: u64) !void {
         // Add to poll descriptor list
         try self.client_fds.append(self.allocator, std.posix.pollfd{
             .fd = socket,
@@ -210,7 +214,7 @@ const PollContext = struct {
     }
 
     /// Get client ID from socket descriptor
-    pub fn getClientId(self: *PollContext, socket: std.posix.socket_t) ?u32 {
+    pub fn getClientId(self: *PollContext, socket: std.posix.socket_t) ?u64 {
         return self.client_id_map.get(socket);
     }
 };
@@ -242,7 +246,8 @@ pub const BrokerServer = struct {
     /// Maximum number of clients allowed
     max_clients: u32,
     /// Active nicknames for chat mode duplicate detection
-    chat_nicknames: std.StringHashMap(u32),
+    /// SECURITY FIX (2025-10-10): Changed from u32 to u64 to match ClientPool client IDs
+    chat_nicknames: std.StringHashMap(u64),
 
     /// Initialize broker server
     ///
@@ -306,7 +311,7 @@ pub const BrokerServer = struct {
             .access_list = access_list,
             .poll_context = PollContext.init(allocator, listen_socket),
             .max_clients = if (config.max_conns > 0) config.max_conns else 50, // Default to 50 clients
-            .chat_nicknames = std.StringHashMap(u32).init(allocator),
+            .chat_nicknames = std.StringHashMap(u64).init(allocator),
         };
     }
 
@@ -619,7 +624,7 @@ pub const BrokerServer = struct {
     }
 
     /// Remove a client from the server with comprehensive cleanup and enhanced logging
-    fn removeClient(self: *BrokerServer, client_id: u32) void {
+    fn removeClient(self: *BrokerServer, client_id: u64) void {
         // Get client info before removal for chat mode cleanup and statistics
         var client_nickname: ?[]const u8 = null;
         var client_stats: ?struct {
@@ -802,7 +807,7 @@ pub const BrokerServer = struct {
 
         logging.logTrace("Performing health check on {} clients\n", .{client_ids.len});
 
-        var failed_clients = std.ArrayList(u32).init(self.allocator);
+        var failed_clients = std.ArrayList(u64){};
         defer failed_clients.deinit(self.allocator);
 
         for (client_ids) |client_id| {
@@ -869,7 +874,7 @@ pub const BrokerServer = struct {
     ///
     /// ## Returns
     /// Error if relay fails critically (individual client failures are logged but don't stop relay)
-    fn relayToClients(self: *BrokerServer, data: []const u8, exclude_client_id: u32) !void {
+    pub fn relayToClients(self: *BrokerServer, data: []const u8, exclude_client_id: u64) !void {
         if (data.len == 0) {
             logging.logTrace("Relay called with empty data, skipping\n", .{});
             return;
@@ -919,7 +924,7 @@ pub const BrokerServer = struct {
         }
     }
 
-    fn isChatNicknameTaken(self: *BrokerServer, nickname: []const u8, exclude_client_id: u32) bool {
+    pub fn isChatNicknameTaken(self: *BrokerServer, nickname: []const u8, exclude_client_id: u64) bool {
         if (self.mode != .chat) return false;
 
         if (self.chat_nicknames.get(nickname)) |existing_id| {
@@ -929,7 +934,7 @@ pub const BrokerServer = struct {
         return false;
     }
 
-    fn registerChatNickname(self: *BrokerServer, nickname: []const u8, client_id: u32) !void {
+    pub fn registerChatNickname(self: *BrokerServer, nickname: []const u8, client_id: u64) !void {
         if (self.mode != .chat) return;
 
         if (self.chat_nicknames.fetchRemove(nickname)) |kv| {
@@ -942,13 +947,13 @@ pub const BrokerServer = struct {
         try self.chat_nicknames.put(nickname_copy, client_id);
     }
 
-    fn unregisterChatNickname(self: *BrokerServer, nickname: []const u8) void {
+    pub fn unregisterChatNickname(self: *BrokerServer, nickname: []const u8) void {
         if (self.chat_nicknames.fetchRemove(nickname)) |kv| {
             self.allocator.free(@constCast(kv.key));
         }
     }
 
-    fn unregisterChatNicknameById(self: *BrokerServer, client_id: u32) void {
+    fn unregisterChatNicknameById(self: *BrokerServer, client_id: u64) void {
         var it = self.chat_nicknames.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.* == client_id) {
@@ -980,7 +985,7 @@ pub const BrokerServer = struct {
     ///
     /// ## Returns
     /// Error if flush fails critically
-    fn flushWriteBuffer(self: *BrokerServer, client_id: u32) !void {
+    fn flushWriteBuffer(self: *BrokerServer, client_id: u64) !void {
         // Placeholder for write buffer flushing
         // Future enhancement: Implement buffered writes with flow control
         _ = self;

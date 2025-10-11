@@ -65,11 +65,11 @@ pub fn randomizePortOrder(ports: []u16) void {
     if (ports.len <= 1) return; // Nothing to shuffle
 
     // Seed PRNG with current timestamp for randomness
-    var prng = std.rand.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
     const random = prng.random();
 
     // Fisher-Yates shuffle algorithm
-    std.rand.shuffle(random, u16, ports);
+    random.shuffle(u16, ports);
 }
 
 /// Automatically select the best port scanning backend.
@@ -119,27 +119,27 @@ pub fn scanPortsAuto(
     // Try io_uring on Linux (if available and parallel mode enabled)
     if (parallel and builtin.os.tag == .linux) {
         if (platform.isIoUringSupported()) {
-            logging.logVerbose(null, "Using io_uring scanner ({d} ports, kernel 5.1+)\n", .{ports.len});
+            std.debug.print( "Using io_uring scanner ({d} ports, kernel 5.1+)\n", .{ports.len});
 
             // Try io_uring, fall back to thread pool if it fails
             if (portscan_uring.scanPortsIoUring(allocator, host, ports, timeout_ms, false, delay_ms)) |results| {
                 return results;
             } else |err| {
-                logging.logVerbose(null, "io_uring failed ({}), falling back to thread pool\n", .{err});
+                std.debug.print( "io_uring failed ({}), falling back to thread pool\n", .{err});
             }
         }
     }
 
     // Use thread pool if parallel mode enabled
     if (parallel) {
-        logging.logVerbose(null, "Using thread pool scanner ({d} workers, {d} ports)\n", .{ workers, ports.len });
+        std.debug.print( "Using thread pool scanner ({d} workers, {d} ports)\n", .{ workers, ports.len });
         return try scanPortsParallel(allocator, host, ports, timeout_ms, workers, delay_ms);
     }
 
     // Fall back to sequential scanning
-    logging.logVerbose(null, "Using sequential scanner ({d} ports)\n", .{ports.len});
+    std.debug.print( "Using sequential scanner ({d} ports)\n", .{ports.len});
 
-    var results = std.ArrayList(ScanResult).init(allocator);
+    var results: std.ArrayList(ScanResult) = .{};
     errdefer results.deinit(allocator);
 
     for (ports) |port| {
@@ -280,13 +280,13 @@ pub fn scanPort(
     const safe_timeout = @max(10, @min(timeout_ms, 60000));
 
     const sock = tcp.openTcpClient(host, port, safe_timeout) catch {
-        logging.logVerbose(null, "Port {any} closed (connection refused or timeout)\n", .{port});
+        std.debug.print( "Port {any} closed (connection refused or timeout)\n", .{port});
         return false; // Connection refused or timeout = port closed/unreachable
     };
     defer socket_mod.closeSocket(sock);
 
     // Port is open if we got here
-    logging.logVerbose(null, "Port {any} open\n", .{port});
+    std.debug.print( "Port {any} open\n", .{port});
     return true;
 }
 
@@ -321,7 +321,7 @@ pub fn scanPorts(
 ) !void {
     for (ports) |port| {
         const is_open = try scanPort(allocator, host, port, timeout_ms);
-        logging.logVerbose(null, "{s}:{any} - {s}\n", .{
+        std.debug.print( "{s}:{any} - {s}\n", .{
             host,
             port,
             if (is_open) "open" else "closed",
@@ -379,7 +379,7 @@ pub fn scanPortRange(
     while (port <= end_port) : (port += 1) {
         const is_open = try scanPort(allocator, host, port, timeout_ms);
         if (is_open) {
-            logging.logVerbose(null, "{s}:{any} - open\n", .{ host, port });
+            std.debug.print( "{s}:{any} - open\n", .{ host, port });
         }
     }
 }
@@ -416,12 +416,12 @@ fn scanWorker(ctx: WorkerContext) void {
 
         // Store result and print immediately (thread-safe)
         ctx.mutex.lock();
-        const append_result = ctx.results.append(.{
+        const append_result = ctx.results.append(ctx.allocator, .{
             .port = port,
             .is_open = is_open,
         });
         if (is_open) {
-            logging.logVerbose(null, "{s}:{d} - open\n", .{ ctx.host, port });
+            std.debug.print( "{s}:{d} - open\n", .{ ctx.host, port });
         }
         ctx.mutex.unlock();
 
@@ -493,7 +493,7 @@ pub fn scanPortsParallel(
     const workers = @max(1, @min(num_workers, 100));
 
     // Initialize result collection
-    var results = std.ArrayList(ScanResult).init(allocator);
+    var results: std.ArrayList(ScanResult) = .{};
     errdefer results.deinit(allocator);
 
     // Initialize synchronization primitives
@@ -517,13 +517,13 @@ pub fn scanPortsParallel(
     };
 
     // Spawn worker threads
-    var threads = std.ArrayList(std.Thread).init(allocator);
+    var threads: std.ArrayList(std.Thread) = .{};
     defer threads.deinit(allocator);
 
     var i: usize = 0;
     while (i < workers) : (i += 1) {
         const thread = try std.Thread.spawn(.{}, scanWorker, .{ctx});
-        try threads.append(thread);
+        try threads.append(allocator, thread);
     }
 
     // Wait for all workers to complete
@@ -618,7 +618,7 @@ pub fn scanPortRangeParallel(
 
         results = try scanPortsParallel(allocator, host, ports, timeout_ms, workers, delay_ms);
     } else {
-        results = std.ArrayList(ScanResult).init(allocator);
+        results = .{};
 
         var mutex = std.Thread.Mutex{};
         var next_port = std.atomic.Value(u32).init(@as(u32, start_port));
@@ -638,13 +638,13 @@ pub fn scanPortRangeParallel(
             },
         };
 
-        var threads = std.ArrayList(std.Thread).init(allocator);
+        var threads: std.ArrayList(std.Thread) = .{};
         defer threads.deinit(allocator);
 
         var i: usize = 0;
         while (i < workers) : (i += 1) {
             const thread = try std.Thread.spawn(.{}, scanWorker, .{ctx});
-            try threads.append(thread);
+            try threads.append(allocator, thread);
         }
 
         for (threads.items) |thread| {

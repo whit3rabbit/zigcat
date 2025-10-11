@@ -189,38 +189,16 @@ fn pollWindowsSelect(fds: []pollfd, timeout_ms: i32) !usize {
         return 0; // Timeout
     }
 
-    // Use a hash map for efficient lookup of revents
-    var revents_map = std.HashMap(posix.socket_t, i16).init(std.heap.page_allocator);
-    defer revents_map.deinit();
-
-    var i: u32 = 0;
-    while (i < read_fds.fd_count) : (i += 1) {
-        const fd = read_fds.fd_array[i];
-        const entry = try revents_map.getOrPut(fd);
-        entry.value_ptr.* |= POLL.IN;
-    }
-
-    i = 0;
-    while (i < write_fds.fd_count) : (i += 1) {
-        const fd = write_fds.fd_array[i];
-        const entry = try revents_map.getOrPut(fd);
-        entry.value_ptr.* |= POLL.OUT;
-    }
-
-    i = 0;
-    while (i < error_fds.fd_count) : (i += 1) {
-        const fd = error_fds.fd_array[i];
-        const entry = try revents_map.getOrPut(fd);
-        entry.value_ptr.* |= POLL.ERR;
-    }
-
-    // Update revents for each fd
+    // Update revents for each fd without heap allocation
     var ready_count: usize = 0;
     for (fds) |*pfd| {
-        if (revents_map.get(pfd.fd)) |revents| {
-            pfd.revents = revents;
-            ready_count += 1;
-        }
+        var revents: i16 = 0;
+        if (FD_ISSET(pfd.fd, &read_fds)) revents |= POLL.IN;
+        if (FD_ISSET(pfd.fd, &write_fds)) revents |= POLL.OUT;
+        if (FD_ISSET(pfd.fd, &error_fds)) revents |= POLL.ERR;
+
+        pfd.revents = revents;
+        if (revents != 0) ready_count += 1;
     }
 
     return ready_count;

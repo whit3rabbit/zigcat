@@ -27,6 +27,7 @@ pub const TelnetProcessor = struct {
     sb_buffer: std.ArrayList(u8),
     current_option: ?TelnetOption,
     allocator: std.mem.Allocator,
+    scratch_allocator: ?std.mem.Allocator = null,
     negotiation_count: std.EnumMap(TelnetOption, u32),
     partial_buffer: std.ArrayList(u8),
     option_handlers: OptionHandlerRegistry,
@@ -77,17 +78,24 @@ pub const TelnetProcessor = struct {
     /// negotiation responses to send to the peer. The caller owns both slices and
     /// must free them with the same allocator passed to `init`.
     pub fn processInput(self: *TelnetProcessor, input: []const u8) (TelnetError || std.mem.Allocator.Error)!ProcessResult {
-        var app_data = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        defer app_data.deinit(self.allocator);
+        return self.processInputWithAllocator(self.allocator, input);
+    }
 
-        var response = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        defer response.deinit(self.allocator);
+    pub fn processInputWithAllocator(self: *TelnetProcessor, scratch: std.mem.Allocator, input: []const u8) (TelnetError || std.mem.Allocator.Error)!ProcessResult {
+        var app_data = try std.ArrayList(u8).initCapacity(scratch, 0);
+        defer app_data.deinit(scratch);
 
-        var combined_input = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        defer combined_input.deinit(self.allocator);
+        var response = try std.ArrayList(u8).initCapacity(scratch, 0);
+        defer response.deinit(scratch);
 
-        try combined_input.appendSlice(self.allocator, self.partial_buffer.items);
-        try combined_input.appendSlice(self.allocator, input);
+        var combined_input = try std.ArrayList(u8).initCapacity(scratch, 0);
+        defer combined_input.deinit(scratch);
+
+        self.scratch_allocator = scratch;
+        defer self.scratch_allocator = null;
+
+        try combined_input.appendSlice(scratch, self.partial_buffer.items);
+        try combined_input.appendSlice(scratch, input);
         self.partial_buffer.clearRetainingCapacity();
 
         var i: usize = 0;
@@ -112,8 +120,8 @@ pub const TelnetProcessor = struct {
         }
 
         return ProcessResult{
-            .data = try app_data.toOwnedSlice(self.allocator),
-            .response = try response.toOwnedSlice(self.allocator),
+            .data = try app_data.toOwnedSlice(scratch),
+            .response = try response.toOwnedSlice(scratch),
         };
     }
 
@@ -141,39 +149,47 @@ pub const TelnetProcessor = struct {
     /// Process outgoing application data, escaping IAC bytes per RFC 854.
     /// Optionally injects Telnet commands before the data.
     pub fn processOutput(self: *TelnetProcessor, data: []const u8, inject_commands: ?[]const u8) std.mem.Allocator.Error![]u8 {
-        var output = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        defer output.deinit(self.allocator);
+        return self.processOutputWithAllocator(self.allocator, data, inject_commands);
+    }
+
+    pub fn processOutputWithAllocator(self: *TelnetProcessor, scratch: std.mem.Allocator, data: []const u8, inject_commands: ?[]const u8) std.mem.Allocator.Error![]u8 {
+        self.scratch_allocator = scratch;
+        defer self.scratch_allocator = null;
+
+        var output = try std.ArrayList(u8).initCapacity(scratch, 0);
+        defer output.deinit(scratch);
 
         if (inject_commands) |commands| {
-            try output.appendSlice(self.allocator, commands);
+            try output.appendSlice(self.outputAllocator(), commands);
         }
 
         for (data) |byte| {
             if (byte == @intFromEnum(TelnetCommand.iac)) {
-                try output.appendSlice(self.allocator, &[_]u8{ @intFromEnum(TelnetCommand.iac), @intFromEnum(TelnetCommand.iac) });
+                try output.appendSlice(self.outputAllocator(), &[_]u8{ @intFromEnum(TelnetCommand.iac), @intFromEnum(TelnetCommand.iac) });
             } else {
-                try output.append(self.allocator, byte);
+                try output.append(self.outputAllocator(), byte);
             }
         }
 
-        return try output.toOwnedSlice(self.allocator);
+        return try output.toOwnedSlice(scratch);
     }
 
     /// Create a properly formatted Telnet command sequence.
     /// Option parameter is required for negotiation commands (WILL/WONT/DO/DONT/SB).
     pub fn createCommand(self: *TelnetProcessor, command: TelnetCommand, option: ?TelnetOption) (TelnetError || std.mem.Allocator.Error)![]u8 {
-        var cmd_data = try std.ArrayList(u8).initCapacity(self.allocator, 0);
-        defer cmd_data.deinit(self.allocator);
+        const out_allocator = self.outputAllocator();
+        var cmd_data = try std.ArrayList(u8).initCapacity(out_allocator, 0);
+        defer cmd_data.deinit(out_allocator);
 
-        try cmd_data.append(self.allocator, @intFromEnum(TelnetCommand.iac));
-        try cmd_data.append(self.allocator, @intFromEnum(command));
+        try cmd_data.append(out_allocator, @intFromEnum(TelnetCommand.iac));
+        try cmd_data.append(out_allocator, @intFromEnum(command));
 
         if (telnet.commandRequiresOption(command)) {
             const opt = option orelse return TelnetError.InvalidCommand;
-            try cmd_data.append(self.allocator, @intFromEnum(opt));
+            try cmd_data.append(out_allocator, @intFromEnum(opt));
         }
 
-        return try cmd_data.toOwnedSlice(self.allocator);
+        return try cmd_data.toOwnedSlice(out_allocator);
     }
 
     fn getNextState(self: *const TelnetProcessor, byte: u8) TelnetError!TelnetState {
@@ -207,12 +223,12 @@ pub const TelnetProcessor = struct {
         switch (self.state) {
             .data => {
                 if (byte != @intFromEnum(TelnetCommand.iac)) {
-                    try app_data.append(self.allocator, byte);
+                    try app_data.append(self.outputAllocator(), byte);
                 }
             },
             .iac => {
                 if (byte == @intFromEnum(TelnetCommand.iac)) {
-                    try app_data.append(self.allocator, byte);
+                    try app_data.append(self.outputAllocator(), byte);
                 } else if (telnet.commandRequiresOption(TelnetCommand.fromByte(byte) orelse return TelnetError.InvalidCommand)) {} else {
                     try self.handleSimpleCommand(TelnetCommand.fromByte(byte) orelse return TelnetError.InvalidCommand, response);
                 }
@@ -289,7 +305,7 @@ pub const TelnetProcessor = struct {
                 else => return TelnetError.InvalidCommand,
             };
 
-            try response.appendSlice(self.allocator, &[_]u8{
+            try response.appendSlice(self.outputAllocator(), &[_]u8{
                 @intFromEnum(TelnetCommand.iac),
                 @intFromEnum(refusal_cmd),
                 0,
@@ -311,7 +327,7 @@ pub const TelnetProcessor = struct {
 
         // Use option handlers for supported options
         if (self.isOptionSupported(option)) {
-            try self.option_handlers.handleNegotiation(self.allocator, command, option, response);
+            try self.option_handlers.handleNegotiation(self.outputAllocator(), command, option, response);
 
             // Update our internal state based on the negotiation
             switch (command) {
@@ -402,7 +418,7 @@ pub const TelnetProcessor = struct {
     }
 
     fn sendResponse(self: *TelnetProcessor, command: TelnetCommand, option: TelnetOption, response: *std.ArrayList(u8)) (TelnetError || std.mem.Allocator.Error)!void {
-        try response.appendSlice(self.allocator, &[_]u8{
+        try response.appendSlice(self.outputAllocator(), &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(command),
             @intFromEnum(option),
@@ -425,7 +441,11 @@ pub const TelnetProcessor = struct {
         const opt = option orelse return;
 
         // Use option handlers for subnegotiation
-        try self.option_handlers.handleSubnegotiation(self.allocator, opt, data, response);
+        try self.option_handlers.handleSubnegotiation(self.outputAllocator(), opt, data, response);
+    }
+
+    fn outputAllocator(self: *const TelnetProcessor) std.mem.Allocator {
+        return self.scratch_allocator orelse self.allocator;
     }
 
     pub fn resetNegotiation(self: *TelnetProcessor) void {

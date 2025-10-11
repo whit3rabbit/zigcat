@@ -123,7 +123,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         }
 
         const conn = if (access_list_obj) |*al|
-            listen.acceptWithAccessControl(&server, al, cfg.verbose) catch |err| {
+            listen.acceptWithAccessControl(allocator, &server, al, cfg.verbose) catch |err| {
                 if (common.shutdown_requested.load(.seq_cst)) {
                     if (cfg.verbose) {
                         logging.logVerbose(cfg, "Server shutdown requested, stopping accept loop\n", .{});
@@ -252,9 +252,9 @@ fn handleClient(
             }
 
             try telnet_conn.performServerNegotiation();
-            try exec.executeWithTelnetConnection(allocator, &telnet_conn, exec_config, client_address);
+            try exec.executeWithTelnetConnection(allocator, &telnet_conn, exec_config, client_address, cfg);
         } else {
-            try exec.executeWithConnection(allocator, stream, exec_config, client_address);
+            try exec.executeWithConnection(allocator, stream, exec_config, client_address, cfg);
         }
         return;
     }

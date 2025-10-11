@@ -413,7 +413,7 @@ fn readConnectResponse(_: std.mem.Allocator, sock: socket.Socket) !void {
             REP_ADDRESS_TYPE_NOT_SUPPORTED => "Address type not supported",
             else => "Unknown error",
         };
-        logging.logVerbose(null, "SOCKS5 error: {s}\n", .{err_msg});
+        std.debug.print( "SOCKS5 error: {s}\n", .{err_msg});
         return error.Socks5ConnectionFailed;
     }
 

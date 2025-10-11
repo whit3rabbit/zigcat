@@ -210,6 +210,9 @@ fn getUserInfo(username: []const u8) !UserInfo {
         return SecurityError.UserNotFound;
     }
 
+    // Add an assertion for safety.
+    std.debug.assert(username.len < 255);
+
     // Create a null-terminated copy of the username for C compatibility
     var buf: [256]u8 = undefined;
     const new_len = @min(username.len, buf.len - 1);

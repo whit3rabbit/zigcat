@@ -374,27 +374,27 @@ pub fn handleUnixSocketError(
     const error_msg = getErrorMessage(err, path, operation);
 
     if (verbose) {
-        logging.logVerbose(null, "Unix socket error during {s} on '{s}': {s}\n", .{ operation, path, error_msg });
+        std.debug.print( "Unix socket error during {s} on '{s}': {s}\n", .{ operation, path, error_msg });
 
         // Provide recovery suggestions for common errors
         switch (err) {
             UnixSocketError.PermissionDenied, UnixSocketError.InsufficientPermissions => {
-                logging.logVerbose(null, "Suggestion: Check file permissions and ensure the process has write access to the directory\n", .{});
+                std.debug.print( "Suggestion: Check file permissions and ensure the process has write access to the directory\n", .{});
             },
             UnixSocketError.DirectoryNotFound => {
-                logging.logVerbose(null, "Suggestion: Create the parent directory or use an existing directory path\n", .{});
+                std.debug.print( "Suggestion: Create the parent directory or use an existing directory path\n", .{});
             },
             UnixSocketError.SocketFileExists => {
-                logging.logVerbose(null, "Suggestion: Remove the existing file or choose a different socket path\n", .{});
+                std.debug.print( "Suggestion: Remove the existing file or choose a different socket path\n", .{});
             },
             UnixSocketError.AddressInUse => {
-                logging.logVerbose(null, "Suggestion: Another process is using this socket - try a different path or stop the other process\n", .{});
+                std.debug.print( "Suggestion: Another process is using this socket - try a different path or stop the other process\n", .{});
             },
             UnixSocketError.PathTooLong => {
-                logging.logVerbose(null, "Suggestion: Use a shorter socket path (max 107 characters)\n", .{});
+                std.debug.print( "Suggestion: Use a shorter socket path (max 107 characters)\n", .{});
             },
             UnixSocketError.PlatformNotSupported => {
-                logging.logVerbose(null, "Suggestion: Unix sockets are not supported on this platform - use TCP sockets instead\n", .{});
+                std.debug.print( "Suggestion: Unix sockets are not supported on this platform - use TCP sockets instead\n", .{});
             },
             else => {},
         }

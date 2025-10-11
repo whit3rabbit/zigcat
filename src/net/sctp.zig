@@ -9,28 +9,35 @@ pub fn openSctpClient(host: []const u8, port: u16, timeout: i32) !net.Socket {
 
     try net.setNonBlocking(sock);
 
-    const address = try std.net.resolveIp(host, port);
-    _ = posix.connect(sock, &address.any, address.getOsSocklen()) catch |err| {
+    const addr_list = try std.net.getAddressList(std.heap.page_allocator, host, port);
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.UnknownHost;
+    }
+
+    const address = addr_list.addrs[0];
+    _ = posix.connect(sock, &address.any, address.getOsSockLen()) catch |err| {
         if (err == error.InProgress) {
             // Wait for connection with timeout
-            const pollfd = posix.pollfd{
+            var pollfds = [_]posix.pollfd{.{
                 .fd = sock,
                 .events = posix.POLL.OUT,
                 .revents = 0,
-            };
+            }};
 
-            const ready = try posix.poll(&[_]posix.pollfd{pollfd}, timeout);
+            const ready = try posix.poll(&pollfds, timeout);
             if (ready == 0) {
                 return error.ConnectionTimedOut;
             }
 
             // Check for connection error
-            var so_error: c_int = 0;
-            var len = @sizeOf(@TypeOf(so_error));
-            try posix.getsockopt(sock, posix.SOL.SOCKET, posix.SO.ERROR, std.mem.asBytes(&so_error), &len);
+            var so_error: i32 = undefined;
+            const len: posix.socklen_t = @sizeOf(i32);
+            try posix.getsockopt(sock, posix.SOL.SOCKET, posix.SO.ERROR, std.mem.asBytes(&so_error)[0..len]);
 
             if (so_error != 0) {
-                return std.os.unexpectedErrno(so_error);
+                return error.ConnectionFailed;
             }
         } else {
             return err;
@@ -48,8 +55,15 @@ pub fn openSctpServer(bind_addr_str: []const u8, port: u16) !net.Socket {
     try net.setReuseAddr(sock);
     try net.setReusePort(sock);
 
-    const bind_addr = try std.net.resolveIp(bind_addr_str, port);
-    try posix.bind(sock, &bind_addr.any, bind_addr.getOsSocklen());
+    const addr_list = try std.net.getAddressList(std.heap.page_allocator, bind_addr_str, port);
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        return error.UnknownHost;
+    }
+
+    const bind_addr = addr_list.addrs[0];
+    try posix.bind(sock, &bind_addr.any, bind_addr.getOsSockLen());
 
     try posix.listen(sock, 128);
 

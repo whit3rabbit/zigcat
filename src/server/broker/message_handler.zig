@@ -3,7 +3,9 @@ const broker = @import("../broker.zig");
 const ClientPool = @import("client_manager.zig").ClientPool;
 const logging = @import("../../util/logging.zig");
 
-pub fn handleClientData(self: *broker.BrokerServer, client_id: u32) !void {
+/// Handle incoming data from a client connection
+/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+pub fn handleClientData(self: *broker.BrokerServer, client_id: u64) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     if (client.read_buffer_len >= client.read_buffer.len) {
@@ -68,7 +70,9 @@ pub fn handleClientData(self: *broker.BrokerServer, client_id: u32) !void {
     }
 }
 
-pub fn processChatData(self: *broker.BrokerServer, client_id: u32) !void {
+/// Process chat mode data buffered for a client
+/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+pub fn processChatData(self: *broker.BrokerServer, client_id: u64) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     var start: usize = 0;
@@ -117,7 +121,9 @@ pub fn processChatData(self: *broker.BrokerServer, client_id: u32) !void {
     }
 }
 
-pub fn processChatLine(self: *broker.BrokerServer, client_id: u32, line: []const u8) !void {
+/// Process a single chat line from a client
+/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const u8) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     if (client.nickname == null) {
@@ -126,6 +132,14 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u32, line: []const
         logging.logTrace("Client {} attempting to set nickname: '{s}'\n", .{ client_id, trimmed_nick });
 
         if (trimmed_nick.len == 0) {
+            client.nickname_attempts += 1;
+            if (client.nickname_attempts > 5) {
+                const error_msg = "*** Too many failed nickname attempts. Disconnecting.\r\n";
+                _ = client.connection.write(error_msg) catch {};
+                logging.logWarning("Client {}: Disconnected after too many failed nickname attempts (empty nickname)\n", .{client_id});
+                return broker.BrokerError.TooManyFailedAttempts;
+            }
+
             const prompt = "Please enter a valid nickname: ";
             const bytes_sent = client.connection.write(prompt) catch |err| {
                 logging.logError(err, "nickname prompt");
@@ -137,6 +151,14 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u32, line: []const
         }
 
         if (trimmed_nick.len > self.config.chat_max_nickname_len) {
+            client.nickname_attempts += 1;
+            if (client.nickname_attempts > 5) {
+                const error_msg = "*** Too many failed nickname attempts. Disconnecting.\r\n";
+                _ = client.connection.write(error_msg) catch {};
+                logging.logWarning("Client {}: Disconnected after too many failed nickname attempts (nickname too long)\n", .{client_id});
+                return broker.BrokerError.TooManyFailedAttempts;
+            }
+
             const error_msg = try std.fmt.allocPrint(self.allocator, "*** Nickname too long (max {} characters), please try again\n", .{self.config.chat_max_nickname_len});
             defer self.allocator.free(error_msg);
 
@@ -145,18 +167,26 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u32, line: []const
                 return;
             };
             client.bytes_sent += bytes_sent;
-            logging.logDebug("Client {} nickname too long: '{}' chars\n", .{ client_id, trimmed_nick.len });
+            logging.logDebug("Client {} nickname too long: {} chars\n", .{ client_id, trimmed_nick.len });
             return;
         }
 
         if (self.isChatNicknameTaken(trimmed_nick, client_id)) {
+            client.nickname_attempts += 1;
+            if (client.nickname_attempts > 5) {
+                const error_msg = "*** Too many failed nickname attempts. Disconnecting.\r\n";
+                _ = client.connection.write(error_msg) catch {};
+                logging.logWarning("Client {}: Disconnected after too many failed nickname attempts (nickname taken)\n", .{client_id});
+                return broker.BrokerError.TooManyFailedAttempts;
+            }
+
             const error_msg = "*** Nickname already taken, please choose another\n";
             const bytes_sent = client.connection.write(error_msg) catch |err| {
                 logging.logError(err, "nickname taken message");
                 return;
             };
             client.bytes_sent += bytes_sent;
-            logging.logDebug("Client {} attempted duplicate nickname '{}'\n", .{ client_id, trimmed_nick });
+            logging.logDebug("Client {} attempted duplicate nickname '{s}'\n", .{ client_id, trimmed_nick });
             return;
         }
 
@@ -182,6 +212,9 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u32, line: []const
             logging.logError(err, "set nickname");
             return;
         };
+
+        // Reset nickname attempt counter on success
+        client.nickname_attempts = 0;
 
         const confirm_msg = try std.fmt.allocPrint(self.allocator, "*** You are now known as {s}\n", .{trimmed_nick});
         defer self.allocator.free(confirm_msg);

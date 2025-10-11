@@ -106,7 +106,7 @@ pub fn scanPortsIoUring(
         host,
         0, // Port doesn't matter for address resolution
     ) catch |err| {
-        logging.logVerbose(null, "io_uring scanner: Failed to resolve {s}: {any}\n", .{ host, err });
+        std.debug.print( "io_uring scanner: Failed to resolve {s}: {any}\n", .{ host, err });
         return error.UnknownHost;
     };
     defer addr_list.deinit();
@@ -121,7 +121,7 @@ pub fn scanPortsIoUring(
     // Initialize io_uring with 512-entry queue for high concurrency
     const IO_Uring = std.os.linux.IO_Uring;
     var ring = IO_Uring.init(512, 0) catch |err| {
-        logging.logVerbose(null, "io_uring scanner: Failed to initialize ring: {any}\n", .{err});
+        std.debug.print( "io_uring scanner: Failed to initialize ring: {any}\n", .{err});
         return error.IoUringNotSupported;
     };
     defer ring.deinit();
@@ -162,7 +162,7 @@ pub fn scanPortsIoUring(
                 std.posix.SOCK.STREAM | std.posix.SOCK.NONBLOCK,
                 std.posix.IPPROTO.TCP,
             ) catch |err| {
-                logging.logVerbose(null, "Failed to create socket for port {d}: {any}\n", .{ port, err });
+                std.debug.print( "Failed to create socket for port {d}: {any}\n", .{ port, err });
                 // Record as closed port and continue
                 try results.append(allocator, .{ .port = port, .is_open = false });
                 continue;
@@ -180,7 +180,7 @@ pub fn scanPortsIoUring(
 
             // Get submission queue entry
             const sqe = ring.get_sqe() catch |err| {
-                logging.logVerbose(null, "Failed to get SQE for port {d}: {any}\n", .{ port, err });
+                std.debug.print( "Failed to get SQE for port {d}: {any}\n", .{ port, err });
                 try results.append(allocator, .{ .port = port, .is_open = false });
                 continue;
             };
@@ -205,7 +205,7 @@ pub fn scanPortsIoUring(
 
         // Submit the batch
         _ = ring.submit() catch |err| {
-            logging.logVerbose(null, "Failed to submit batch: {any}\n", .{err});
+            std.debug.print( "Failed to submit batch: {any}\n", .{err});
             // Mark all ports in batch as failed
             for (batch_ports) |port| {
                 try results.append(allocator, .{ .port = port, .is_open = false });
@@ -227,13 +227,13 @@ pub fn scanPortsIoUring(
             const cqe = ring.copy_cqe_wait(&timeout_spec) catch |err| {
                 if (err == error.Timeout) {
                     // Timeout expired, mark remaining ports as closed
-                    logging.logVerbose(null, "io_uring timeout after {d}/{d} completions\n", .{ completions_received, batch_ports.len });
+                    std.debug.print( "io_uring timeout after {d}/{d} completions\n", .{ completions_received, batch_ports.len });
                     for (batch_ports[completions_received..]) |port| {
                         try results.append(allocator, .{ .port = port, .is_open = false });
                     }
                     break;
                 }
-                logging.logVerbose(null, "Failed to wait for CQE: {any}\n", .{err});
+                std.debug.print( "Failed to wait for CQE: {any}\n", .{err});
                 break;
             };
 
@@ -266,7 +266,7 @@ pub fn scanPortsIoUring(
             try results.append(allocator, .{ .port = port, .is_open = is_open });
 
             if (is_open) {
-                logging.logVerbose(null, "{s}:{d} - open\n", .{ host, port });
+                std.debug.print( "{s}:{d} - open\n", .{ host, port });
             }
 
             completions_received += 1;
@@ -337,12 +337,12 @@ pub fn scanPortRangeIoUring(
     var open_count: usize = 0;
     for (results.items) |result| {
         if (result.is_open) {
-            logging.logVerbose(null, "{s}:{d} - open\n", .{ host, result.port });
+            std.debug.print( "{s}:{d} - open\n", .{ host, result.port });
             open_count += 1;
         }
     }
 
-    logging.logVerbose(null, "io_uring scan complete: {d}/{d} ports open\n", .{ open_count, port_count });
+    std.debug.print( "io_uring scan complete: {d}/{d} ports open\n", .{ open_count, port_count });
 }
 
 // ============================================================================
