@@ -63,6 +63,44 @@ fn computeThresholdBytes(max_total: usize, percent: f32) usize {
     return threshold;
 }
 
+/// Manages the I/O loop for a command execution session, relaying data between
+/// a network connection and the standard I/O streams of a child process.
+///
+/// ## I/O Multiplexing
+/// `ExecSession` supports two event loop backends on Unix-like systems:
+/// 1.  **`io_uring`**: On modern Linux systems, it uses the high-performance `io_uring`
+///     interface for fully asynchronous I/O. This is the preferred backend.
+/// 2.  **`poll`**: On other Unix-like systems (or older Linux kernels), it falls back
+///     to a traditional `poll(2)`-based event loop.
+///
+/// This struct is not used on Windows, which employs a threaded model instead.
+///
+/// ## State Management
+/// The session's lifecycle is managed through a set of boolean flags that track the
+/// state of each I/O stream:
+/// - `socket_read_closed`: True if the network socket is no longer readable (e.g., closed by peer).
+/// - `socket_write_closed`: True if the network socket is no longer writable.
+/// - `child_stdin_closed`: True if the child process's stdin pipe is closed.
+/// - `child_stdout_closed`: True if the child process's stdout pipe is closed.
+/// - `child_stderr_closed`: True if the child process's stderr pipe is closed.
+/// The main event loop (`run` or `runIoUring`) continues as long as there is any
+/// potential for data to be moved, as determined by the `shouldContinue` method.
+///
+/// ## I/O Buffering
+/// The session uses three instances of `IoRingBuffer` to buffer data in-memory:
+/// - `stdin_buffer`: Holds data read from the socket, waiting to be written to the child's stdin.
+/// - `stdout_buffer`: Holds data read from the child's stdout, waiting to be written to the socket.
+/// - `stderr_buffer`: Holds data read from the child's stderr, waiting to be written to the socket.
+///
+/// ## Flow Control
+/// To prevent uncontrolled memory growth when one side of the connection produces
+/// data faster than the other can consume it, `ExecSession` implements a flow control
+/// mechanism.
+/// - When the total number of bytes across all three buffers exceeds `pause_threshold_bytes`,
+///   the session stops reading new data from both the socket and the child process.
+/// - Reading resumes only after the total buffered bytes drops below `resume_threshold_bytes`.
+/// This prevents the buffers from overflowing while allowing writes to drain the pending data.
+/// The flow control can be configured via `ExecSessionConfig`.
 pub const ExecSession = struct {
     const socket_index: usize = 0;
     const child_stdin_index: usize = 1;
@@ -424,18 +462,27 @@ pub const ExecSession = struct {
     }
 
     fn shouldContinue(self: *const ExecSession) bool {
-        // Continue if we have output to deliver to socket
+        // Condition 1: There is data from the child process (stdout/stderr) that
+        // still needs to be written to the socket. We must continue to ensure this
+        // data is delivered.
         if (!self.socket_write_closed and (self.stdout_buffer.availableRead() > 0 or self.stderr_buffer.availableRead() > 0)) return true;
 
-        // Continue if child output is still open
+        // Condition 2: The child process's output streams (stdout/stderr) are still
+        // open. We must continue because the child could produce more output at any time.
         if (!self.child_stdout_closed or !self.child_stderr_closed) return true;
 
-        // Continue if we have buffered data to deliver to child AND child stdin is open
+        // Condition 3: There is data from the socket in our stdin_buffer waiting to be
+        // written to the child's stdin, and the child's stdin is still open.
+        // We must continue to deliver this input to the child.
         if (!self.child_stdin_closed and self.stdin_buffer.availableRead() > 0) return true;
 
-        // Continue if socket is readable AND child stdin is open
+        // Condition 4: The socket is still open for reading and the child's stdin is
+        // still open to receive data. We must continue to be able to read new data
+        // from the socket and pass it to the child.
         if (!self.socket_read_closed and !self.child_stdin_closed) return true;
 
+        // If none of the above conditions are met, it means all I/O paths are closed
+        // and all buffers are empty. The session is complete.
         return false;
     }
 

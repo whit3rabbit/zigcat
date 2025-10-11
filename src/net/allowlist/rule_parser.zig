@@ -167,6 +167,17 @@ pub const IpRule = union(enum) {
 /// const rule3 = try parseRule(allocator, "example.com");
 /// // Returns: IpRule{ .hostname = "example.com" }
 /// ```
+///
+/// ## Security: Hostname vs. IP Rules
+/// Using hostname-based rules has significant security implications. DNS records
+/// can be manipulated through various attacks (e.g., DNS spoofing, cache poisoning),
+/// potentially allowing an unauthorized client to gain access by impersonating a
+/// legitimate hostname.
+///
+/// For security-sensitive applications, it is **strongly recommended** to use
+/// IP-based rules (`single_ipv4`, `cidr_v4`, etc.) which are not subject to
+/// DNS manipulation. Hostname rules are provided for convenience but should be
+/// used with caution in untrusted environments.
 pub fn parseRule(allocator: std.mem.Allocator, rule_str: []const u8) !IpRule {
     // Check for CIDR notation
     if (std.mem.indexOf(u8, rule_str, "/")) |slash_pos| {

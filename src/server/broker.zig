@@ -1,45 +1,63 @@
-//! Core Broker Server Module with I/O Multiplexing
+//! # Core Broker Server Module
 //!
 //! This module implements the central broker server that manages multiple client
 //! connections and provides data relay functionality for both broker and chat modes.
+//! It is built around a single-threaded, event-driven architecture using `poll()`
+//! for I/O multiplexing.
 //!
 //! ## Design Goals
 //!
-//! - **I/O Multiplexing**: Non-blocking I/O using poll() for efficient multi-client handling
-//! - **Event-Driven**: Main event loop processes accept, read, and write events
-//! - **Per-Client Isolation**: Client errors don't affect other clients
-//! - **Resource Management**: Automatic cleanup of failed/disconnected clients
-//! - **Integration**: Works with existing listen socket and access control
+//! - **I/O Multiplexing**: Efficiently handles many concurrent, mostly idle clients
+//!   using a non-blocking, `poll()`-based event loop.
+//! - **Event-Driven**: The `BrokerServer.run()` method contains the main event loop
+//!   that processes network events (new connections, incoming data, disconnects).
+//! - **Resource Management**: Integrates a `BufferPool` for recycling I/O buffers to
+//!   reduce memory allocation overhead and a `FlowControlManager` to prevent
+//!   resource exhaustion under heavy load.
+//! - **Mode Agnostic**: The core relay logic is shared between the simple `--broker`
+//!   mode (raw data relay) and the more complex `--chat` mode (line-based messages
+//!   with nickname handling).
 //!
-//! ## Architecture
+//! ## Architecture Overview
 //!
+//! ```text
+//! +------------------+      +--------------------+      +------------------+
+//! | Listen Socket    |<---->| BrokerServer       |<---->| ClientPool       |
+//! | (Accepts new     |      | (Main Event Loop)  |      | (Manages active  |
+//! |  connections)    |      |                    |      |  client state)   |
+//! +------------------+      +--------------------+      +------------------+
+//!                             |                ^
+//!                             |                |
+//!                             v                |
+//!                           +--------------------+
+//!                           | PollContext        |
+//!                           | (Manages poll()     |
+//!                           |  file descriptors) |
+//!                           +--------------------+
 //! ```
-//! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-//! │   Listen        │    │   Broker         │    │   Client        │
-//! │   Socket        │───▶│   Server         │◀───│   Pool          │
-//! │                 │    │   (Event Loop)   │    │                 │
-//! └─────────────────┘    └──────────────────┘    └─────────────────┘
-//!          │                       │                       │
-//!          ▼                       ▼                       ▼
-//! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-//! │   Accept        │    │   I/O            │    │   Message       │
-//! │   New Clients   │    │   Multiplexing   │    │   Relay         │
-//! │                 │    │   (poll/select)  │    │   Engine        │
-//! └─────────────────┘    └──────────────────┘    └─────────────────┘
-//! ```
 //!
-//! ## Event Loop
+//! ## Event Loop Logic
 //!
-//! 1. **Poll Events**: Wait for I/O events on listen socket and client sockets
-//! 2. **Accept**: Handle new client connections with access control
-//! 3. **Read**: Process incoming data from clients
-//! 4. **Relay**: Distribute data to other clients (excluding sender)
-//! 5. **Cleanup**: Remove failed/disconnected clients
+//! The `run()` function orchestrates the server's operation:
+//! 1.  **Poll**: It calls `poll()` on the listen socket and all connected client sockets,
+//!     waiting for I/O events or a timeout.
+//! 2.  **Accept**: If the listen socket is readable, `acceptNewClient()` is called to
+//!     handle the new connection, including access control checks and TLS handshakes.
+//! 3.  **Read**: If a client socket is readable, `message_handler.handleClientData()` is
+//!     invoked to read the data, process it according to the server mode (`broker` or
+//!     `chat`), and queue it for relaying.
+//! 4.  **Write**: If a client socket is writable (meaning its send buffer has space),
+//!     `flushWriteBuffer()` is called to send any pending data from its write buffer.
+//! 5.  **Disconnect**: If a socket has a `HUP` or `ERR` event, `removeClient()` is
+//!     called to clean up the client's resources.
+//! 6.  **Maintenance**: On a poll timeout, `performMaintenance()` is called to check
+//!     for and remove idle clients.
 //!
 //! ## Thread Safety
 //!
-//! The broker server runs in a single thread with event-driven I/O multiplexing.
-//! The client pool provides thread-safe operations for potential future multi-threading.
+//! The `BrokerServer` and its components are designed to be run in a single thread.
+//! All state is managed within this thread, avoiding the need for complex synchronization
+//! primitives.
 
 const std = @import("std");
 const builtin = @import("builtin");

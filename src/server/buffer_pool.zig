@@ -82,22 +82,28 @@ pub const BufferPoolStats = struct {
     }
 };
 
-/// Managed buffer with metadata
+/// A single, reference-counted buffer managed by the `BufferPool`.
+///
+/// This struct wraps a raw byte slice (`data`) with metadata to track its
+/// state, including its current length, capacity, and usage timestamps. It is
+/// designed to be acquired from and returned to a `BufferPool`.
 pub const ManagedBuffer = struct {
-    /// Buffer data
+    /// The raw memory slice where data is stored.
     data: []u8,
-    /// Buffer capacity
+    /// The total capacity of the `data` slice in bytes.
     capacity: usize,
-    /// Current data length
+    /// The number of bytes currently written to the buffer.
     len: usize = 0,
-    /// Reference count for shared usage
+    /// A reference count for shared usage scenarios (currently unused, for future use).
     ref_count: u32 = 1,
-    /// Timestamp when buffer was allocated
+    /// The timestamp (in seconds) when the buffer was first allocated.
     allocated_at: i64,
-    /// Timestamp of last access
+    /// The timestamp (in seconds) of the last read or write access.
     last_accessed: i64,
 
-    /// Initialize a managed buffer
+    /// Initializes a new `ManagedBuffer` from a raw data slice.
+    /// @param data The allocated byte slice for the buffer.
+    /// @return An initialized `ManagedBuffer`.
     pub fn init(data: []u8) ManagedBuffer {
         const now = std.time.timestamp();
         return ManagedBuffer{
@@ -144,9 +150,25 @@ pub const ManagedBuffer = struct {
     }
 };
 
-/// Buffer pool for efficient memory management
+/// A thread-safe pool for managing and reusing a collection of `ManagedBuffer`s.
+///
+/// The `BufferPool` is designed to reduce the overhead of frequent memory
+/// allocation and deallocation in high-throughput scenarios, such as a busy chat
+/// or broker server. It maintains a list of available buffers that can be
+/// acquired and released.
+///
+/// ## Key Features
+/// - **Pooling**: Instead of freeing a buffer after use, it's returned to the pool
+///   to be reused by the next request, avoiding expensive system calls.
+/// - **Thread Safety**: All public methods (`acquire`, `release`, etc.) are protected
+///   by a mutex, allowing the pool to be safely shared across multiple threads.
+/// - **Resource Limiting**: The pool is configured with a maximum size and total
+///   memory usage limit to prevent unbounded resource consumption.
+/// - **Flow Control**: If the pool's memory usage exceeds a configured threshold,
+///   it enters a "flow control" state, causing new `acquire` requests to fail
+///   until memory is freed. This acts as a backpressure mechanism.
 pub const BufferPool = struct {
-    /// Memory allocator
+    /// The allocator used to create and destroy buffers.
     allocator: std.mem.Allocator,
     /// Pool configuration
     config: BufferPoolConfig,

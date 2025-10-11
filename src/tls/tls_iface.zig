@@ -45,22 +45,18 @@ pub const TlsConnection = struct {
         disabled: void,
     };
 
-    /// Read decrypted data from the TLS connection.
+    /// Reads and decrypts data from the TLS stream into the provided buffer.
     ///
-    /// **Parameters:**
-    /// - `buffer`: Destination buffer for decrypted data
+    /// This function handles the TLS record layer, decrypting incoming data. A
+    /// return value of 0 indicates that the peer has gracefully closed the
+    /// connection by sending a `close_notify` alert.
     ///
-    /// **Returns:**
-    /// Number of bytes read (0 indicates EOF, connection closed by peer).
+    /// If the underlying socket is in non-blocking mode, this function may
+    /// return `error.WouldBlock`.
     ///
-    /// **Errors:**
-    /// - `error.TlsNotEnabled`: TLS disabled at build time
-    /// - `error.InvalidState`: Connection not in connected state
-    /// - `error.AlertReceived`: Received TLS alert from peer
-    ///
-    /// **Blocking:**
-    /// This call may block until data is available or timeout occurs.
-    /// Set non-blocking mode on the underlying socket if needed.
+    /// @param self The `TlsConnection` instance.
+    /// @param buffer The buffer to store the decrypted plaintext data.
+    /// @return The number of bytes read into `buffer`, or any `TlsError`.
     pub fn read(self: *TlsConnection, buffer: []u8) !usize {
         return switch (self.backend) {
             .openssl => |tls| try tls.read(buffer),
@@ -68,22 +64,18 @@ pub const TlsConnection = struct {
         };
     }
 
-    /// Write data to the TLS connection (will be encrypted before sending).
+    /// Encrypts and writes data to the TLS stream.
     ///
-    /// **Parameters:**
-    /// - `data`: Plaintext data to encrypt and send
+    /// This function takes plaintext data, encrypts it, and sends it over the
+    /// underlying socket. The return value is the number of plaintext bytes
+    /// from `data` that were successfully processed and buffered for sending.
     ///
-    /// **Returns:**
-    /// Number of plaintext bytes written (may be less than `data.len`).
+    /// If the underlying socket is in non-blocking mode, this function may
+    /// return `error.WouldBlock`.
     ///
-    /// **Errors:**
-    /// - `error.TlsNotEnabled`: TLS disabled at build time
-    /// - `error.InvalidState`: Connection not in connected state
-    /// - `error.BufferTooSmall`: Internal buffer cannot accommodate data
-    ///
-    /// **Note:**
-    /// The return value indicates how many plaintext bytes were accepted,
-    /// not how many encrypted bytes were sent over the wire.
+    /// @param self The `TlsConnection` instance.
+    /// @param data The plaintext data to encrypt and send.
+    /// @return The number of bytes from `data` that were written, or any `TlsError`.
     pub fn write(self: *TlsConnection, data: []const u8) !usize {
         return switch (self.backend) {
             .openssl => |tls| try tls.write(data),
@@ -91,22 +83,19 @@ pub const TlsConnection = struct {
         };
     }
 
-    /// Close the TLS connection gracefully by sending close_notify alert.
+    /// Initiates a graceful shutdown of the TLS connection.
     ///
-    /// **Behavior:**
-    /// - Sends TLS close_notify alert to peer (best-effort)
-    /// - Does NOT close the underlying socket
-    /// - Does NOT free memory (call `deinit()` separately)
+    /// This function sends a `close_notify` alert to the peer, signaling the
+    /// end of the stream. It is the recommended way to close a TLS connection.
     ///
-    /// **Safe to call multiple times:**
-    /// Subsequent calls are no-ops.
+    /// **Important**: This function does **not** close the underlying socket.
+    /// The caller is responsible for closing the socket after calling `close()`.
+    /// It also does **not** free the memory associated with the `TlsConnection`;
+    /// `deinit()` must still be called.
     ///
-    /// **Example:**
-    /// ```zig
-    /// tls_conn.close();  // Send close_notify
-    /// socket.closeSocket(sock);  // Close underlying socket
-    /// tls_conn.deinit();  // Free TLS memory
-    /// ```
+    /// This function is idempotent; subsequent calls after the first have no effect.
+    ///
+    /// @param self The `TlsConnection` instance.
     pub fn close(self: *TlsConnection) void {
         switch (self.backend) {
             .openssl => |tls| tls.close(),

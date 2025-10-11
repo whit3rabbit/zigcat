@@ -23,37 +23,49 @@ pub const ExecError = types.ExecError;
 pub const ExecSession = session.ExecSession;
 const executeWithTelnetConnectionThreaded = threaded.executeWithTelnetConnectionThreaded;
 
-/// Execute a program with the socket as stdin/stdout/stderr
+/// Executes a command, binding its standard I/O streams to a network connection.
 ///
-/// SECURITY WARNING: This function executes arbitrary programs with network I/O,
-/// allowing remote clients to run commands on the server. Use with extreme caution.
+/// This is a security-critical function that allows a remote client to execute
+/// arbitrary commands on the server. It should only be called after thorough
+/// security validation, such as checks performed by `config.security.validateExecSecurity`.
 ///
-/// Architecture:
-/// 1. Spawns a child process using the provided program and arguments.
-/// 2. On Unix-like systems, it uses a poll-driven session (`ExecSession`) to manage
-///    I/O between the socket and the child process pipes in a single thread.
-/// 3. On Windows, it falls back to a thread-per-pipe implementation (`runThreadedExec`).
-/// 4. Waits for the child process to terminate and logs the result.
+/// ## Security
+/// - **Remote Code Execution**: This function's primary purpose is to enable RCE.
+///   It is imperative that its usage is restricted to trusted clients and environments.
+/// - **Logging**: A prominent security warning is always logged to stderr and the
+///   application log, detailing the command being executed and the client's address.
 ///
-/// Memory Management:
-/// - Uses ArrayList.deinit(allocator) for Zig 0.15.1 compatibility
-/// - Socket and pipes closed via defer/errdefer on error paths
+/// ## Platform Support
+/// The I/O handling between the socket and the child process is platform-dependent:
+/// - **Linux (Kernel 5.1+)**: Uses `io_uring` for high-performance, single-threaded,
+///   asynchronous I/O multiplexing.
+/// - **Other Unix-like Systems (e.g., macOS, BSD)**: Falls back to a `poll(2)`-based
+///   event loop, managing I/O in a single thread.
+/// - **Windows**: Uses a multi-threaded approach (`exec_threaded.zig`), where each
+///   I/O stream (stdin, stdout, stderr) is managed by a dedicated thread.
 ///
-/// Parameters:
-/// - allocator: Memory allocator for ArrayList operations
-/// - socket: Connected client socket (already established connection)
-/// - exec_config: Command configuration (program, args, mode)
-/// - client_addr: Client IP address for security logging
+/// ## Resource Management
+/// - **Socket Ownership**: This function takes ownership of the `socket`. The socket is
+///   wrapped in `net.Connection` and `protocol.TelnetConnection` types, and its
+///   file descriptor is closed automatically when those wrappers are deinited at the
+///   end of the function's scope.
+/// - **Child Process**: The child process is spawned and its pipes are created.
+///   `defer` and `errdefer` statements ensure that pipes are closed, the process is
+///   killed on error, and `wait()` is called to reap the process, preventing zombies.
 ///
-/// Returns:
-/// - error.ThreadSpawnFailed if I/O thread creation fails (on Windows)
-/// - error.ChildWaitFailed if process termination wait fails
-/// - std.process.Child.SpawnError on process spawn failure
+/// ## Error Conditions
+/// This function can return a variety of errors, including but not limited to:
+/// - `std.process.Child.SpawnError`: If the command cannot be spawned (e.g., not found).
+/// - `error.ThreadSpawnFailed`: On Windows, if I/O threads cannot be created.
+/// - `error.IoUringNotSupported`: If `io_uring` initialization fails (will fallback to poll).
+/// - `error.OutOfMemory`: If memory allocation for arguments or buffers fails.
+/// - Any I/O error from the underlying session (`ExecSession`) during the data relay.
 ///
-/// Security:
-/// - Logs SECURITY WARNING with program name and client address
-/// - Displays boxed warning to stderr for operator visibility
-/// - Should only be called after validateExecSecurity() check
+/// @param allocator The memory allocator.
+/// @param socket The connected client socket. The function takes ownership of this socket.
+/// @param exec_config The configuration for the command to execute, including program,
+///        arguments, and I/O redirection settings.
+/// @param client_addr The address of the connected client, used for logging.
 pub fn executeWithConnection(
     allocator: std.mem.Allocator,
     socket: std.net.Stream,

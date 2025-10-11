@@ -213,9 +213,34 @@ pub const FlowControlStats = struct {
     }
 };
 
-/// Flow control manager
+/// Manages the application's flow control state based on resource usage.
+///
+/// This struct is the central component for implementing backpressure. It tracks
+/// system resources (primarily memory usage) and adjusts the application's
+/// behavior to prevent resource exhaustion.
+///
+/// ## How it Works
+///
+/// 1.  **Resource Monitoring**: The `updateResourceInfo` method is called periodically
+///     (e.g., from the main server loop) with the current memory usage from the
+///     `BufferPool`.
+/// 2.  **Level-Based State**: Based on the memory usage percentage, the manager
+///     transitions between different `FlowControlLevel`s (e.g., `.normal`,
+///     `.light`, `.moderate`, `.heavy`, `.emergency`). Each level corresponds to
+///     a more aggressive set of restrictions.
+/// 3.  **Decision Making**: Other parts of the application, like the `BrokerServer`,
+///     can query the current flow control level using `getCurrentLevel()` or ask
+///     if a specific action is permitted using `shouldSendData()`.
+/// 4.  **Client-Specific Throttling**: The manager also tracks per-client state
+///     (`ClientFlowState`) to implement rate limiting and prevent a single "noisy"
+///     client from consuming all resources.
+///
+/// This allows the server to gracefully degrade under heavy load rather than
+/// crashing. For example, in `.heavy` mode, it might only allow high-priority
+/// clients to send small amounts of data, while in `.emergency` mode, it might
+/// start dropping connections.
 pub const FlowControlManager = struct {
-    /// Memory allocator
+    /// The allocator used for internal data structures.
     allocator: std.mem.Allocator,
     /// Configuration
     config: FlowControlConfig,

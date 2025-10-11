@@ -52,34 +52,42 @@ passed_platforms=0
 failed_platforms=0
 
 # Cleanup function
+# This function is registered with `trap` to run on script exit (EXIT),
+# interrupt (INT), or termination (TERM) signals. It ensures that Docker
+# resources are properly stopped and removed, unless --keep-containers is set.
+# It also generates the final JSON and text reports summarizing the test run.
 cleanup() {
     local exit_code=$?
     
     log_info "Cleaning up test environment..."
     
     if [[ "${KEEP_CONTAINERS}" != "true" ]]; then
-        # Stop and remove containers
+        # Stop and remove containers defined in the compose file.
         docker-compose -f "${COMPOSE_FILE}" down --volumes --remove-orphans 2>/dev/null || true
         
-        # Clean up any remaining containers
+        # Force-remove any lingering containers associated with the test project.
         docker ps -a --filter "label=com.docker.compose.project=zigcat-test" -q | xargs -r docker rm -f 2>/dev/null || true
         
-        # Clean up networks
+        # Clean up any test-specific Docker networks.
         docker network ls --filter "name=zigcat" -q | xargs -r docker network rm 2>/dev/null || true
     else
         log_info "Keeping containers for debugging (--keep-containers specified)"
     fi
     
-    # Generate final report
+    # Generate final JSON and text summary reports.
     generate_final_report
     
     exit ${exit_code}
 }
 
-# Set up signal handlers
+# Set up signal handlers to ensure cleanup runs automatically.
 trap cleanup EXIT INT TERM
 
 # Initialize test environment
+# Prepares the environment for a test run. This includes verifying that
+# Docker and Docker Compose are installed, creating the results directory,
+# and cleaning up any leftover resources from previous runs to ensure a
+# clean state.
 init_test_environment() {
     log_info "Initializing Docker test environment..."
     
@@ -110,6 +118,10 @@ init_test_environment() {
 }
 
 # Build containers for specified platforms
+# Iterates through the requested platforms and architectures and builds the
+# corresponding "builder" services defined in the docker-compose.test.yml file.
+# These builder containers are responsible for cross-compiling the ZigCat binary
+# for their specific target platform.
 build_containers() {
     local platforms_array
     IFS=',' read -ra platforms_array <<< "${PLATFORMS}"
@@ -136,6 +148,9 @@ build_containers() {
 }
 
 # Start test runtime containers
+# Starts the "test-runner" containers in detached mode (`-d`). These containers
+# are the environments where the actual tests will be executed. They are
+# pre-configured with the necessary dependencies for running the test scripts.
 start_test_containers() {
     local platforms_array
     IFS=',' read -ra platforms_array <<< "${PLATFORMS}"

@@ -1,58 +1,44 @@
-//! Message Relay Engine for Data Distribution
+//! # Message Relay Engine
 //!
-//! This module implements the core message relay functionality for ZigCat's
-//! broker and chat modes. It handles efficient data distribution between
-//! multiple clients with sender exclusion and minimal memory overhead.
+//! This module provides the core logic for distributing data among connected
+//! clients in the `BrokerServer`. It is responsible for taking data received
+//! from one client and efficiently relaying it to all other clients.
 //!
-//! ## Design Goals
+//! ## Core Functionality
 //!
-//! - **Efficient Distribution**: Minimize memory copying and allocation overhead
-//! - **Sender Exclusion**: Prevent clients from receiving their own data
-//! - **Mode Awareness**: Handle both raw broker mode and formatted chat mode
-//! - **Error Isolation**: Client-specific errors don't affect other clients
-//! - **Memory Safety**: Proper buffer management and bounds checking
+//! - **Data Distribution**: The primary function, `relayData`, iterates through all
+//!   connected clients in the `ClientPool` and writes the provided data to each
+//!   one's connection.
+//! - **Sender Exclusion**: When relaying a message from a client, the engine
+//!   ensures the data is not sent back to the original sender.
+//! - **Mode-Specific Formatting**: In `--chat` mode, it handles formatting
+//!   messages with nickname prefixes (e.g., `[alice] message`) before relaying.
+//!   In `--broker` mode, it relays raw, unmodified byte streams.
+//! - **Broadcasts**: Provides a `broadcastNotification` method to send system-level
+//!   messages (like join/leave announcements) to *all* clients, without sender
+//!   exclusion.
 //!
-//! ## Architecture
+//! ## Relationship with BrokerServer
 //!
-//! ```
-//! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-//! │   Client        │    │   Relay          │    │   Client        │
-//! │   Data Input    │───▶│   Engine         │───▶│   Data Output   │
-//! │                 │    │                  │    │                 │
-//! └─────────────────┘    └──────────────────┘    └─────────────────┘
-//!          │                       │                       │
-//!          ▼                       ▼                       ▼
-//! ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-//! │   Raw Data      │    │   Format         │    │   Distribute    │
-//! │   (Broker)      │    │   Messages       │    │   to Clients    │
-//! │   Chat Lines    │    │   (Chat Mode)    │    │   (Exclude      │
-//! │   (Chat)        │    │                  │    │   Sender)       │
-//! └─────────────────┘    └──────────────────┘    └─────────────────┘
-//! ```
+//! The `RelayEngine` is a component of the `BrokerServer`. While the `BrokerServer`
+//! manages the I/O event loop and client connections, it delegates the task of
+//! data distribution to the `RelayEngine`. This separation of concerns keeps the
+//! main server loop focused on I/O, while the `RelayEngine` encapsulates the
+//! business logic of how data flows between clients.
 //!
-//! ## Usage Patterns
+//! ### Example Flow (`--chat` mode):
 //!
-//! ### Broker Mode
-//! ```zig
-//! // Raw data relay - forward as-is
-//! try relay_engine.relayData(raw_data, sender_id);
-//! ```
+//! 1.  `BrokerServer` receives data from `client_A`.
+//! 2.  It calls `ChatHandler.processMessage()` with the data.
+//! 3.  `ChatHandler` determines it's a chat message, formats it with `client_A`'s
+//!     nickname, and calls `RelayEngine.relayMessage()`.
+//! 4.  `RelayEngine.relayMessage()` iterates through all clients in the `ClientPool`.
+//! 5.  For each `client_B` (where `B != A`), it writes the formatted message to
+//!     `client_B`'s connection.
 //!
-//! ### Chat Mode
-//! ```zig
-//! // Formatted message relay with nickname
-//! try relay_engine.relayMessage(message_text, sender_id);
-//!
-//! // System notifications to all clients
-//! try relay_engine.broadcastNotification("*** User joined");
-//! ```
-//!
-//! ## Performance Characteristics
-//!
-//! - **Zero-Copy**: Direct buffer access where possible
-//! - **Batch Operations**: Single allocation for multiple client writes
-//! - **Error Recovery**: Failed clients are isolated and removed
-//! - **Memory Pooling**: Reusable buffers for message formatting
+//! This design allows the core relay logic to be simple and efficient, while
+//! higher-level modules like `ChatHandler` can impose their own formatting and
+//! rules on top of it.
 
 const std = @import("std");
 const ClientPool = @import("client_pool.zig").ClientPool;

@@ -1,30 +1,46 @@
-//! Reusable io_uring event loop abstraction for zigcat.
+//! # High-Level `io_uring` Event Loop Wrapper
 //!
-//! This module provides a high-level wrapper around std.os.linux.IO_Uring
-//! to simplify io_uring usage across the codebase. It encapsulates:
-//! - Ring initialization and cleanup
-//! - Submission queue entry (SQE) preparation
-//! - Completion queue entry (CQE) processing
-//! - Timeout handling with kernel_timespec
+//! This module provides a reusable, high-level abstraction over the Linux `io_uring`
+//! asynchronous I/O interface. It is designed to simplify the use of `io_uring`
+//! for common network and file operations within the application, such as in the
+//! command execution (`exec`) and parallel port scanning modules.
 //!
-//! Architecture:
-//! - UringEventLoop: Main abstraction that owns the IO_Uring instance
-//! - CompletionResult: Structured result from kernel completions
-//! - Type-safe wrappers for common operations (read, write, connect)
+//! ## Core Components
 //!
-//! Usage:
-//! ```zig
-//! var ring = try UringEventLoop.init(allocator, 32);
-//! defer ring.deinit();
+//! - **`UringEventLoop`**: The main struct that encapsulates the `io_uring` instance,
+//!   its submission queue (SQ), and completion queue (CQ). It handles the
+//!   initialization and deinitialization of the ring.
+//! - **Submission Methods**: Provides type-safe methods like `submitRead()`,
+//!   `submitWrite()`, and `submitConnect()` that abstract away the details of
+//!   preparing submission queue entries (SQEs). Each submission is associated
+//!   with a `user_data` value, which is a `u64` used to identify the operation
+//!   when its completion is received.
+//! - **`waitForCompletion()`**: The primary method for retrieving results. It submits
+//!   any pending operations and blocks until a completion queue entry (CQE) is
+-   //!   available, returning it as a `CompletionResult`. It also supports timeouts.
+//! - **`CompletionResult`**: A struct that contains the `user_data` of the completed
+//!   operation and its result code (`res`), which is typically the number of bytes
+//!   transferred or a negative `errno` value on error.
 //!
-//! try ring.submitRead(fd, buffer, user_data);
-//! const cqe = try ring.waitForCompletion(&timeout_spec);
-//! switch (cqe.user_data) {
-//!     0 => handleRead(cqe.res),
-//!     1 => handleWrite(cqe.res),
-//!     else => {},
-//! }
-//! ```
+//! ## Usage Pattern
+//!
+//! The typical workflow for using this wrapper is:
+//!
+//! 1.  Initialize a `UringEventLoop` with a specific queue depth (e.g., 32 entries).
+//! 2.  Submit one or more asynchronous operations (e.g., `submitRead()` on a socket).
+//!     The buffers provided to these operations **must** remain valid until the
+//!     operation completes.
+//! 3.  Enter a loop that calls `waitForCompletion()`.
+//! 4.  Inside the loop, process the `CompletionResult`:
+//!     - Use a `switch` on the `user_data` to identify which operation completed.
+//!     - Check the `res` field for errors or the number of bytes processed.
+//! 5.  After processing the result, re-submit the operation if necessary (e.g.,
+//!     submit another `read` to continue listening for data).
+//! 6.  Call `deinit()` on the `UringEventLoop` to release kernel resources.
+//!
+//! This module is conditionally compiled and is only available on Linux. On other
+//! platforms, it provides a stub implementation where all methods return
+//! `error.IoUringNotSupported`.
 
 const std = @import("std");
 const builtin = @import("builtin");

@@ -105,29 +105,43 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
     return false;
 }
 
-/// Main build function for ZigCat netcat implementation.
-/// Configures the executable with optional TLS support, feature flags, and comprehensive test suite.
-///
-/// Build options:
-/// - `tls`: Enable TLS/SSL support (requires OpenSSL)
-/// - `unixsock`: Enable Unix domain sockets (default: true)
-/// - `strip`: Strip debug symbols (default: true)
-/// - `static`: Build fully static binary (Linux with musl only)
-/// - `allow-legacy-tls`: Enable TLS 1.0/1.1 support (INSECURE, testing only)
 pub fn build(b: *std.Build) void {
+    // Standard build options for target and optimization.
+    // - `standardTargetOptions` configures cross-compilation targets (e.g., `x86_64-linux-gnu`).
+    // - `standardOptimizeOption` controls optimization levels (`ReleaseSmall`, `Debug`, etc.).
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{
         .preferred_optimize_mode = .ReleaseSmall,
     });
 
-    // Auto-disable TLS for static builds to avoid dynamic OpenSSL linking
+    // Custom build options, controllable via `-D<option>=<value>` flags.
+    //
+    // - `static`: (Default: false) If true, creates a fully static binary with no dynamic
+    //   dependencies. This is primarily for Linux using the `musl` libc target.
+    //   Example: `zig build -Dstatic=true -Dtarget=x86_64-linux-musl`
     const static = b.option(bool, "static", "Build fully static binary (Linux with musl only)") orelse false;
+    //
+    // - `tls`: (Default: true, unless `static` is true) Enables or disables TLS support.
+    //   Requires OpenSSL development libraries on the host system. Automatically disabled
+    //   for static builds to avoid complex static linking of OpenSSL.
+    //   Example: `zig build -Dtls=false`
     const enable_tls = b.option(bool, "tls", "Enable TLS/SSL support (requires OpenSSL)") orelse !static;
+    //
+    // - `unixsock`: (Default: true) Enables or disables support for Unix domain sockets.
     const enable_unixsock = b.option(bool, "unixsock", "Enable Unix domain sockets") orelse true;
+    //
+    // - `strip`: (Default: true) If true, strips debug symbols from the final executable,
+    //   reducing its size.
     const strip = b.option(bool, "strip", "Strip debug symbols") orelse true;
+    //
+    // - `allow-legacy-tls`: (Default: false) If true, compiles in support for older,
+    //   insecure TLS versions (1.0, 1.1). This should only be used for testing against
+    //   legacy systems.
     const allow_legacy_tls = b.option(bool, "allow-legacy-tls", "Enable TLS 1.0/1.1 support (INSECURE, testing only)") orelse false;
 
-    // CRITICAL: Validate incompatible combination of static + TLS
+    // CRITICAL: Validate that `static` and `tls` are not enabled simultaneously.
+    // Statically linking OpenSSL is complex and platform-dependent, so we enforce
+    // that static builds must be compiled without TLS support.
     if (static and enable_tls) {
         std.log.err("", .{});
         std.log.err("=====================================================================", .{});
@@ -227,9 +241,15 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
+
+    // This step runs all unit tests defined within the main `src` directory.
+    // These tests focus on core logic, parsing, and data structures.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
+    //--- Timeout Tests ---
+    // This suite covers various timeout scenarios, ensuring that idle, connection,
+    // and execution timeouts are correctly triggered and handled.
     const timeout_test_module = b.createModule(.{
         .root_source_file = b.path("tests/timeout_test.zig"),
         .target = target,
@@ -240,6 +260,9 @@ pub fn build(b: *std.Build) void {
     const timeout_test_step = b.step("test-timeout", "Run timeout-specific tests");
     timeout_test_step.dependOn(&run_timeout_tests.step);
 
+    //--- Exec Thread Lifecycle Tests ---
+    // Verifies the correct creation, execution, and cleanup of threads used in
+    // the command execution feature (`-e`/`-c`) on Windows.
     const exec_thread_test_module = b.createModule(.{
         .root_source_file = b.path("tests/exec_thread_lifecycle_test.zig"),
         .target = target,
@@ -252,6 +275,9 @@ pub fn build(b: *std.Build) void {
     const exec_thread_test_step = b.step("test-exec-threads", "Run exec thread lifecycle tests");
     exec_thread_test_step.dependOn(&run_exec_thread_tests.step);
 
+    //--- UDP Mode Tests ---
+    // Contains tests for UDP-specific functionality, including client/server
+    // communication and connection handling.
     const udp_test_module = b.createModule(.{
         .root_source_file = b.path("tests/udp_test.zig"),
         .target = target,
@@ -263,6 +289,9 @@ pub fn build(b: *std.Build) void {
     const udp_test_step = b.step("test-udp", "Run UDP server tests");
     udp_test_step.dependOn(&run_udp_tests.step);
 
+    //--- Zero-I/O Mode Tests ---
+    // Tests the `-z` flag functionality for port scanning, ensuring it correctly
+    // reports open and closed ports without transferring data.
     const zero_io_test_module = b.createModule(.{
         .root_source_file = b.path("tests/zero_io_test.zig"),
         .target = target,
@@ -274,6 +303,9 @@ pub fn build(b: *std.Build) void {
     const zero_io_test_step = b.step("test-zero-io", "Run zero-I/O mode tests");
     zero_io_test_step.dependOn(&run_zero_io_tests.step);
 
+    //--- Quit-on-EOF Tests ---
+    // Verifies that the application correctly terminates (or not) based on the
+    // `--close-on-eof` flag when it receives an End-of-File marker on stdin.
     const quit_eof_test_module = b.createModule(.{
         .root_source_file = b.path("tests/quit_eof_test.zig"),
         .target = target,
@@ -285,6 +317,8 @@ pub fn build(b: *std.Build) void {
     const quit_eof_test_step = b.step("test-quit-eof", "Run quit-after-EOF tests");
     quit_eof_test_step.dependOn(&run_quit_eof_tests.step);
 
+    //--- I/O Control Performance Tests ---
+    // Performance tests for I/O-related features.
     const io_perf_test_module = b.createModule(.{
         .root_source_file = b.path("tests/io_control_performance_test.zig"),
         .target = target,
@@ -297,6 +331,9 @@ pub fn build(b: *std.Build) void {
     const io_perf_test_step = b.step("test-io-performance", "Run I/O control performance tests");
     io_perf_test_step.dependOn(&run_io_perf_tests.step);
 
+    //--- Multi-Client Integration Tests ---
+    // Simulates multiple clients connecting to the server simultaneously to test
+    // broker and chat modes under concurrent load.
     const multi_client_test_module = b.createModule(.{
         .root_source_file = b.path("tests/multi_client_integration_test.zig"),
         .target = target,
@@ -308,6 +345,8 @@ pub fn build(b: *std.Build) void {
     const multi_client_test_step = b.step("test-multi-client", "Run multi-client integration tests");
     multi_client_test_step.dependOn(&run_multi_client_tests.step);
 
+    //--- Broker/Chat Performance and Compatibility Tests ---
+    // Focuses on the performance and compatibility of the broker and chat modes.
     const broker_perf_test_module = b.createModule(.{
         .root_source_file = b.path("tests/broker_chat_performance_test.zig"),
         .target = target,
@@ -320,6 +359,8 @@ pub fn build(b: *std.Build) void {
     const broker_perf_test_step = b.step("test-broker-performance", "Run broker/chat performance and compatibility tests");
     broker_perf_test_step.dependOn(&run_broker_perf_tests.step);
 
+    //--- Broker/Chat Performance Validation Tests ---
+    // Validates the performance metrics and behavior of the broker and chat modes.
     const broker_perf_validation_test_module = b.createModule(.{
         .root_source_file = b.path("tests/broker_chat_performance_validation_test.zig"),
         .target = target,
@@ -330,6 +371,9 @@ pub fn build(b: *std.Build) void {
     const broker_perf_validation_test_step = b.step("test-broker-validation", "Run broker/chat performance validation tests");
     broker_perf_validation_test_step.dependOn(&run_broker_perf_validation_tests.step);
 
+    //--- Poll Wrapper Cross-Platform Tests ---
+    // Tests the `poll()` wrapper to ensure it behaves consistently across
+    // different platforms (especially for the Windows `select()` fallback).
     const poll_wrapper_test_module = b.createModule(.{
         .root_source_file = b.path("tests/poll_wrapper_test.zig"),
         .target = target,
@@ -341,6 +385,9 @@ pub fn build(b: *std.Build) void {
     const poll_wrapper_test_step = b.step("test-poll-wrapper", "Run poll wrapper cross-platform tests");
     poll_wrapper_test_step.dependOn(&run_poll_wrapper_tests.step);
 
+    //--- CRLF Memory Safety Tests ---
+    // Ensures that the `--crlf` option (which converts LF to CRLF) is handled
+    // correctly without causing buffer overflows or memory errors.
     const crlf_memory_test_module = b.createModule(.{
         .root_source_file = b.path("tests/crlf_memory_test.zig"),
         .target = target,
@@ -352,6 +399,8 @@ pub fn build(b: *std.Build) void {
     const crlf_memory_test_step = b.step("test-crlf", "Run CRLF memory safety tests (8 tests)");
     crlf_memory_test_step.dependOn(&run_crlf_memory_tests.step);
 
+    //--- Shell Command Memory Leak Tests ---
+    // Specifically tests the `-c` (shell command) feature for memory leaks.
     const shell_memory_test_module = b.createModule(.{
         .root_source_file = b.path("tests/shell_memory_test.zig"),
         .target = target,
@@ -363,6 +412,9 @@ pub fn build(b: *std.Build) void {
     const shell_memory_test_step = b.step("test-shell", "Run shell memory leak tests (5 tests)");
     shell_memory_test_step.dependOn(&run_shell_memory_tests.step);
 
+    //--- SSL/TLS Comprehensive Tests ---
+    // A large suite covering all aspects of TLS functionality, including certificate
+    // generation, handshake protocols, error handling, and compatibility.
     const ssl_test_module = b.createModule(.{
         .root_source_file = b.path("tests/ssl_test.zig"),
         .target = target,
@@ -374,6 +426,9 @@ pub fn build(b: *std.Build) void {
     const ssl_test_step = b.step("test-ssl", "Run SSL/TLS comprehensive tests (31 tests: cert generation, handshake, error handling, compatibility)");
     ssl_test_step.dependOn(&run_ssl_tests.step);
 
+    //--- Telnet Protocol State Machine Tests ---
+    // Tests the Telnet protocol parser and state machine to ensure it correctly
+    // handles Telnet commands and option negotiations.
     const telnet_test_module = b.createModule(.{
         .root_source_file = b.path("tests/telnet_state_machine_test.zig"),
         .target = target,
@@ -385,6 +440,9 @@ pub fn build(b: *std.Build) void {
     const telnet_test_step = b.step("test-telnet", "Run Telnet protocol state machine tests");
     telnet_test_step.dependOn(&run_telnet_tests.step);
 
+    //--- Unix Socket Security Tests ---
+    // Focuses on security aspects of Unix domain sockets, such as Time-of-Check-to-Time-of-Use
+    // (TOCTTOU) race conditions, file permissions, and platform limits.
     const unix_security_test_module = b.createModule(.{
         .root_source_file = b.path("tests/unix_socket_security_test.zig"),
         .target = target,
@@ -396,6 +454,9 @@ pub fn build(b: *std.Build) void {
     const unix_security_test_step = b.step("test-unix-security", "Run Unix socket security tests (TOCTTOU, permissions, platform limits)");
     unix_security_test_step.dependOn(&run_unix_security_tests.step);
 
+    //--- Parallel Port Scanning Tests ---
+    // Tests the parallel port scanning feature, including range parsing,
+    // thread safety, and correctness of results.
     const parallel_scan_test_module = b.createModule(.{
         .root_source_file = b.path("tests/parallel_scan_test.zig"),
         .target = target,
@@ -407,6 +468,9 @@ pub fn build(b: *std.Build) void {
     const parallel_scan_test_step = b.step("test-parallel-scan", "Run parallel port scanning tests (PortRange parsing, parallel correctness, thread safety)");
     parallel_scan_test_step.dependOn(&run_parallel_scan_tests.step);
 
+    //--- Platform Detection and Kernel Version Parsing Tests ---
+    // Verifies that the build script and application correctly detect the host
+    // platform and parse kernel versions for feature detection (e.g., `io_uring`).
     const platform_test_module = b.createModule(.{
         .root_source_file = b.path("tests/platform_test.zig"),
         .target = target,
@@ -418,6 +482,9 @@ pub fn build(b: *std.Build) void {
     const platform_test_step = b.step("test-platform", "Run platform detection and kernel version parsing tests (20 tests)");
     platform_test_step.dependOn(&run_platform_tests.step);
 
+    //--- Port Scanning Feature Tests ---
+    // Covers advanced port scanning features like randomization, delays, and
+    // automatic backend selection.
     const portscan_features_test_module = b.createModule(.{
         .root_source_file = b.path("tests/portscan_features_test.zig"),
         .target = target,
@@ -429,6 +496,8 @@ pub fn build(b: *std.Build) void {
     const portscan_features_test_step = b.step("test-portscan-features", "Run port scanning feature tests (randomization, delays, auto-selection) (23 tests)");
     portscan_features_test_step.dependOn(&run_portscan_features_tests.step);
 
+    //--- io_uring Compile-Time Tests ---
+    // Contains tests that verify the `io_uring` wrapper and its usage at compile time.
     const portscan_uring_test_module = b.createModule(.{
         .root_source_file = b.path("tests/portscan_uring_test.zig"),
         .target = target,
