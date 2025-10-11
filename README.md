@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/whit3rabbit/zigcat-github">
+    <img src="assets/logo.png" alt="ZigCat logo" width="500">
+  </a>
+</p>
+
 # ZigCat
 
 ZigCat is a modern, secure alternative to netcat/ncat built in Zig. It keeps the classic "Swiss army knife for TCP/UDP" feel while adding TLS, access control, and broker/chat collaboration modes.
@@ -11,12 +17,13 @@ ZigCat is a modern, secure alternative to netcat/ncat built in Zig. It keeps the
 - Connect to a service: `zigcat example.com 443`
 - Listen for inbound connections: `zigcat -l 9000`
 - Secure TLS client: `zigcat --ssl mail.example.com 993`
+- Secure DTLS client (UDP): `zigcat --dtls example.com 4433`
 - Broker chat relay: `zigcat -l --broker --max-clients 100 9100`
 - Stealth port scan: `zigcat -z --scan-parallel --scan-randomize target.example 1-1024`
 
 ## What it can do
 - **Flexible transports**: TCP, UDP, SCTP, Unix sockets, IPv4/IPv6.
-- **Secure by default**: TLS with verification, access allow/deny lists, privilege dropping.
+- **Secure by default**: TLS/DTLS with verification, access allow/deny lists, privilege dropping.
 - **Powerful modes**: Broker/chat relays, exec pipelines, zero-I/O port scanning.
 - **Observability**: Verbosity levels up to trace, hex dump logging, structured output files.
 - **Portable**: Runs on Linux, macOS, BSD, and Windows with small binaries.

@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    env:
+      ZIG_VERSION: 0.12.0
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            zig-cache
+            zig-out
+            ${{ env.ZIG_GLOBAL_CACHE_DIR }}
+          key: ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'src/**/*.zig', 'tests/**/*.zig') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}-
+
+      - name: Prime cache directories
+        shell: bash
+        run: |
+          mkdir -p "zig-cache" "zig-out" "$ZIG_GLOBAL_CACHE_DIR"
+
+      - name: Smoke test suite
+        shell: bash
+        run: zig build test
+
+  test:
+    name: Full Test Matrix
+    needs: smoke
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Ubuntu
+            commands: |
+              zig build test
+              zig build test-validation
+              zig build test-features
+              zig build test-platform
+              zig build test-timeout
+          - os: macos-latest
+            label: macOS
+            commands: |
+              zig build test
+              zig build test-validation
+              zig build test-platform
+          - os: windows-latest
+            label: Windows
+            commands: |
+              zig build test
+              zig build test-validation
+    env:
+      ZIG_VERSION: 0.12.0
+      ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v3
+        with:
+          path: |
+            zig-cache
+            zig-out
+            ${{ env.ZIG_GLOBAL_CACHE_DIR }}
+          key: ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'src/**/*.zig', 'tests/**/*.zig') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-${{ env.ZIG_VERSION }}-
+
+      - name: Prime cache directories
+        shell: bash
+        run: |
+          mkdir -p "zig-cache" "zig-out" "$ZIG_GLOBAL_CACHE_DIR"
+
+      - name: Run ${{ matrix.label }} tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r cmd; do
+            if [[ -n "$cmd" ]]; then
+              echo "Running: $cmd"
+              $cmd
+            fi
+          done <<'EOF'
+          ${{ matrix.commands }}
+          EOF

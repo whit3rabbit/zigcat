@@ -364,7 +364,7 @@ pub fn build(b: *std.Build) void {
     shell_memory_test_step.dependOn(&run_shell_memory_tests.step);
 
     const ssl_test_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_ssl.zig"),
+        .root_source_file = b.path("tests/ssl_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -397,7 +397,7 @@ pub fn build(b: *std.Build) void {
     unix_security_test_step.dependOn(&run_unix_security_tests.step);
 
     const parallel_scan_test_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_parallel_scan.zig"),
+        .root_source_file = b.path("tests/parallel_scan_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -408,7 +408,7 @@ pub fn build(b: *std.Build) void {
     parallel_scan_test_step.dependOn(&run_parallel_scan_tests.step);
 
     const platform_test_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_platform.zig"),
+        .root_source_file = b.path("tests/platform_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -419,7 +419,7 @@ pub fn build(b: *std.Build) void {
     platform_test_step.dependOn(&run_platform_tests.step);
 
     const portscan_features_test_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_portscan_features.zig"),
+        .root_source_file = b.path("tests/portscan_features_test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -430,7 +430,7 @@ pub fn build(b: *std.Build) void {
     portscan_features_test_step.dependOn(&run_portscan_features_tests.step);
 
     const portscan_uring_test_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_portscan_uring.zig"),
+        .root_source_file = b.path("tests/portscan_uring_test.zig"),
         .target = target,
         .optimize = optimize,
     });

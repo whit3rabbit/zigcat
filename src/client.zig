@@ -29,6 +29,7 @@ const udp = @import("net/udp.zig");
 const sctp = @import("net/sctp.zig");
 const unixsock = @import("net/unixsock.zig");
 const tls = @import("tls/tls.zig");
+const dtls = @import("tls/dtls/dtls.zig");
 const transfer = @import("io/transfer.zig");
 const stream = @import("io/stream.zig");
 const output = @import("io/output.zig");
@@ -138,7 +139,14 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     }
 
     // 2. Connect to target (direct or via proxy)
+    // NOTE: DTLS creates its own UDP socket, so we skip socket creation if DTLS is enabled
     const raw_socket = blk: {
+        // DTLS mode will create its own socket later
+        if ((cfg.ssl or cfg.dtls) and (cfg.udp_mode or cfg.dtls)) {
+            // Return dummy socket (0), DTLS will create its own
+            break :blk @as(posix.socket_t, 0);
+        }
+
         if (cfg.proxy) |_| {
             // Connect through proxy
             if (cfg.verbose) {
@@ -171,44 +179,75 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         }
     };
 
-    // Ensure socket is cleaned up on error
-    errdefer net.closeSocket(raw_socket);
+    // Ensure socket is cleaned up on error (skip dummy socket 0 for DTLS)
+    errdefer if (raw_socket != 0) net.closeSocket(raw_socket);
 
-    if (cfg.verbose) {
+    if (cfg.verbose and raw_socket != 0) {
         logging.logVerbose(cfg, "Connection established.\n", .{});
     }
 
-    // 3. Optional TLS handshake (not supported for UDP)
+    // 3. Optional TLS/DTLS handshake
     var tls_connection: ?tls.TlsConnection = null;
-    defer if (tls_connection) |*conn| conn.deinit();
+    var dtls_connection: ?*dtls.DtlsConnection = null;
+    defer {
+        if (tls_connection) |*conn| conn.deinit();
+        if (dtls_connection) |conn| {
+            conn.deinit();
+            allocator.destroy(conn);
+        }
+    }
 
-    if (cfg.ssl and !cfg.udp_mode) {
+    if (cfg.ssl or cfg.dtls) {
         // Security warning if certificate verification is disabled
         if (!cfg.ssl_verify) {
-            logging.logWarning("⚠️  SSL certificate verification is DISABLED. Connection is NOT secure!", .{});
+            logging.logWarning("⚠️  Certificate verification is DISABLED. Connection is NOT secure!", .{});
             logging.logWarning("⚠️  Use --ssl-verify to enable certificate validation.", .{});
         }
 
-        if (cfg.verbose) {
-            logging.logVerbose(cfg, "Starting TLS handshake...\n", .{});
+        if (cfg.udp_mode or cfg.dtls) {
+            // DTLS mode (TLS over UDP)
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "Starting DTLS handshake...\n", .{});
+            }
+
+            const dtls_config = dtls.DtlsConfig{
+                .verify_peer = cfg.ssl_verify,
+                .server_name = cfg.ssl_servername orelse host,
+                .trust_file = cfg.ssl_trustfile,
+                .crl_file = cfg.ssl_crl,
+                .alpn_protocols = cfg.ssl_alpn,
+                .cipher_suites = cfg.ssl_ciphers,
+                .mtu = cfg.dtls_mtu,
+                .initial_timeout_ms = cfg.dtls_timeout,
+                .replay_window = cfg.dtls_replay_window,
+            };
+
+            dtls_connection = try dtls.connectDtls(allocator, host, port, dtls_config);
+
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "DTLS handshake complete.\n", .{});
+            }
+        } else {
+            // TLS mode (TLS over TCP)
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "Starting TLS handshake...\n", .{});
+            }
+
+            const tls_config = tls.TlsConfig{
+                .verify_peer = cfg.ssl_verify,
+                .server_name = cfg.ssl_servername orelse host,
+                .trust_file = cfg.ssl_trustfile,
+                .crl_file = cfg.ssl_crl,
+                .alpn_protocols = cfg.ssl_alpn,
+                .cipher_suites = cfg.ssl_ciphers,
+            };
+
+            tls_connection = try tls.connectTls(allocator, raw_socket, tls_config);
+
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "TLS handshake complete.\n", .{});
+            }
         }
-
-        const tls_config = tls.TlsConfig{
-            .verify_peer = cfg.ssl_verify,
-            .server_name = cfg.ssl_servername orelse host,
-            .trust_file = cfg.ssl_trustfile,
-            .crl_file = cfg.ssl_crl,
-            .alpn_protocols = cfg.ssl_alpn,
-            .cipher_suites = cfg.ssl_ciphers,
-        };
-
-        tls_connection = try tls.connectTls(allocator, raw_socket, tls_config);
-
-        if (cfg.verbose) {
-            logging.logVerbose(cfg, "TLS handshake complete.\n", .{});
-        }
-    } else if (cfg.ssl and cfg.udp_mode) {
-        logging.logWarning("TLS not supported with UDP, continuing without encryption", .{});
     }
 
     // 4. Execute command if specified
@@ -217,7 +256,10 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             if (tls_connection) |*conn| {
                 conn.close();
             }
-            net.closeSocket(raw_socket);
+            if (dtls_connection) |conn| {
+                conn.close();
+            }
+            if (raw_socket != 0) net.closeSocket(raw_socket);
         }
         try executeCommand(allocator, raw_socket, cmd, cfg);
         return;
@@ -228,7 +270,10 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         if (tls_connection) |*conn| {
             conn.close();
         }
-        net.closeSocket(raw_socket);
+        if (dtls_connection) |conn| {
+            conn.close();
+        }
+        if (raw_socket != 0) net.closeSocket(raw_socket);
     }
 
     // Initialize output logger and hex dumper (automatically selects io_uring if available)
@@ -240,6 +285,12 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
 
     // Handle Telnet protocol mode
     if (cfg.telnet) {
+        // DTLS does not support Telnet protocol (datagram-based)
+        if (dtls_connection != null) {
+            logging.logError(error.InvalidConfiguration, "Telnet protocol mode is not supported with DTLS (datagram-based)");
+            return error.InvalidConfiguration;
+        }
+
         // Create Connection wrapper for the underlying socket/TLS connection
         const connection = if (tls_connection) |*conn|
             Connection.fromTls(conn.*)
@@ -262,10 +313,16 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
     } else {
         // Standard transfer without Telnet processing
-        if (tls_connection) |*conn| {
+        if (dtls_connection) |conn| {
+            // DTLS connection (datagram-based)
+            const s = dtlsConnectionToStream(conn);
+            try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
+        } else if (tls_connection) |*conn| {
+            // TLS connection (stream-based)
             const s = tlsConnectionToStream(conn);
             try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
         } else {
+            // Plain socket connection
             const net_stream = std.net.Stream{ .handle = raw_socket };
             const s = netStreamToStream(net_stream);
             try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
@@ -327,6 +384,36 @@ pub fn tlsConnectionToStream(tls_conn: *tls.TlsConnection) stream.Stream {
         .handleFn = struct {
             fn handle(context: *anyopaque) std.posix.socket_t {
                 const c = contextToPtr(tls.TlsConnection, context);
+                return c.getSocket();
+            }
+        }.handle,
+    };
+}
+
+pub fn dtlsConnectionToStream(dtls_conn: *dtls.DtlsConnection) stream.Stream {
+    return stream.Stream{
+        .context = @ptrCast(dtls_conn),
+        .readFn = struct {
+            fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
+                const c = contextToPtr(dtls.DtlsConnection, context);
+                return c.read(buffer);
+            }
+        }.read,
+        .writeFn = struct {
+            fn write(context: *anyopaque, data: []const u8) anyerror!usize {
+                const c = contextToPtr(dtls.DtlsConnection, context);
+                return c.write(data);
+            }
+        }.write,
+        .closeFn = struct {
+            fn close(context: *anyopaque) void {
+                const c = contextToPtr(dtls.DtlsConnection, context);
+                c.close();
+            }
+        }.close,
+        .handleFn = struct {
+            fn handle(context: *anyopaque) std.posix.socket_t {
+                const c = contextToPtr(dtls.DtlsConnection, context);
                 return c.getSocket();
             }
         }.handle,

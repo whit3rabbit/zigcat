@@ -61,11 +61,27 @@ const CertPaths = struct {
 };
 
 fn generateSelfSignedCert(allocator: std.mem.Allocator, common_name: []const u8) !CertPaths {
-    // Generate unique filenames using timestamp
+    // Ensure .zig-cache/tmp directory exists (portable temp directory)
+    const cwd = fs.cwd();
+    cwd.makePath(".zig-cache/tmp") catch {};
+
+    // Get absolute path to temp directory
+    const cache_path = try cwd.realpathAlloc(allocator, ".zig-cache/tmp");
+    defer allocator.free(cache_path);
+
+    // Generate unique filenames in temp directory
     const timestamp = std.time.milliTimestamp();
-    const cert_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_test_cert_{d}.pem", .{timestamp});
+    const cert_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/ssl_test_cert_{d}.pem",
+        .{ cache_path, timestamp },
+    );
     errdefer allocator.free(cert_path);
-    const key_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_test_key_{d}.pem", .{timestamp});
+    const key_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/ssl_test_key_{d}.pem",
+        .{ cache_path, timestamp },
+    );
     errdefer allocator.free(key_path);
 
     // Use OpenSSL to generate self-signed certificate

@@ -86,6 +86,13 @@ pub const Config = struct {
     ssl_servername: ?[]const u8 = null,
     ssl_alpn: ?[]const u8 = null,
 
+    // DTLS (SSL over UDP)
+    dtls: bool = false, // Explicit DTLS mode (implies ssl=true, udp_mode=true)
+    dtls_mtu: u16 = 1200, // Path MTU for DTLS datagrams (conservative default)
+    dtls_timeout: u32 = 1000, // Initial DTLS handshake retransmission timeout (ms)
+    dtls_cookie_secret: ?[]const u8 = null, // Server cookie secret (auto-generated if null)
+    dtls_replay_window: u32 = 64, // Anti-replay window size (number of packets)
+
     // Proxy
     proxy: ?[]const u8 = null,
     proxy_type: types.ProxyType = .http,

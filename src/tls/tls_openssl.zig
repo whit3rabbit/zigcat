@@ -527,6 +527,8 @@ pub const OpenSslTls = struct {
             .tls_1_1 => c.TLS1_1_VERSION,
             .tls_1_2 => c.TLS1_2_VERSION,
             .tls_1_3 => c.TLS1_3_VERSION,
+            // DTLS versions should not be used with TLS connections
+            .dtls_1_0, .dtls_1_2, .dtls_1_3 => c.TLS1_2_VERSION, // Fallback to TLS 1.2
         };
     }
 

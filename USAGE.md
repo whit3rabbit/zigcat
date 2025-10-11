@@ -144,8 +144,12 @@ zigcat --ssl localhost 1234
 - `--allow-ip <list>` *(comma-separated strings)* - inline allowlist of CIDRs or addresses. Example: `zigcat -l 9000 --allow-ip 192.168.1.0/24,10.0.0.5`
 - `--deny-ip <list>` *(comma-separated strings)* - inline blocklist of CIDRs or addresses. Example: `zigcat -l 9000 --deny-ip 0.0.0.0/0`
 
-## TLS Options
-- `--ssl` *(flag)* - enable TLS. Example: `zigcat --ssl example.com 443`
+## TLS/DTLS Options
+- `--ssl` *(flag)* - enable TLS (TCP) or DTLS (UDP). Example: `zigcat --ssl example.com 443`
+- `--dtls` *(flag)* - enable DTLS (Datagram TLS over UDP). Example: `zigcat --dtls example.com 4433`
+- `--dtls-mtu <bytes>` *(u16)* - set DTLS path MTU (default: 1200 bytes). Example: `zigcat --dtls --dtls-mtu 1400 example.com 4433`
+- `--dtls-version <version>` *(enum: 1.0|1.2|1.3)* - set DTLS protocol version (default: 1.2). Example: `zigcat --dtls --dtls-version 1.3 example.com 4433`
+- `--dtls-timeout <ms>` *(u32 milliseconds)* - set initial DTLS retransmission timeout (default: 1000ms). Example: `zigcat --dtls --dtls-timeout 2000 example.com 4433`
 - `--ssl-verify` *(flag)* - force certificate verification (explicit opt-in). Example: `zigcat --ssl --ssl-verify example.com 443`
 - `--no-ssl-verify` *(flag)* - disable certificate verification (insecure). Example: `zigcat --ssl --no-ssl-verify example.com 443`
 - `--ssl-verify=false` *(flag)* - alternate form to disable verification. Example: `zigcat --ssl --ssl-verify=false example.com 443`
@@ -156,6 +160,42 @@ zigcat --ssl localhost 1234
 - `--ssl-ciphers <list>` *(string)* - OpenSSL cipher list. Example: `zigcat --ssl --ssl-ciphers "TLS_AES_128_GCM_SHA256" example.com 443`
 - `--ssl-servername <name>` *(string)* - override SNI hostname. Example: `zigcat --ssl --ssl-servername web.internal example.net 443`
 - `--ssl-alpn <protocols>` *(string)* - comma-separated ALPN protocols. Example: `zigcat --ssl --ssl-alpn "h2,http/1.1" example.com 443`
+
+### DTLS Usage Notes
+
+**DTLS (Datagram Transport Layer Security)** extends TLS to UDP connections, preserving message boundaries while providing encryption.
+
+**Client Mode:**
+```bash
+# Basic DTLS client connection
+zigcat --dtls example.com 4433
+
+# DTLS with custom MTU and version
+zigcat --dtls --dtls-mtu 1400 --dtls-version 1.2 example.com 4433
+
+# DTLS with certificate verification
+zigcat --dtls --ssl-verify --ssl-trustfile /etc/ssl/certs/ca-bundle.crt example.com 4433
+```
+
+**Server Mode:**
+```bash
+# DTLS server (requires certificate and key)
+zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem 4433
+
+# DTLS server with client certificate verification
+zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem --ssl-verify --ssl-trustfile ca.pem 4433
+```
+
+**Requirements:**
+- DTLS 1.0/1.2: OpenSSL 1.0.2 or later
+- DTLS 1.3: OpenSSL 3.2.0 or later
+
+**Key Differences from TLS:**
+- Operates over UDP instead of TCP
+- Preserves message boundaries (each write = one datagram)
+- Built-in retransmission for handshake packets
+- MTU awareness to avoid IP fragmentation
+- Cookie exchange for DoS protection (server mode)
 
 ## Proxy Support
 - `--proxy <target>` *(string)* - proxy address (e.g. `socks5://host:port` or `http://host:port`). Example: `zigcat --proxy socks5://127.0.0.1:1080 example.com 80`

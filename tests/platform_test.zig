@@ -489,19 +489,6 @@ test "platform - feature detection" {
     //     try expect(features.unix_sockets);
     // }
 }
-//! Platform detection and kernel version parsing tests
-//!
-//! Tests for src/util/platform.zig functionality:
-//! - Kernel version parsing from various distribution formats
-//! - Version comparison logic
-//! - io_uring capability detection
-//!
-//! Note: This is a standalone test file and must be self-contained.
-//! It cannot import from src/ due to circular dependency issues.
-
-const std = @import("std");
-const testing = std.testing;
-const builtin = @import("builtin");
 
 /// Kernel version structure (duplicated from platform.zig for standalone testing)
 const KernelVersion = struct {

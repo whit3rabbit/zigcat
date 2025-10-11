@@ -213,22 +213,73 @@ pub const TlsConfig = struct {
     max_version: TlsVersion = .tls_1_3,
 };
 
-/// TLS protocol version enumeration.
+/// TLS/DTLS protocol version enumeration.
 ///
-/// **Supported Versions:**
+/// **Supported TLS Versions:**
 /// - `.tls_1_0`: TLS 1.0 (RFC 2246) - **DEPRECATED, insecure**
 /// - `.tls_1_1`: TLS 1.1 (RFC 4346) - **DEPRECATED, insecure**
 /// - `.tls_1_2`: TLS 1.2 (RFC 5246) - **Minimum recommended**
 /// - `.tls_1_3`: TLS 1.3 (RFC 8446) - **Preferred**
 ///
+/// **Supported DTLS Versions:**
+/// - `.dtls_1_0`: DTLS 1.0 (RFC 4347, based on TLS 1.1) - **DEPRECATED**
+/// - `.dtls_1_2`: DTLS 1.2 (RFC 6347, based on TLS 1.2) - **Minimum recommended**
+/// - `.dtls_1_3`: DTLS 1.3 (RFC 9147, based on TLS 1.3) - **Preferred, requires OpenSSL 3.2+**
+///
+/// **DTLS Version Numbering:**
+/// DTLS version numbers are deliberately offset from TLS:
+/// - DTLS 1.0 is based on TLS 1.1 (skipped TLS 1.0)
+/// - DTLS 1.2 is based on TLS 1.2 (skipped DTLS 1.1)
+/// - DTLS 1.3 is based on TLS 1.3
+///
 /// **Security Recommendation:**
-/// Use `min_version = .tls_1_2` at minimum. TLS 1.0/1.1 have known
-/// vulnerabilities and are deprecated by major browsers.
+/// - TLS: Use `min_version = .tls_1_2` at minimum
+/// - DTLS: Use `min_version = .dtls_1_2` at minimum
+/// TLS 1.0/1.1 and DTLS 1.0 have known vulnerabilities and are deprecated.
 pub const TlsVersion = enum {
+    // TLS versions (stream-oriented, TCP)
     tls_1_0,
     tls_1_1,
     tls_1_2,
     tls_1_3,
+
+    // DTLS versions (datagram-oriented, UDP)
+    dtls_1_0, // Based on TLS 1.1
+    dtls_1_2, // Based on TLS 1.2
+    dtls_1_3, // Based on TLS 1.3 (OpenSSL 3.2+)
+
+    /// Check if this is a DTLS version
+    pub fn isDtls(self: TlsVersion) bool {
+        return switch (self) {
+            .dtls_1_0, .dtls_1_2, .dtls_1_3 => true,
+            else => false,
+        };
+    }
+
+    /// Check if this is a TLS version
+    pub fn isTls(self: TlsVersion) bool {
+        return !self.isDtls();
+    }
+
+    /// Get the minimum OpenSSL version required for this protocol version
+    pub fn minOpenSslVersion(self: TlsVersion) u32 {
+        return switch (self) {
+            .tls_1_0, .tls_1_1 => 0x1000000f, // OpenSSL 1.0.0
+            .tls_1_2 => 0x1000100f, // OpenSSL 1.0.1
+            .tls_1_3 => 0x1010100f, // OpenSSL 1.1.1
+            .dtls_1_0, .dtls_1_2 => 0x1000200f, // OpenSSL 1.0.2
+            .dtls_1_3 => 0x30200000, // OpenSSL 3.2.0
+        };
+    }
+
+    /// Check if this version is at least the specified version
+    /// Note: Cannot compare TLS and DTLS versions (returns false)
+    pub fn isAtLeast(self: TlsVersion, other: TlsVersion) bool {
+        // Cannot compare across TLS/DTLS boundary
+        if (self.isDtls() != other.isDtls()) return false;
+
+        return @intFromEnum(self) >= @intFromEnum(other);
+    }
 };
 
 /// TLS-specific error types for connection and cryptographic operations.

@@ -500,17 +500,27 @@ test "validateUnixSocketPermissions on nonexistent file" {
 test "validateUnixSocketPermissions on real file" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    // Create a temporary file to test with (unique name to avoid conflicts)
-    const test_path = "/tmp/zigcat_security_perm_test_unique.sock";
+    const testing = std.testing;
+    const allocator = testing.allocator;
 
-    // Ensure cleanup even if test fails
-    defer std.fs.cwd().deleteFile(test_path) catch {};
+    // Create isolated temporary directory using std.testing.tmpDir()
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Get absolute path to temp directory
+    const cwd = std.fs.cwd();
+    const cache_path = try cwd.realpathAlloc(allocator, ".zig-cache/tmp");
+    defer allocator.free(cache_path);
+
+    const test_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}/security_perm_test.sock",
+        .{ cache_path, tmp_dir.sub_path },
+    );
+    defer allocator.free(test_path);
 
     // Create the file with specific permissions
-    const file = std.fs.cwd().createFile(test_path, .{ .mode = 0o600 }) catch |err| {
-        logging.logWarning("Cannot create test file: {any}\n", .{err});
-        return error.SkipZigTest;
-    };
+    const file = try tmp_dir.dir.createFile("security_perm_test.sock", .{ .mode = 0o600 });
     file.close();
 
     // Test validation on file with safe permissions (should pass quietly)
@@ -520,16 +530,10 @@ test "validateUnixSocketPermissions on real file" {
 
     // Now set world-readable permissions (0o644) - This should trigger warning
     // Open the file and use File.chmod
-    const file_to_chmod = std.fs.cwd().openFile(test_path, .{}) catch |err| {
-        logging.logWarning("Cannot open test file for chmod: {any}\n", .{err});
-        return error.SkipZigTest;
-    };
+    const file_to_chmod = try tmp_dir.dir.openFile("security_perm_test.sock", .{});
     defer file_to_chmod.close();
 
-    file_to_chmod.chmod(0o644) catch |err| {
-        logging.logWarning("Cannot chmod test file: {any}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try file_to_chmod.chmod(0o644);
 
     // Test validation with world-readable permissions (should warn but not error)
     validateUnixSocketPermissions(test_path) catch {};

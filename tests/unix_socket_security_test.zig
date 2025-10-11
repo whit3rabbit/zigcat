@@ -11,6 +11,7 @@ const std = @import("std");
 const testing = std.testing;
 const posix = std.posix;
 const builtin = @import("builtin");
+const temp_utils = @import("utils/temp_dir.zig");
 const c = @cImport({
     @cInclude("sys/stat.h");
 });
@@ -30,8 +31,12 @@ test "TOCTTOU: connect-before-delete prevents symlink attack" {
 
     const allocator = testing.allocator;
 
-    // Create unique socket path
-    const socket_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_test_{d}.sock", .{std.time.milliTimestamp()});
+    // Create temporary directory for socket files
+    var tmp_dir = temp_utils.createTempDir(allocator);
+    defer tmp_dir.cleanup();
+
+    // Create socket path in temp directory
+    const socket_path = try tmp_dir.getFilePath("test.sock");
     defer allocator.free(socket_path);
     defer posix.unlink(socket_path) catch {};
 
@@ -67,8 +72,12 @@ test "TOCTTOU: connect-before-delete detects active socket" {
 
     const allocator = testing.allocator;
 
-    // Create unique socket path
-    const socket_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_active_{d}.sock", .{std.time.milliTimestamp()});
+    // Create temporary directory for socket files
+    var tmp_dir = temp_utils.createTempDir(allocator);
+    defer tmp_dir.cleanup();
+
+    // Create socket path in temp directory
+    const socket_path = try tmp_dir.getFilePath("active.sock");
     defer allocator.free(socket_path);
     defer posix.unlink(socket_path) catch {};
 
@@ -104,8 +113,12 @@ test "Permission validation: detect world-writable socket" {
 
     const allocator = testing.allocator;
 
-    // Create unique socket path
-    const socket_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_perms_{d}.sock", .{std.time.milliTimestamp()});
+    // Create temporary directory for socket files
+    var tmp_dir = temp_utils.createTempDir(allocator);
+    defer tmp_dir.cleanup();
+
+    // Create socket path in temp directory
+    const socket_path = try tmp_dir.getFilePath("perms.sock");
     defer allocator.free(socket_path);
     defer posix.unlink(socket_path) catch {};
 
@@ -143,8 +156,12 @@ test "Permission validation: umask prevents brief exposure window" {
 
     const allocator = testing.allocator;
 
-    // Create unique socket path
-    const socket_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_secure_{d}.sock", .{std.time.milliTimestamp()});
+    // Create temporary directory for socket files
+    var tmp_dir = temp_utils.createTempDir(allocator);
+    defer tmp_dir.cleanup();
+
+    // Create socket path in temp directory
+    const socket_path = try tmp_dir.getFilePath("secure.sock");
     defer allocator.free(socket_path);
     defer posix.unlink(socket_path) catch {};
 
@@ -286,8 +303,12 @@ test "Full security workflow: create, validate, cleanup" {
 
     const allocator = testing.allocator;
 
-    // Create unique socket path
-    const socket_path = try std.fmt.allocPrint(allocator, "/tmp/zigcat_integration_{d}.sock", .{std.time.milliTimestamp()});
+    // Create temporary directory for socket files
+    var tmp_dir = temp_utils.createTempDir(allocator);
+    defer tmp_dir.cleanup();
+
+    // Create socket path in temp directory
+    const socket_path = try tmp_dir.getFilePath("integration.sock");
     defer allocator.free(socket_path);
     defer posix.unlink(socket_path) catch {};
 

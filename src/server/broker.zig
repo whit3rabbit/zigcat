@@ -87,6 +87,8 @@ pub const BrokerError = error{
     InvalidConfiguration,
     /// Message exceeds maximum buffer size
     MessageTooLong,
+    /// Access denied by ACL
+    AccessDenied,
 
     /// Client disconnected after too many failed nickname attempts
     TooManyFailedAttempts,
@@ -529,7 +531,7 @@ pub const BrokerServer = struct {
             logging.logConnection(client_address, "DENIED");
             logging.logDebug("Access control denied connection from {any}\n", .{client_address});
             std.posix.close(client_socket);
-            return;
+            return BrokerError.AccessDenied;
         }
 
         // Apply connection timeout if configured
@@ -546,11 +548,15 @@ pub const BrokerServer = struct {
             // Set receive timeout
             std.posix.setsockopt(client_socket, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeval)) catch |err| {
                 logging.logDebug("Failed to set receive timeout: {}\n", .{err});
+                std.posix.close(client_socket);
+                return BrokerError.ClientSocketError;
             };
 
             // Set send timeout
             std.posix.setsockopt(client_socket, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeval)) catch |err| {
                 logging.logDebug("Failed to set send timeout: {}\n", .{err});
+                std.posix.close(client_socket);
+                return BrokerError.ClientSocketError;
             };
         }
 
@@ -615,6 +621,7 @@ pub const BrokerServer = struct {
                     logging.logError(err, "chat initialization");
                     logging.logDebug("Chat initialization failed for client {}: {}\n", .{ client_id, err });
                     self.removeClient(client_id);
+                    return err;
                 };
             },
         }

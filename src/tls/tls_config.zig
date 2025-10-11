@@ -416,6 +416,10 @@ fn tlsVersionToNumber(version: TlsVersion) u8 {
         .tls_1_1 => 11,
         .tls_1_2 => 12,
         .tls_1_3 => 13,
+        // DTLS versions (map to equivalent TLS version for comparison)
+        .dtls_1_0 => 11, // DTLS 1.0 is based on TLS 1.1
+        .dtls_1_2 => 12, // DTLS 1.2 is based on TLS 1.2
+        .dtls_1_3 => 13, // DTLS 1.3 is based on TLS 1.3
     };
 }
 
