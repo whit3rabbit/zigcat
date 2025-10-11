@@ -896,22 +896,36 @@ pub const BrokerServer = struct {
             }
 
             if (self.clients.getClient(client_id)) |client| {
-                const bytes_written = client.connection.write(data) catch |err| {
-                    logging.logDebug("Failed to relay to client {}: {}\n", .{ client_id, err });
-                    failed_relays += 1;
+                const was_empty = client.write_buffer.items.len == 0;
 
-                    // If it's a connection error, mark client for removal
+                client.write_buffer.appendSlice(self.allocator, data) catch |err| {
+                    logging.logDebug("Failed to queue relay data for client {}: {}\n", .{ client_id, err });
+                    failed_relays += 1;
                     if (self.isConnectionError(err)) {
-                        logging.logTrace("Client {} connection error during relay, will be removed\n", .{client_id});
+                        logging.logTrace("Client {} connection error during relay queue, will be removed\n", .{client_id});
                     }
                     continue;
                 };
 
-                client.bytes_sent += bytes_written;
-                client.updateActivity();
+                self.flow_control.recordDataPending(client_id, @intCast(data.len));
+
+                // Attempt immediate flush to minimize latency
+                self.flushWriteBuffer(client_id) catch |err| {
+                    logging.logDebug("Failed to flush relay buffer for client {}: {}\n", .{ client_id, err });
+                    failed_relays += 1;
+                    if (self.isConnectionError(err)) {
+                        logging.logTrace("Client {} connection error during relay flush, will be removed\n", .{client_id});
+                    }
+                    continue;
+                };
+
                 successful_relays += 1;
 
-                logging.logTrace("Relayed {} bytes to client {}\n", .{ bytes_written, client_id });
+                logging.logTrace("Queued {} bytes to client {} (buffer was {s})\n", .{
+                    data.len,
+                    client_id,
+                    if (was_empty) "empty" else "pending",
+                });
             }
         }
 
@@ -976,9 +990,9 @@ pub const BrokerServer = struct {
 
     /// Flush pending write data for a client
     ///
-    /// Called when a client socket becomes writable (POLL.OUT event).
-    /// Currently a no-op placeholder as the implementation uses direct writes.
-    /// Future enhancement: Implement write buffering for flow control.
+    /// Called when a client socket becomes writable (POLL.OUT event) or when new
+    /// data has been queued. Attempts to drain the client's write buffer using
+    /// non-blocking writes, leaving any unsent data queued for the next POLL.OUT.
     ///
     /// ## Parameters
     /// - `client_id`: Client ID to flush
@@ -986,17 +1000,72 @@ pub const BrokerServer = struct {
     /// ## Returns
     /// Error if flush fails critically
     fn flushWriteBuffer(self: *BrokerServer, client_id: u64) !void {
-        // Placeholder for write buffer flushing
-        // Future enhancement: Implement buffered writes with flow control
-        _ = self;
+        const client = self.clients.getClient(client_id) orelse return BrokerError.ClientNotFound;
 
-        logging.logTrace("Write buffer flush called for client {} (currently a no-op)\n", .{client_id});
+        if (client.write_buffer.items.len == 0) {
+            // Nothing to flush; ensure we are not polling for write events unnecessarily.
+            self.poll_context.updateClientEvents(client.connection.getSocket(), false);
+            return;
+        }
 
-        // TODO: Implement write buffering:
-        // 1. Maintain per-client write buffers
-        // 2. Queue data when socket would block
-        // 3. Flush on POLL.OUT events
-        // 4. Implement backpressure for slow clients
+        var total_bytes_written: usize = 0;
+
+        flush_loop: while (client.write_buffer.items.len > 0) {
+            const buffer_len = client.write_buffer.items.len;
+            const bytes_written = client.connection.write(client.write_buffer.items) catch |err| {
+                switch (err) {
+                    error.WouldBlock => {
+                        // Socket not ready for more writes; keep data queued.
+                        logging.logTrace("Client {} write would block, {} bytes remain queued\n", .{
+                            client_id,
+                            client.write_buffer.items.len,
+                        });
+                        self.poll_context.updateClientEvents(client.connection.getSocket(), true);
+                        break :flush_loop;
+                    },
+                    else => return err,
+                }
+            };
+
+            if (bytes_written == 0) {
+                // Treat zero-byte write as temporary backpressure to avoid busy loop.
+                logging.logTrace("Client {} write returned 0 bytes, {} bytes remain queued\n", .{
+                    client_id,
+                    client.write_buffer.items.len,
+                });
+                self.poll_context.updateClientEvents(client.connection.getSocket(), true);
+                break;
+            }
+
+            const remaining = buffer_len - bytes_written;
+            if (remaining > 0) {
+                std.mem.copyForwards(u8, client.write_buffer.items[0..remaining], client.write_buffer.items[bytes_written..buffer_len]);
+            }
+            client.write_buffer.shrinkRetainingCapacity(remaining);
+
+            total_bytes_written += bytes_written;
+
+            const written_u64: u64 = @intCast(bytes_written);
+            client.bytes_sent += written_u64;
+            client.updateActivity();
+            self.flow_control.recordDataSent(client_id, written_u64);
+
+            logging.logTrace("Flushed {} bytes to client {} ({} bytes remain)\n", .{
+                bytes_written,
+                client_id,
+                client.write_buffer.items.len,
+            });
+        }
+
+        if (client.write_buffer.items.len == 0) {
+            self.poll_context.updateClientEvents(client.connection.getSocket(), false);
+        } else {
+            self.poll_context.updateClientEvents(client.connection.getSocket(), true);
+        }
+
+        if (total_bytes_written > 0) {
+            logging.logTrace("Client {} total flushed bytes this cycle: {}\n", .{ client_id, total_bytes_written });
+        }
     }
 
     /// Gracefully shutdown the broker server with enhanced logging

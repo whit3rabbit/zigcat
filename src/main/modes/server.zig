@@ -315,9 +315,11 @@ fn handleClient(
                 defer telnet_conn.deinit();
 
                 try telnet_conn.performServerNegotiation();
-                try client.telnetBidirectionalTransfer(allocator, .{ .telnet_conn = &telnet_conn }, cfg, &output_logger, &hex_dumper);
+                const s = client.telnetConnectionToStream(&telnet_conn);
+                try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
             } else {
-                try tls_transfer.tlsBidirectionalTransfer(allocator, &tls_conn, cfg, &output_logger, &hex_dumper);
+                const s = client.tlsConnectionToStream(&tls_conn);
+                try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
             }
             return;
         } else {
@@ -332,9 +334,11 @@ fn handleClient(
         defer telnet_conn.deinit();
 
         try telnet_conn.performServerNegotiation();
-        try client.telnetBidirectionalTransfer(allocator, .{ .telnet_conn = &telnet_conn }, cfg, &output_logger, &hex_dumper);
+        const s = client.telnetConnectionToStream(&telnet_conn);
+        try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
     } else {
-        try transfer.bidirectionalTransfer(allocator, stream, cfg, &output_logger, &hex_dumper);
+        const s = client.netStreamToStream(stream);
+        try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
     }
 }
 

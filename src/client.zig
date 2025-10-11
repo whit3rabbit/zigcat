@@ -30,7 +30,7 @@ const sctp = @import("net/sctp.zig");
 const unixsock = @import("net/unixsock.zig");
 const tls = @import("tls/tls.zig");
 const transfer = @import("io/transfer.zig");
-const tls_transfer = @import("io/tls_transfer.zig");
+const stream = @import("io/stream.zig");
 const output = @import("io/output.zig");
 const hexdump = @import("io/hexdump.zig");
 const proxy = @import("net/proxy/mod.zig");
@@ -38,6 +38,11 @@ const logging = @import("util/logging.zig");
 const portscan = @import("util/portscan.zig");
 const Connection = @import("net/connection.zig").Connection;
 const TelnetConnection = @import("protocol/telnet_connection.zig").TelnetConnection;
+
+inline fn contextToPtr(comptime T: type, context: *anyopaque) *T {
+    const aligned_ctx: *align(@alignOf(T)) anyopaque = @alignCast(context);
+    return @ptrCast(aligned_ctx);
+}
 
 /// Run client mode - connect to remote host and transfer data.
 ///
@@ -253,16 +258,109 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         try telnet_conn.performInitialNegotiation();
 
         // Use TelnetConnection for bidirectional transfer
-        try transferWithTelnetConnection(allocator, &telnet_conn, cfg, &output_logger, &hex_dumper);
+        const s = telnetConnectionToStream(&telnet_conn);
+        try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
     } else {
         // Standard transfer without Telnet processing
         if (tls_connection) |*conn| {
-            try tls_transfer.tlsBidirectionalTransfer(allocator, conn, cfg, &output_logger, &hex_dumper);
+            const s = tlsConnectionToStream(conn);
+            try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
         } else {
-            const stream = std.net.Stream{ .handle = raw_socket };
-            try transfer.bidirectionalTransfer(allocator, stream, cfg, &output_logger, &hex_dumper);
+            const net_stream = std.net.Stream{ .handle = raw_socket };
+            const s = netStreamToStream(net_stream);
+            try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
         }
     }
+}
+
+pub fn telnetConnectionToStream(telnet_conn: *TelnetConnection) stream.Stream {
+    return stream.Stream{
+        .context = @ptrCast(telnet_conn),
+        .readFn = struct {
+            fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
+                const c = contextToPtr(TelnetConnection, context);
+                return c.read(buffer);
+            }
+        }.read,
+        .writeFn = struct {
+            fn write(context: *anyopaque, data: []const u8) anyerror!usize {
+                const c = contextToPtr(TelnetConnection, context);
+                return c.write(data);
+            }
+        }.write,
+        .closeFn = struct {
+            fn close(context: *anyopaque) void {
+                const c = contextToPtr(TelnetConnection, context);
+                c.close();
+            }
+        }.close,
+        .handleFn = struct {
+            fn handle(context: *anyopaque) std.posix.socket_t {
+                const c = contextToPtr(TelnetConnection, context);
+                return c.getSocket();
+            }
+        }.handle,
+    };
+}
+
+pub fn tlsConnectionToStream(tls_conn: *tls.TlsConnection) stream.Stream {
+    return stream.Stream{
+        .context = @ptrCast(tls_conn),
+        .readFn = struct {
+            fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
+                const c = contextToPtr(tls.TlsConnection, context);
+                return c.read(buffer);
+            }
+        }.read,
+        .writeFn = struct {
+            fn write(context: *anyopaque, data: []const u8) anyerror!usize {
+                const c = contextToPtr(tls.TlsConnection, context);
+                return c.write(data);
+            }
+        }.write,
+        .closeFn = struct {
+            fn close(context: *anyopaque) void {
+                const c = contextToPtr(tls.TlsConnection, context);
+                c.close();
+            }
+        }.close,
+        .handleFn = struct {
+            fn handle(context: *anyopaque) std.posix.socket_t {
+                const c = contextToPtr(tls.TlsConnection, context);
+                return c.getSocket();
+            }
+        }.handle,
+    };
+}
+
+pub fn netStreamToStream(net_stream: std.net.Stream) stream.Stream {
+    return stream.Stream{
+        .context = @ptrCast(@constCast(&net_stream)),
+        .readFn = struct {
+            fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
+                const s = contextToPtr(std.net.Stream, context);
+                return s.read(buffer);
+            }
+        }.read,
+        .writeFn = struct {
+            fn write(context: *anyopaque, data: []const u8) anyerror!usize {
+                const s = contextToPtr(std.net.Stream, context);
+                return s.write(data);
+            }
+        }.write,
+        .closeFn = struct {
+            fn close(context: *anyopaque) void {
+                const s = contextToPtr(std.net.Stream, context);
+                s.close();
+            }
+        }.close,
+        .handleFn = struct {
+            fn handle(context: *anyopaque) std.posix.socket_t {
+                const s = contextToPtr(std.net.Stream, context);
+                return s.handle;
+            }
+        }.handle,
+    };
 }
 
 /// Print data as hex dump to stdout with ASCII sidebar.
@@ -469,243 +567,12 @@ fn runUnixSocketClient(allocator: std.mem.Allocator, cfg: *const config.Config, 
         try telnet_conn.performInitialNegotiation();
 
         // Use TelnetConnection for bidirectional transfer
-        try transferWithTelnetConnection(allocator, &telnet_conn, cfg, &output_logger, &hex_dumper);
+        const s = telnetConnectionToStream(&telnet_conn);
+        try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
     } else {
         // Use standard bidirectional transfer with Unix socket
-        const stream = std.net.Stream{ .handle = unix_client.getSocket() };
-        try transfer.bidirectionalTransfer(allocator, stream, cfg, &output_logger, &hex_dumper);
-    }
-}
-
-/// Bidirectional data transfer using TelnetConnection.
-/// Handles Telnet protocol processing while maintaining compatibility with existing I/O control features.
-///
-/// This function provides the same functionality as the standard bidirectional transfer
-/// but processes data through the Telnet protocol layer for IAC sequence handling and
-/// option negotiation.
-///
-/// Parameters:
-///   allocator: Memory allocator for buffers and temporary data
-///   telnet_conn: TelnetConnection handling protocol processing
-///   cfg: Configuration with I/O control, timeouts, and logging options
-///   output_logger: Logger for output file writing
-///   hex_dumper: Hex dump formatter for debugging output
-fn transferWithTelnetConnection(
-    allocator: std.mem.Allocator,
-    telnet_conn: *TelnetConnection,
-    cfg: *const config.Config,
-    output_logger: *output.OutputLogger,
-    hex_dumper: *hexdump.HexDumper,
-) !void {
-    // Use the same transfer logic as the standard bidirectional transfer,
-    // but create a wrapper that uses TelnetConnection's read/write methods
-    const TelnetStream = struct {
-        telnet_conn: *TelnetConnection,
-
-        const Self = @This();
-
-        pub fn read(self: Self, buffer: []u8) !usize {
-            return self.telnet_conn.read(buffer);
-        }
-
-        pub fn write(self: Self, data: []const u8) !usize {
-            return self.telnet_conn.write(data);
-        }
-
-        pub fn close(self: Self) void {
-            self.telnet_conn.close();
-        }
-    };
-
-    const telnet_stream = TelnetStream{ .telnet_conn = telnet_conn };
-
-    // Create a std.net.Stream-compatible wrapper for the transfer function
-    // Note: This is a bit of a hack since std.net.Stream expects a file handle,
-    // but we need to use our TelnetConnection methods instead.
-    // We'll need to implement our own transfer logic here.
-
-    try telnetBidirectionalTransfer(allocator, telnet_stream, cfg, output_logger, hex_dumper);
-}
-
-/// Telnet-aware bidirectional data transfer between stdin/stdout and Telnet connection.
-///
-/// This function replicates the core logic of bidirectionalTransfer but uses
-/// TelnetConnection methods for network I/O to ensure proper Telnet protocol handling.
-///
-/// Features:
-/// - Telnet protocol processing (IAC sequences, option negotiation)
-/// - I/O control modes (send-only, recv-only)
-/// - Timeout handling with poll()
-/// - Output logging and hex dump support
-/// - Graceful shutdown on EOF or timeout
-///
-/// Parameters:
-///   allocator: Memory allocator for buffers
-///   telnet_stream: Wrapper around TelnetConnection
-///   cfg: Configuration with I/O control and timeout settings
-///   output_logger: Logger for output file writing
-///   hex_dumper: Hex dump formatter for debugging
-pub fn telnetBidirectionalTransfer(
-    allocator: std.mem.Allocator,
-    telnet_stream: anytype,
-    cfg: *const config.Config,
-    output_logger: *output.OutputLogger,
-    hex_dumper: *hexdump.HexDumper,
-) !void {
-    _ = allocator; // May be used for future buffer allocation
-
-    const stdin = std.fs.File.stdin();
-    const stdout = std.fs.File.stdout();
-
-    var buffer: [8192]u8 = undefined;
-    const should_continue = true;
-
-    // Get socket for poll operations
-    const socket = telnet_stream.telnet_conn.getSocket();
-
-    while (should_continue) {
-        // Set up poll for both stdin and socket
-        var poll_fds = [_]std.posix.pollfd{
-            .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
-            .{ .fd = socket, .events = std.posix.POLL.IN, .revents = 0 },
-        };
-
-        // Apply I/O control modes
-        if (cfg.recv_only) {
-            poll_fds[0].events = 0; // Don't poll stdin in recv-only mode
-        }
-        if (cfg.send_only) {
-            poll_fds[1].events = 0; // Don't poll socket in send-only mode
-        }
-
-        // Poll with timeout
-        const timeout_ms: i32 = if (cfg.idle_timeout > 0) @intCast(cfg.idle_timeout) else -1;
-        const poll_result = std.posix.poll(&poll_fds, timeout_ms) catch |err| {
-            if (cfg.verbose) {
-                logging.logVerbose(cfg, "Poll error: {}\n", .{err});
-            }
-            break;
-        };
-
-        if (poll_result == 0) {
-            // Timeout
-            if (cfg.verbose) {
-                logging.logVerbose(cfg, "Idle timeout reached, closing connection.\n", .{});
-            }
-            break;
-        }
-
-        // Handle stdin data (send to network)
-        if (poll_fds[0].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = stdin.read(&buffer) catch |err| {
-                if (cfg.verbose) {
-                    logging.logVerbose(cfg, "Stdin read error: {}\n", .{err});
-                }
-                break;
-            };
-
-            if (bytes_read == 0) {
-                // EOF on stdin
-                if (cfg.verbose) {
-                    logging.logVerbose(cfg, "EOF on stdin\n", .{});
-                }
-                if (cfg.close_on_eof) {
-                    break;
-                }
-                // Continue reading from network even after stdin EOF
-                poll_fds[0].events = 0;
-            } else {
-                var data_to_send = buffer[0..bytes_read];
-
-                // Apply CRLF conversion if enabled
-                var crlf_buffer: [16384]u8 = undefined;
-                if (cfg.crlf) {
-                    var crlf_len: usize = 0;
-                    for (data_to_send) |byte| {
-                        if (byte == '\n' and crlf_len < crlf_buffer.len - 1) {
-                            crlf_buffer[crlf_len] = '\r';
-                            crlf_len += 1;
-                        }
-                        if (crlf_len < crlf_buffer.len) {
-                            crlf_buffer[crlf_len] = byte;
-                            crlf_len += 1;
-                        }
-                    }
-                    data_to_send = crlf_buffer[0..crlf_len];
-                }
-
-                // Send through Telnet connection
-                const bytes_written = telnet_stream.telnet_conn.write(data_to_send) catch |err| {
-                    if (cfg.verbose) {
-                        logging.logVerbose(cfg, "Network write error: {}\n", .{err});
-                    }
-                    break;
-                };
-
-                if (cfg.verbose) {
-                    logging.logVerbose(cfg, "Sent {} bytes to network\n", .{bytes_written});
-                }
-
-                // Log to hex dump if enabled
-                try hex_dumper.dump(data_to_send[0..bytes_written]);
-            }
-        }
-
-        // Handle network data (send to stdout)
-        if (poll_fds[1].revents & std.posix.POLL.IN != 0) {
-            const bytes_read = telnet_stream.telnet_conn.read(&buffer) catch |err| {
-                if (cfg.verbose) {
-                    logging.logVerbose(cfg, "Network read error: {}\n", .{err});
-                }
-                break;
-            };
-
-            if (bytes_read == 0) {
-                // EOF on network
-                if (cfg.verbose) {
-                    logging.logVerbose(cfg, "EOF on network connection\n", .{});
-                }
-                break;
-            } else {
-                const data_received = buffer[0..bytes_read];
-
-                // Write to stdout
-                _ = stdout.write(data_received) catch |err| {
-                    if (cfg.verbose) {
-                        logging.logVerbose(cfg, "Stdout write error: {}\n", .{err});
-                    }
-                    break;
-                };
-
-                // Log to output file if enabled
-                try output_logger.write(data_received);
-
-                // Log to hex dump if enabled
-                try hex_dumper.dump(data_received);
-
-                if (cfg.verbose) {
-                    logging.logVerbose(cfg, "Received {} bytes from network\n", .{bytes_read});
-                }
-            }
-        }
-
-        // Check for error conditions
-        if (poll_fds[0].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL) != 0) {
-            if (cfg.verbose) {
-                logging.logVerbose(cfg, "Stdin error condition\n", .{});
-            }
-            break;
-        }
-
-        if (poll_fds[1].revents & (std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL) != 0) {
-            if (cfg.verbose) {
-                logging.logVerbose(cfg, "Network error condition\n", .{});
-            }
-            break;
-        }
-    }
-
-    if (cfg.verbose) {
-        logging.logVerbose(cfg, "Telnet transfer completed\n", .{});
+        const net_stream = std.net.Stream{ .handle = unix_client.getSocket() };
+        const s = netStreamToStream(net_stream);
+        try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
     }
 }

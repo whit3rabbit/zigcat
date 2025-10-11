@@ -3,6 +3,7 @@
 //! and server paths, layering Telnet processing, logging, throttling, and
 //! TLS-specific variants on top of a shared poll/select abstraction.
 const std = @import("std");
+
 const posix = std.posix;
 const config = @import("../config.zig");
 const linecodec = @import("linecodec.zig");
@@ -16,6 +17,8 @@ const UringEventLoop = @import("../util/io_uring_wrapper.zig").UringEventLoop;
 
 const BUFFER_SIZE = 8192;
 
+const stream_mod = @import("stream.zig");
+
 /// Dispatches to the platform-specific transfer loop.
 /// Non-Windows targets prefer the POSIX poll-based implementation, while the
 /// fallback case intentionally reuses the Windows path because the select()
@@ -24,7 +27,7 @@ const BUFFER_SIZE = 8192;
 /// On Linux 5.1+, automatically uses io_uring for high-performance async I/O.
 pub fn bidirectionalTransfer(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: stream_mod.Stream,
     cfg: *const config.Config,
     output_logger: ?*output.OutputLogger,
     hex_dumper: ?*hexdump.HexDumper,
@@ -57,7 +60,7 @@ pub fn bidirectionalTransfer(
 /// Matches POSIX implementation for platform parity with timeout support
 pub fn bidirectionalTransferWindows(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: stream_mod.Stream,
     cfg: *const config.Config,
     output_logger: ?*output.OutputLogger,
     hex_dumper: ?*hexdump.HexDumper,
@@ -71,7 +74,7 @@ pub fn bidirectionalTransferWindows(
     // Use poll-based event loop for timeout support and concurrent I/O
     var pollfds = [_]poll_wrapper.pollfd{
         .{ .fd = stdin.handle, .events = poll_wrapper.POLL.IN, .revents = 0 },
-        .{ .fd = stream.handle, .events = poll_wrapper.POLL.IN, .revents = 0 },
+        .{ .fd = stream.handle(), .events = poll_wrapper.POLL.IN, .revents = 0 },
     };
 
     // Determine which directions to enable
@@ -123,7 +126,7 @@ pub fn bidirectionalTransferWindows(
 
                 // Handle half-close: shutdown write-half but keep reading (Windows)
                 if (!cfg.no_shutdown) {
-                    poll_wrapper.shutdown(stream.handle, .send) catch |err| {
+                    poll_wrapper.shutdown(stream.handle(), .send) catch |err| {
                         logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
                     };
                 }
@@ -286,7 +289,7 @@ pub fn bidirectionalTransferWindows(
 /// Bidirectional data transfer between stdin/stdout and socket
 pub fn bidirectionalTransferPosix(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: stream_mod.Stream,
     cfg: *const config.Config,
     output_logger: ?*output.OutputLogger,
     hex_dumper: ?*hexdump.HexDumper,
@@ -299,7 +302,7 @@ pub fn bidirectionalTransferPosix(
 
     var pollfds = [_]poll_wrapper.pollfd{
         .{ .fd = stdin.handle, .events = poll_wrapper.POLL.IN, .revents = 0 },
-        .{ .fd = stream.handle, .events = poll_wrapper.POLL.IN, .revents = 0 },
+        .{ .fd = stream.handle(), .events = poll_wrapper.POLL.IN, .revents = 0 },
     };
 
     // Determine which directions to enable
@@ -351,7 +354,7 @@ pub fn bidirectionalTransferPosix(
 
                 // Handle half-close: shutdown write-half but keep reading
                 if (!cfg.no_shutdown) {
-                    posix.shutdown(stream.handle, .send) catch |err| {
+                    posix.shutdown(stream.handle(), .send) catch |err| {
                         logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
                     };
                 }
@@ -368,7 +371,7 @@ pub fn bidirectionalTransferPosix(
                 else
                     input_slice;
 
-                _ = try posix.send(stream.handle, data, 0);
+                _ = try stream.write(data);
 
                 // Apply traffic shaping delay after send
                 if (cfg.delay_ms > 0) {
@@ -382,7 +385,7 @@ pub fn bidirectionalTransferPosix(
 
         // Check for socket data (send to stdout)
         if (pollfds[1].revents & poll_wrapper.POLL.IN != 0) {
-            const n = posix.recv(stream.handle, &buffer2, 0) catch |err| {
+            const n = stream.read(&buffer2) catch |err| {
                 logging.logError(err, "Socket recv error");
                 socket_closed = true;
                 continue;
@@ -402,7 +405,7 @@ pub fn bidirectionalTransferPosix(
                     if (result.response.len > 0) {
                         // Telnet replies must go out immediately so the negotiation state on
                         // both sides stays synchronized; buffering delays can trigger loops.
-                        _ = try posix.send(stream.handle, result.response, 0);
+                        _ = try stream.write(result.response);
                         logging.logDebug("Sent Telnet negotiation: {any} bytes\n", .{result.response.len});
                     }
 
@@ -535,7 +538,7 @@ pub fn bidirectionalTransferPosix(
 /// - CPU usage: 5-10% (vs 40-60% with poll under load)
 pub fn bidirectionalTransferIoUring(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: stream_mod.Stream,
     cfg: *const config.Config,
     output_logger: ?*output.OutputLogger,
     hex_dumper: ?*hexdump.HexDumper,
@@ -587,7 +590,7 @@ pub fn bidirectionalTransferIoUring(
         stdin_read_pending = true;
     }
     if (!socket_closed and can_recv) {
-        try ring.submitRead(stream.handle, &buffer_socket, 1); // user_data=1 for socket
+        try ring.submitRead(stream.handle(), &buffer_socket, 1); // user_data=1 for socket
         socket_read_pending = true;
     }
 
@@ -621,7 +624,7 @@ pub fn bidirectionalTransferIoUring(
 
                     // Handle half-close: shutdown write-half but keep reading
                     if (!cfg.no_shutdown) {
-                        posix.shutdown(stream.handle, .send) catch |err| {
+                        posix.shutdown(stream.handle(), .send) catch |err| {
                             logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
                         };
                     }
@@ -642,7 +645,7 @@ pub fn bidirectionalTransferIoUring(
                     defer if (data.ptr != input_slice.ptr) allocator.free(data);
 
                     // Submit write to socket (user_data=2 for writes)
-                    try ring.submitWrite(stream.handle, data, 2);
+                    try ring.submitWrite(stream.handle(), data, 2);
 
                     // Apply traffic shaping delay after send
                     if (cfg.delay_ms > 0) {
@@ -687,7 +690,7 @@ pub fn bidirectionalTransferIoUring(
                         if (result.response.len > 0) {
                             telnet_response = result.response;
                             // Submit Telnet negotiation write immediately
-                            try ring.submitWrite(stream.handle, result.response, 2);
+                            try ring.submitWrite(stream.handle(), result.response, 2);
                             logging.logDebug("Sent Telnet negotiation: {any} bytes\n", .{result.response.len});
                         } else {
                             allocator.free(result.response);
@@ -750,7 +753,7 @@ pub fn bidirectionalTransferIoUring(
 
                     // Resubmit socket read (io_uring is one-shot)
                     if (!socket_closed and can_recv) {
-                        try ring.submitRead(stream.handle, &buffer_socket, 1);
+                        try ring.submitRead(stream.handle(), &buffer_socket, 1);
                         socket_read_pending = true;
                     }
                 }
