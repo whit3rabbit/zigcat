@@ -190,7 +190,8 @@ fn loadRulesFromFile(
     is_allow: bool,
 ) !void {
     if (!path_safety.isSafePath(file_path)) {
-        logging.logError(error.PathTraversalDetected, "Access control file '{s}' contains forbidden traversal sequences", .{file_path});
+        logging.logError(error.PathTraversalDetected, "access control file validation");
+        std.debug.print("Error: Access control file '{s}' contains forbidden traversal sequences\n", .{file_path});
         return error.PathTraversalDetected;
     }
 

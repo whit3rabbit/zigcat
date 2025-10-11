@@ -111,6 +111,8 @@ pub const Config = struct {
 
     // Zero-I/O mode
     zero_io: bool = false,
+    scan_parallel: bool = false, // Enable parallel port scanning
+    scan_workers: usize = 10,    // Number of worker threads for parallel scanning
 
     // Security options
     allow_dangerous: bool = false,

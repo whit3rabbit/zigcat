@@ -160,6 +160,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             cfg.close_on_eof = true;
         } else if (std.mem.eql(u8, arg, "-z") or std.mem.eql(u8, arg, "--zero-io")) {
             cfg.zero_io = true;
+        } else if (std.mem.eql(u8, arg, "--scan-parallel")) {
+            cfg.scan_parallel = true;
         }
         // Flags with values
         else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--source")) {
@@ -304,6 +306,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
                 i += 1;
                 cfg.hex_dump_file = args[i];
             }
+        } else if (std.mem.eql(u8, arg, "--scan-workers")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.scan_workers = try std.fmt.parseInt(usize, args[i], 10);
         } else {
             logging.logError(error.UnknownOption, "Unknown option");
             logging.logWarning("  Option: {s}\n", .{arg});

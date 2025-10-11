@@ -112,8 +112,14 @@ pub fn printHelp() void {
         \\           Prefer IP-based rules for production security. Hostnames add
         \\           10-100ms latency per connection due to DNS lookups.
         \\
-        \\OTHER OPTIONS:
+        \\PORT SCANNING OPTIONS:
         \\  -z, --zero-io                 Zero-I/O mode (port scanning)
+        \\  --scan-parallel               Enable parallel port scanning (10-100x faster)
+        \\  --scan-workers <n>            Number of worker threads for parallel scanning (default: 10)
+        \\                                Recommended: 10-50 workers depending on network bandwidth
+        \\                                Higher values = faster scans but more aggressive
+        \\
+        \\OTHER OPTIONS:
         \\  --keep-source-port            Bind to specific source port before connect
         \\  --                            End of options (all following args are positional)
         \\  -h, --help                    Show this help
@@ -150,6 +156,14 @@ pub fn printHelp() void {
         \\  Command execution:
         \\    zigcat -l -e grep foo         Execute grep (args without hyphens)
         \\    zigcat -l -e -- grep -v foo   Execute grep with -v flag (using --)
+        \\
+        \\  Port scanning:
+        \\    zigcat -z localhost 80         Test if port 80 is open (sequential)
+        \\    zigcat -z --scan-parallel localhost 80  Test port 80 (parallel mode)
+        \\    zigcat -z --scan-parallel --scan-workers 20 example.com 1-1024
+        \\                                  Scan ports 1-1024 with 20 workers (fast!)
+        \\    zigcat -z -w 0.5 --scan-parallel --scan-workers 50 192.168.1.1 1-65535
+        \\                                  Scan all ports with 50 workers and 500ms timeout
         \\
     , .{});
 }

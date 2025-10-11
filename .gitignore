@@ -1,6 +1,7 @@
 
 # Zig build artifacts
 zig-cache/
+.zig-cache/
 zig-out/
 *.o
 *.obj
@@ -20,6 +21,7 @@ hive-mind-prompt-*.txt
 
 # Claude Flow generated files
 .claude/settings.local.json
+.claude/
 .mcp.json
 claude-flow.config.json
 .swarm/
@@ -48,3 +50,4 @@ CLAUDE-FLOW.md
 # OLD
 docks-archive/
 *.DS_Store
+CLAUDE.md

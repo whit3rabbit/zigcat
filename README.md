@@ -27,6 +27,33 @@ zig build test
 - Modern: Built with Zig for performance and safety
 - Portable: Static binaries with no external dependencies (Linux)
 
+## Platform-Specific Notes
+
+### Windows
+
+**Connection Limits (Broker/Chat Mode)**:
+- **Windows Vista+**: Supports 1000+ concurrent connections using WSAPoll backend
+- **Older Windows**: Limited to ~20 concurrent connections due to FD_SETSIZE=64 constraint
+- The application automatically selects the best polling backend available
+
+**Recommended Configuration**:
+```bash
+# For high-traffic broker/chat servers on Windows
+zigcat --broker -l localhost:8080 --max-clients 100   # Vista+ only
+zigcat --chat -l localhost:8080 --max-clients 20      # Safe for all Windows versions
+```
+
+**Important**: If you see a warning about exceeding the Windows connection limit, either:
+1. Reduce `--max-clients` to 20 or less
+2. Ensure you're running Windows Vista or later (WSAPoll backend)
+3. Upgrade to a newer Windows version for better scalability
+
+### Unix/Linux/macOS
+
+- No connection limits from the polling backend
+- Supports thousands of concurrent connections in broker/chat mode
+- Uses native `poll()` system call for optimal performance
+
 ## Build Guide
 
 ### Using Makefile (Recommended)

@@ -35,6 +35,7 @@ const output = @import("io/output.zig");
 const hexdump = @import("io/hexdump.zig");
 const proxy = @import("net/proxy/mod.zig");
 const logging = @import("util/logging.zig");
+const portscan = @import("util/portscan.zig");
 const Connection = @import("net/connection.zig").Connection;
 const TelnetConnection = @import("protocol/telnet_connection.zig").TelnetConnection;
 
@@ -77,7 +78,47 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     }
 
     const host = cfg.positional_args[0];
-    const port = try std.fmt.parseInt(u16, cfg.positional_args[1], 10);
+    const port_spec = cfg.positional_args[1];
+
+    // Handle zero-I/O mode (port scanning) BEFORE attempting connection
+    if (cfg.zero_io) {
+        const timeout = if (cfg.wait_time > 0) cfg.wait_time else cfg.connect_timeout;
+
+        // Parse port specification (single port or range)
+        const port_range = try portscan.PortRange.parse(port_spec);
+
+        if (port_range.isSinglePort()) {
+            // Single port scan
+            const is_open = try portscan.scanPort(allocator, host, port_range.start, timeout);
+            std.debug.print("{s}:{d} - {s}\n", .{ host, port_range.start, if (is_open) "open" else "closed" });
+        } else {
+            // Port range scan
+            if (cfg.scan_parallel) {
+                // Parallel scanning
+                if (cfg.verbose) {
+                    logging.logVerbose(cfg, "Scanning {s}:{d}-{d} with {d} workers (parallel mode)\n", .{
+                        host,
+                        port_range.start,
+                        port_range.end,
+                        cfg.scan_workers,
+                    });
+                }
+                try portscan.scanPortRangeParallel(allocator, host, port_range.start, port_range.end, timeout, cfg.scan_workers);
+            } else {
+                // Sequential scanning
+                if (cfg.verbose) {
+                    logging.logVerbose(cfg, "Scanning {s}:{d}-{d} (sequential mode)\n", .{ host, port_range.start, port_range.end });
+                }
+                try portscan.scanPortRange(allocator, host, port_range.start, port_range.end, timeout);
+            }
+        }
+
+        // Port scanning complete, exit
+        return;
+    }
+
+    // For non-scanning modes, parse as single port
+    const port = try std.fmt.parseInt(u16, port_spec, 10);
 
     if (cfg.verbose) {
         logging.logVerbose(cfg, "Client mode configuration:\n", .{});
@@ -165,20 +206,7 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         logging.logWarn("TLS not supported with UDP, continuing without encryption", .{});
     }
 
-    // 4. Handle zero-I/O mode (connection test)
-    if (cfg.zero_io) {
-        // Zero-I/O mode: just test connection and close
-        if (cfg.verbose) {
-            logging.logVerbose(cfg, "Zero-I/O mode (-z): connection test successful, closing.\n", .{});
-        }
-        if (tls_connection) |*conn| {
-            conn.close();
-        }
-        net.closeSocket(raw_socket);
-        return;
-    }
-
-    // 5. Execute command if specified
+    // 4. Execute command if specified
     if (cfg.exec_command) |cmd| {
         defer {
             if (tls_connection) |*conn| {

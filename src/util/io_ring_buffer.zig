@@ -98,10 +98,9 @@ pub const IoRingBuffer = struct {
 
     /// Commit bytes written into previously obtained writable slice.
     ///
-    /// SECURITY: Uses wrapping addition (+%) to prevent integer overflow.
-    /// If write_index + amount overflows usize, standard addition would wrap
-    /// to a small number, corrupting buffer state and causing infinite loops
-    /// in poll() operations (100% CPU consumption).
+    /// SECURITY: Performs index math in widened (u128) space to avoid overflow.
+    /// Guarantees `(write_index + amount) % capacity` semantics even when
+    /// capacity exceeds half of the native usize range on 32-bit targets.
     pub fn commitWrite(self: *IoRingBuffer, amount: usize) void {
         if (amount == 0) return;
 
@@ -110,10 +109,8 @@ pub const IoRingBuffer = struct {
             return;
         }
 
-        // SECURITY FIX: Use wrapping addition to prevent overflow corruption
-        // Even if write_index + amount overflows, the modulo operation will
-        // produce the correct result with wrapping arithmetic
-        self.write_index = (self.write_index +% amount) % self.capacity;
+        // SECURITY: Advance index using widened arithmetic to avoid overflow on 32-bit
+        self.write_index = advanceIndex(self.write_index, amount, self.capacity);
         self.len += amount;
         if (self.len > self.high_water_mark) {
             self.high_water_mark = self.len;
@@ -136,8 +133,8 @@ pub const IoRingBuffer = struct {
 
     /// Consume bytes from the buffer after reading.
     ///
-    /// SECURITY: Uses wrapping addition (+%) to prevent integer overflow.
-    /// Similar to commitWrite, prevents buffer state corruption from overflow.
+    /// SECURITY: Performs index math in widened (u128) space to avoid overflow,
+    /// preserving `(read_index + amount) % capacity` semantics on 32-bit targets.
     pub fn consume(self: *IoRingBuffer, amount: usize) void {
         if (amount == 0) return;
 
@@ -147,8 +144,8 @@ pub const IoRingBuffer = struct {
             return;
         }
 
-        // SECURITY FIX: Use wrapping addition to prevent overflow corruption
-        self.read_index = (self.read_index +% amount) % self.capacity;
+        // SECURITY: Advance index using widened arithmetic to avoid overflow on 32-bit
+        self.read_index = advanceIndex(self.read_index, amount, self.capacity);
         self.len -= amount;
     }
 
@@ -196,6 +193,14 @@ pub const IoRingBuffer = struct {
         self.overflowed = false;
     }
 };
+
+/// Advance an index by `amount` modulo `capacity` without intermediate overflow.
+fn advanceIndex(index: usize, amount: usize, capacity: usize) usize {
+    std.debug.assert(capacity != 0);
+    const widened = @as(u128, index) + @as(u128, amount);
+    const wrapped = widened % @as(u128, capacity);
+    return @intCast(wrapped);
+}
 
 test "IoRingBuffer basic read/write" {
     const allocator = std.testing.allocator;

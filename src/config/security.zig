@@ -1,6 +1,7 @@
 //! Security-oriented configuration validation.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const config_struct = @import("config_struct.zig");
 const Config = config_struct.Config;
@@ -47,6 +48,44 @@ pub fn validateBrokerChat(cfg: *const Config) BrokerChatError!void {
 
     if (cfg.max_clients == 0 or cfg.max_clients > 1000) {
         return BrokerChatError.InvalidMaxClients;
+    }
+
+    // SECURITY: Windows select() backend has FD_SETSIZE limitation (~64 on Windows)
+    // Each client requires ~3 fd_set entries (read/write/error sets) plus 1 for listen socket
+    // Safe limit: (FD_SETSIZE - 1) / 3 ≈ 21 clients with select() backend
+    // The WSAPoll backend (Windows Vista+) has no such limitation
+    if (builtin.os.tag == .windows) {
+        // Conservative safe limit for select() backend
+        // This will be relaxed when WSAPoll backend is the default
+        const windows_select_safe_limit = 20;
+
+        if (cfg.max_clients > windows_select_safe_limit) {
+            std.debug.print(
+                "\n" ++
+                "┌────────────────────────────────────────────────────────────────┐\n" ++
+                "│ WARNING: Windows Connection Limit Exceeded                     │\n" ++
+                "├────────────────────────────────────────────────────────────────┤\n" ++
+                "│ Configured max_clients: {d: >3}                                   │\n" ++
+                "│ Safe limit (select):    {d: >3}                                   │\n" ++
+                "├────────────────────────────────────────────────────────────────┤\n" ++
+                "│ The Windows select() backend is limited by FD_SETSIZE (64).   │\n" ++
+                "│ Exceeding this limit may cause:                               │\n" ++
+                "│   • Silent connection failures                                 │\n" ++
+                "│   • Denial of Service conditions                              │\n" ++
+                "│   • Server instability                                         │\n" ++
+                "├────────────────────────────────────────────────────────────────┤\n" ++
+                "│ Recommendations:                                               │\n" ++
+                "│   1. Use --max-clients {d} or less                              │\n" ++
+                "│   2. Wait for WSAPoll backend (removes limitation)             │\n" ++
+                "└────────────────────────────────────────────────────────────────┘\n" ++
+                "\n",
+                .{cfg.max_clients, windows_select_safe_limit, windows_select_safe_limit}
+            );
+
+            // For now, we issue a warning but don't fail
+            // In a future version, we should enforce this limit or auto-switch to WSAPoll
+            // Uncomment to enforce: return BrokerChatError.InvalidMaxClients;
+        }
     }
 
     if (cfg.chat_mode) {

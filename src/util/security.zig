@@ -71,7 +71,7 @@ pub const SecurityError = error{
 /// Parameters:
 /// - target_user: Username or numeric UID to switch to
 ///   - Common users: "nobody" (65534), "daemon" (1), "www-data" (33)
-///   - Numeric UID: "1000" parsed as UID (assumes GID == UID)
+///   - Numeric UID: "1000" parsed as UID (primary group resolved via getpwuid)
 ///
 /// Returns:
 /// - error.NotRoot if not running as root (euid != 0)
@@ -186,6 +186,7 @@ const UserInfo = struct {
 ///
 /// Resolves username to UID/GID for privilege dropping.
 /// Supports common system users and numeric UID fallback.
+/// Numeric fallback resolves the primary group via getpwuid when available.
 ///
 /// Common system users:
 /// - "nobody": UID 65534, GID 65534 (unprivileged user)
@@ -229,15 +230,26 @@ fn getUserInfo(username: []const u8) !UserInfo {
     }
 
     // If user not found by name, try parsing as a numeric UID
-    const uid = std.fmt.parseInt(u32, username, 10) catch {
+    const uid = std.fmt.parseInt(std.posix.uid_t, username, 10) catch {
         logging.log(1, "Error: User '{s}' not found in system database and not a valid UID\n", .{username});
         return SecurityError.UserNotFound;
     };
 
-    // Numeric UID successfully parsed
+    // Numeric UID successfully parsed, attempt to resolve primary group
+    const pwuid = c.getpwuid(@intCast(uid));
+    if (pwuid != null) {
+        return UserInfo{
+            .uid = uid,
+            .gid = @intCast(pwuid.*.pw_gid),
+            .name = username,
+        };
+    }
+
+    logging.logWarning("Could not resolve primary group for UID {any}; defaulting to GID {any}\n", .{ uid, uid });
+
     return UserInfo{
         .uid = uid,
-        .gid = uid, // Assume GID = UID for numeric inputs
+        .gid = @intCast(uid), // Fallback: assume GID = UID
         .name = username,
     };
 }

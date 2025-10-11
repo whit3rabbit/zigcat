@@ -396,6 +396,17 @@ pub fn build(b: *std.Build) void {
     const unix_security_test_step = b.step("test-unix-security", "Run Unix socket security tests (TOCTTOU, permissions, platform limits)");
     unix_security_test_step.dependOn(&run_unix_security_tests.step);
 
+    const parallel_scan_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_parallel_scan.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const parallel_scan_tests = b.addTest(.{ .root_module = parallel_scan_test_module });
+    parallel_scan_tests.linkLibC();
+    const run_parallel_scan_tests = b.addRunArtifact(parallel_scan_tests);
+    const parallel_scan_test_step = b.step("test-parallel-scan", "Run parallel port scanning tests (PortRange parsing, parallel correctness, thread safety)");
+    parallel_scan_test_step.dependOn(&run_parallel_scan_tests.step);
+
     const validation_test_step = b.step("test-validation", "Run all validation tests (13 tests: 8 CRLF + 5 shell)");
     validation_test_step.dependOn(&run_crlf_memory_tests.step);
     validation_test_step.dependOn(&run_shell_memory_tests.step);
