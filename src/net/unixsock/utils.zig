@@ -112,30 +112,34 @@ pub const UnixAddress = struct {
 /// - Single atomic operation
 /// - Cannot be tricked by symlink replacement
 pub fn handleExistingSocketFile(path: []const u8) UnixSocketError!void {
-    // Create a test socket to probe the existing socket
+    // Create a temporary, non-blocking socket to probe the existing socket file.
+    // This socket is only used for the `connect` call and is closed immediately after.
     const test_sock = posix.socket(posix.AF.UNIX, posix.SOCK.STREAM, 0) catch |err| {
-        // Socket creation failed - treat as file system error
+        // If we can't even create a socket, it's a system-level issue.
         logging.logDebug("Failed to create test socket for probing: {any}\n", .{err});
         return UnixSocketError.FileSystemError;
     };
     defer posix.close(test_sock);
 
-    // Create Unix socket address for connection attempt
+    // Prepare the address structure for the `connect` call.
     const addr = UnixAddress.fromPath(path) catch |err| {
-        // Path validation failed during address creation
         return err;
     };
 
-    // Attempt to connect to existing socket
-    // This is the key security improvement: single atomic operation instead of check-then-act
+    // This is the core of the TOCTTOU (Time-of-Check-to-Time-of-Use) mitigation.
+    // Instead of checking `if file exists` and then `delete file`, which creates a
+    // race condition window, we perform a single, atomic `connect` operation.
+    // The outcome of this single call tells us the state of the socket file safely.
     posix.connect(test_sock, @ptrCast(&addr), addr.getLen()) catch |err| switch (err) {
         error.ConnectionRefused => {
-            // ECONNREFUSED: Socket file exists but no process is listening
-            // This definitively proves the socket is stale and safe to remove
+            // This is the "golden path" for cleanup. ECONNREFUSED means a socket file
+            // exists at the path, but no process is `accept()`-ing connections on it.
+            // This is a strong indicator that the socket is stale and left over from a
+            // previous unclean shutdown. It is now safe to delete it.
             logging.logDebug("Stale socket detected at '{s}', removing\n", .{path});
 
             std.fs.cwd().deleteFile(path) catch |del_err| switch (del_err) {
-                error.FileNotFound => {}, // Already removed by another process - OK
+                error.FileNotFound => {}, // Race condition: another process removed it. This is fine.
                 error.AccessDenied => return UnixSocketError.PermissionDenied,
                 error.FileBusy => return UnixSocketError.FileLocked,
                 error.SystemResources => return UnixSocketError.ResourceExhausted,
@@ -145,28 +149,30 @@ pub fn handleExistingSocketFile(path: []const u8) UnixSocketError!void {
                     return UnixSocketError.CleanupFailed;
                 },
             };
-            return; // Successfully cleaned up stale socket
+            return; // Successfully cleaned up the stale socket.
         },
         error.FileNotFound => {
-            // ENOENT: No socket file exists at path - proceed normally
+            // ENOENT: The socket file does not exist. This is the ideal case,
+            // as there is nothing to clean up. We can proceed to bind.
             return;
         },
         error.PermissionDenied, error.AccessDenied => {
-            // EACCES: Cannot access the socket - permission issue
             return UnixSocketError.PermissionDenied;
         },
         error.AddressInUse => {
-            // EADDRINUSE: Socket address is already bound (shouldn't happen on connect)
+            // This case is unlikely on a `connect` call but handled for completeness.
             return UnixSocketError.AddressInUse;
         },
         else => {
-            // Other errors: Log and map to appropriate error type
+            // Any other error indicates a more complex issue (e.g., path points to a
+            // directory, filesystem errors). We log it and map to a generic error.
             logging.logDebug("Socket probe failed for '{s}': {any}\n", .{ path, err });
             return handleSocketError(err, "socket probe");
         },
     };
 
-    // Connection succeeded - socket is actively in use!
+    // If the `connect` call succeeds without error, it means a process is actively
+    // listening on the socket. We must not interfere with it.
     logging.logDebug("Socket at '{s}' is actively in use\n", .{path});
     return UnixSocketError.AddressInUse;
 }

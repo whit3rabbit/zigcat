@@ -1,51 +1,40 @@
-//! Chat Protocol Handler with Nickname Support
+//! # Chat Protocol Handler
 //!
-//! This module implements the chat protocol handler for ZigCat's chat mode,
-//! providing line-oriented messaging with user-friendly features like nicknames,
-//! join/leave notifications, and message formatting.
+//! This module implements the application-level logic for ZigCat's `--chat` mode.
+//! It builds on top of the `BrokerServer` to provide a line-oriented, multi-user
+//! chat service with features like nicknames, join/leave notifications, and
+//! formatted messages.
 //!
-//! ## Design Goals
+//! ## Key Responsibilities
 //!
-//! - **Line-Oriented Protocol**: Handle complete lines with proper CRLF support
-//! - **Nickname Management**: Prompt, validate, and manage client nicknames
-//! - **Message Formatting**: Format messages with nickname prefixes
-//! - **System Notifications**: Handle join/leave and nickname change announcements
-//! - **Input Validation**: Validate nicknames and messages for safety
+//! - **Nickname Management**: Handles the initial prompt for a nickname, validates
+//!   the user's choice (for length, characters, and uniqueness), and stores it.
+//! - **Line-Oriented Processing**: Buffers incoming TCP stream data and processes it
+//!   one line at a time, correctly handling `\n` and `\r\n` line endings.
+//! - **Message Formatting**: Prepends chat messages with the sender's nickname, e.g.,
+//!   `[alice] Hello, world!`.
+//! - **System Notifications**: Generates and broadcasts system-level messages for
+//!   events like a user joining (`*** bob joined the chat`), leaving, or changing
+//!   their nickname.
 //!
 //! ## Protocol Flow
 //!
-//! ```
-//! 1. Client connects
-//! 2. Server sends welcome message and nickname prompt
-//! 3. Client sends nickname
-//! 4. Server validates nickname and announces join
-//! 5. Client sends messages (formatted and relayed)
-//! 6. Client disconnects (server announces leave)
-//! ```
+//! 1.  **Connection**: A new client connects. The `BrokerServer` accepts it.
+//! 2.  **Welcome**: The `ChatHandler` sends a welcome message and prompts for a nickname.
+//!     The client is in the `awaiting_nickname` state.
+//! 3.  **Nickname Input**: The client sends their desired nickname.
+//! 4.  **Validation**: The handler validates the nickname. If it's valid and not
+//!     taken, the client's state is set to `active`, and a "join" notification
+//!     is broadcast to all other clients. If not, an error is sent, and the
+//!     client remains in the `awaiting_nickname` state.
+//! 5.  **Chatting**: Once active, any line sent by the client is treated as a chat
+//!     message. The handler formats it and relays it to all other clients.
+//! 6.  **Disconnection**: When a client disconnects, the handler broadcasts a "leave"
+//!     notification to the remaining clients.
 //!
-//! ## Message Formats
-//!
-//! - **Chat Message**: `[nickname] message content\n`
-//! - **Join Notification**: `*** nickname joined the chat\n`
-//! - **Leave Notification**: `*** nickname left the chat\n`
-//! - **Nickname Change**: `*** old_nick is now known as new_nick\n`
-//! - **System Message**: `*** system message content\n`
-//!
-//! ## Usage Pattern
-//!
-//! ```zig
-//! var chat_handler = ChatHandler.init(allocator, &relay_engine);
-//! defer chat_handler.deinit();
-//!
-//! // Handle new client connection
-//! try chat_handler.handleClientJoin(client_id);
-//!
-//! // Process incoming message data
-//! try chat_handler.processMessage(client_id, raw_data);
-//!
-//! // Handle client disconnection
-//! try chat_handler.handleClientLeave(client_id, nickname);
-//! ```
+//! This module is tightly coupled with the `BrokerServer`, which handles the
+//! underlying I/O and client management. The `ChatHandler` effectively acts as
+//! a state machine and formatter for the chat application logic.
 
 const std = @import("std");
 const RelayEngine = @import("relay.zig").RelayEngine;

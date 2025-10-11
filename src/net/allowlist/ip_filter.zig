@@ -59,6 +59,19 @@ const DnsCache = dns_cache.DnsCache;
 /// ## Security Note
 /// Hostname matching uses DNS which can be manipulated.
 /// DNS resolution failures result in false (deny access).
+///
+/// ## Rule Precedence
+/// This function only checks if a single rule matches. The calling logic (e.g.,
+/// in `config/security.zig`) is responsible for enforcing precedence. The
+/// standard behavior is:
+/// 1. Check all **deny** rules first. If any deny rule matches, access is
+///    immediately denied.
+/// 2. If no deny rules match, check all **allow** rules. If any allow rule
+///    matches, access is granted.
+/// 3. If no rules match, the default policy (typically deny) is applied.
+///
+/// This "deny-first" approach ensures that specific exclusions always override
+/// broader permissions.
 pub fn matchesRule(dns_cache_ptr: *DnsCache, addr: std.net.Address, rule: IpRule) bool {
     switch (rule) {
         .single_ipv4 => |rule_addr| {

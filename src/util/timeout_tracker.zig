@@ -1,4 +1,44 @@
-//! Timeout tracker for managing execution, idle, and connection timeouts.
+//! # Session Timeout Tracker
+//!
+//! This module provides a `TimeoutTracker` struct, a utility for managing multiple
+//! time-based deadlines within a single session, such as a command execution
+//! (`--exec`) session. It is designed to be polled periodically within an event
+//! loop to check if any configured timeouts have been exceeded.
+//!
+//! ## Monitored Timeouts
+//!
+//! The tracker manages three distinct timeouts, all configured in milliseconds:
+//!
+//! 1.  **Execution Timeout (`execution_ms`)**: A hard deadline for the total
+//!     duration of the session. The session is terminated if it runs longer
+//!     than this value, regardless of activity. A value of 0 disables this timeout.
+//!
+//! 2.  **Idle Timeout (`idle_ms`)**: A deadline for inactivity. This timer is reset
+//!     every time `markActivity()` is called. If the time since the last activity
+//!     exceeds this value, the session is terminated. This is useful for cleaning
+//!     up stalled or abandoned connections. A value of 0 disables this timeout.
+//!
+//! 3.  **Connection Timeout (`connection_ms`)**: A deadline for the initial phase
+//!     of a connection. It measures the time from the start of the session until
+//!     the first call to `markActivity()` or `markConnectionEstablished()`. This
+//!     is useful for preventing sessions from hanging indefinitely if the client
+//!     connects but never sends any data. A value of 0 disables this timeout.
+//!
+//! ## Usage in Event Loops
+//!
+//! The `TimeoutTracker` is intended to be integrated into an event loop (e.g., one
+//! using `poll()` or `io_uring`).
+//!
+//! -   **`check()`**: In each iteration of the loop, `check()` is called to see if any
+//!     timeout has occurred. If it returns an event other than `.none`, the loop
+//!     should terminate the session.
+//! -   **`nextPollTimeout()`**: This helper function calculates the maximum time (in ms)
+//!     the event loop can safely sleep before the next timeout is scheduled to occur.
+//!     This allows the event loop to be efficient by sleeping as long as possible
+//!     without missing a deadline.
+//! -   **`markActivity()`**: This should be called whenever data is successfully
+//!     read from or written to the session's underlying connection.
+
 const std = @import("std");
 
 /// Timeout configuration (milliseconds).

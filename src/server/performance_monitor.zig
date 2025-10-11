@@ -262,9 +262,33 @@ pub fn RingBuffer(comptime T: type) type {
     };
 }
 
-/// Performance monitor
+/// Provides real-time and historical performance monitoring for the server.
+///
+/// This struct is responsible for collecting, storing, and analyzing performance
+/// metrics related to resource usage (CPU, memory) and application-level
+/// operations (message relay, latency). It is designed to be updated periodically
+/// from a main server loop.
+///
+/// ## Key Components
+///
+/// - **Resource History**: A `RingBuffer` stores recent `ResourceSnapshot`s,
+///   providing a time-series view of system-level metrics like CPU and memory usage.
+/// - **Broker Metrics**: Aggregates application-specific counters for operations
+///   like the number of messages relayed, total bytes transferred, and error counts.
+/// - **Alerting**: The `checkAlerts` method evaluates the latest resource snapshot
+///   against configured thresholds and generates `PerformanceAlert`s if limits
+///   are exceeded.
+///
+/// ## Usage
+///
+/// 1.  Initialize a `PerformanceMonitor` once when the server starts.
+/// 2.  In the main event loop, call `update()` periodically (e.g., once per second).
+/// 3.  Call specific recording methods like `recordRelay()` or `recordError()` from
+///     the relevant parts of the application logic as events occur.
+/// 4.  The server can then expose the collected data via a telemetry endpoint by
+///     calling `getPerformanceSummary()` or `getActiveAlerts()`.
 pub const PerformanceMonitor = struct {
-    /// Memory allocator
+    /// The allocator used for internal data structures.
     allocator: std.mem.Allocator,
     /// Configuration
     config: PerformanceConfig,

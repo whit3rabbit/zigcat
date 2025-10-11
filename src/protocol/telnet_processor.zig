@@ -20,7 +20,35 @@ pub const OptionState = enum {
     wantyes,
 };
 
-/// Telnet protocol processor with state machine
+/// A state machine for processing the Telnet protocol (RFC 854).
+///
+/// This struct implements a byte-by-byte state machine that parses an incoming
+/// stream of data, filtering out Telnet commands and handling option negotiations
+/// (`WILL`, `WON'T`, `DO`, `DON'T`) and sub-negotiations (`SB`...`SE`).
+///
+/// ## State Management
+/// The processor's current state is stored in the `state` field, which is an
+/// instance of `telnet.TelnetState`. As each byte is processed, the `getNextState`
+/// function determines the next state based on the current state and the input byte.
+///
+/// ## Option Negotiation
+/// The state of each Telnet option (e.g., `ECHO`, `NAWS`) is tracked in the
+/// `option_states` map. The processor follows the negotiation logic described in
+/// RFC 854, responding to requests from the peer and updating its internal state.
+/// To prevent infinite negotiation loops, it also tracks the number of negotiation
+/// attempts for each option.
+///
+/// ## Sub-negotiation
+/// For complex options that require exchanging more data (like `NAWS` or
+/// `TERMINAL-TYPE`), the processor buffers the sub-negotiation data between
+/// `SB` (Sub-negotiation Begin) and `SE` (Sub-negotiation End) commands and passes
+/// it to the appropriate handler.
+///
+/// ## Buffering
+/// The processor maintains two internal buffers:
+/// - `sb_buffer`: For accumulating data during a sub-negotiation.
+/// - `partial_buffer`: For storing incomplete Telnet command sequences that are
+///   split across multiple input reads.
 pub const TelnetProcessor = struct {
     state: TelnetState,
     option_states: std.EnumMap(TelnetOption, OptionState),

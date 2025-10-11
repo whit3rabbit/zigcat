@@ -174,6 +174,11 @@ parse_args() {
 }
 
 # Validate dependencies and environment
+# This function checks for the presence of all required command-line tools
+# (Docker, Docker Compose, yq, Zig) and validates the test configuration files.
+# It ensures the Docker daemon is running and creates the necessary directories
+# for logs and results. This is the first crucial step to ensure the test
+# environment is sane before proceeding.
 validate_environment() {
     log_info "Validating environment and dependencies..."
     
@@ -222,6 +227,10 @@ validate_environment() {
 }
 
 # Setup test environment
+# This function prepares the workspace for a new test run. It cleans up old
+# results and log files (unless --keep-artifacts is specified) and establishes
+# a unique session ID for the current test run. This helps in organizing
+# artifacts and logs from different runs.
 setup_test_environment() {
     log_info "Setting up test environment..."
     
@@ -261,6 +270,11 @@ get_test_suites() {
 }
 
 # Build phase - cross-compile binaries
+# This function orchestrates the cross-compilation of the ZigCat binary for
+# all selected platforms and architectures. It delegates the actual build
+# process to the `build-binaries.sh` script, passing along any relevant
+# command-line options like verbosity, parallelism, and timeouts. If the
+# `--skip-build` flag is set, this phase is skipped entirely.
 build_phase() {
     if [[ "$SKIP_BUILD" == "true" ]]; then
         log_info "Skipping build phase as requested"
@@ -310,6 +324,11 @@ build_phase() {
 }
 
 # Test execution phase
+# This is the main test execution logic. It determines the full matrix of
+# tests to run based on the selected platforms, architectures, and test suites.
+# It can run these tests either sequentially or in parallel (if --parallel is
+# specified). It tracks the success and failure of each test combination and
+# provides a summary at the end.
 test_phase() {
     log_info "Starting test execution phase..."
     
@@ -696,6 +715,17 @@ timeout_handler() {
 }
 
 # Main function
+# This is the entry point of the script. It orchestrates the entire test
+# process by calling the various phase functions in the correct order:
+# 1. Parses command-line arguments.
+# 2. Sets up signal and timeout handlers for robust execution.
+# 3. Validates the environment to ensure all dependencies are met.
+# 4. Sets up a clean test environment for the run.
+# 5. Executes the build phase to cross-compile binaries.
+# 6. Executes the test phase to run the selected suites.
+# 7. Generates a final JSON report summarizing the results.
+# 8. Performs cleanup of all resources.
+# 9. Generates final, user-friendly reports in various formats.
 main() {
     local main_start_time
     main_start_time=$(date +%s)

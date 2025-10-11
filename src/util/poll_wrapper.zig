@@ -1,47 +1,37 @@
-//! Cross-platform `poll()` abstraction shared by all event loops.
+//! # Cross-Platform `poll()` Wrapper
 //!
-//! ## Platform Implementations
+//! This module provides a cross-platform abstraction for the `poll()` system call,
+//! which is used for I/O multiplexing. It ensures that code using `poll()` can
+//! work seamlessly across both POSIX-compliant systems (Linux, macOS, BSD) and
+//! Windows.
 //!
-//! - **Unix/Linux/macOS**: Delegates directly to `posix.poll()` - full native semantics
-//! - **Windows Vista+**: Uses `WSAPoll()` by default - no connection limit, preferred backend
-//! - **Windows (fallback)**: Uses `select()` emulation - limited to ~21 concurrent connections
+//! ## Platform-Specific Implementations
 //!
-//! ## Windows Backend Selection
+//! -   **POSIX Systems**: On Unix-like operating systems, this wrapper is a thin
+//!     layer that delegates directly to the standard `posix.poll()`. It uses the
+//!     native `pollfd` struct and constants, providing full-featured and
+//!     efficient I/O multiplexing.
 //!
-//! The Windows implementation automatically selects the best available backend:
-//! 1. **Primary**: WSAPoll (Windows Vista+) - no FD_SETSIZE limitation, handles 1000+ connections
-//! 2. **Fallback**: select() - limited to FD_SETSIZE=64, safe for ~21 connections max
+//! -   **Windows**: Windows does not have a native `poll()` system call. This module
+//!     provides two backends and automatically selects the best one available:
+//!     1.  **`WSAPoll()`** (Preferred): Available on Windows Vista and newer, this
+//!         function is the direct equivalent of POSIX `poll()`. It is highly
+//!         efficient and has no limit on the number of file descriptors, making it
+//!         the ideal choice for modern Windows systems.
+//!     2.  **`select()`** (Fallback): On older Windows versions (pre-Vista), the
+//!         wrapper falls back to an emulation of `poll()` using the `select()`
+//!         function. This backend has significant limitations.
 //!
-//! ## Security Features
+//! ## `select()` Backend Limitations (Windows Fallback)
 //!
-//! - **DoS Protection**: FD_SETSIZE overflow detection prevents silent connection failures
-//! - **Explicit Errors**: Returns `error.TooManyFileDescriptors` instead of silently dropping connections
-//! - **Bounds Checking**: Validates fd_set capacity before adding file descriptors
-//!
-//! ## Known Limitations (select() backend only)
-//!
-//! - Limited to ~21 concurrent connections due to FD_SETSIZE=64 constraint
-//! - Each connection requires up to 3 fd_set entries (read/write/error sets)
-//! - No `POLLPRI` support (out-of-band data)
-//! - Replaced by WSAPoll backend on Windows Vista and later
-//!
-//! ## Usage
-//!
-//! ```zig
-//! const poll_wrapper = @import("util/poll_wrapper.zig");
-//! var pollfds = [_]poll_wrapper.pollfd{
-//!     .{ .fd = sock, .events = poll_wrapper.POLL.IN, .revents = 0 },
-//! };
-//! const ready = try poll_wrapper.poll(&pollfds, timeout_ms);
-//! ```
-//!
-//! ## Error Handling
-//!
-//! - `error.TooManyFileDescriptors`: Too many connections for select() backend (>21 on Windows)
-//! - `error.FdSetOverflow`: FD_SET capacity exceeded (internal error)
-//! - `error.NetworkDown`: Network subsystem failure (Windows)
-//! - `error.InvalidArgument`: Invalid parameters
-//! - `error.NoBufferSpace`: System resource exhaustion
+//! The `select()` function is constrained by the `FD_SETSIZE` constant, which is
+//! typically 64 on Windows. Because `select()` uses separate sets for read, write,
+//! and error conditions, a single connection being polled for both reading and
+//! writing can consume multiple slots. This wrapper calculates the worst-case
+//! usage (`fds.len * 3`) and returns `error.TooManyFileDescriptors` if the
+//! request exceeds `FD_SETSIZE`, preventing silent failures and potential security
+//! vulnerabilities. This effectively limits the `select()` backend to ~21
+//! concurrent connections.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -119,14 +109,17 @@ fn pollWindowsSelect(fds: []pollfd, timeout_ms: i32) !usize {
     const windows = std.os.windows;
     const ws2_32 = windows.ws2_32;
 
-    // SECURITY: Prevent FD_SETSIZE overflow DoS vulnerability
-    // Each pollfd can require up to 3 fd_set entries (read + write + error sets)
-    // We need to check worst-case scenario where all fds request both IN and OUT events.
-    // FD_SETSIZE is typically 64 on Windows, so we can safely handle ~21 clients max.
-    const max_fd_set_entries_needed = fds.len * 3; // Worst case: all fds in all 3 sets
+    // The `select` function is limited by `FD_SETSIZE` (typically 64 on Windows).
+    // A single socket can be in the read, write, and error sets simultaneously.
+    // To be safe, we assume the worst-case scenario where every file descriptor
+    // in `fds` needs to be added to all three sets.
+    const max_fd_set_entries_needed = fds.len * 3;
     if (max_fd_set_entries_needed > ws2_32.FD_SETSIZE) {
-        // Fail fast with explicit error instead of silently dropping file descriptors
-        // This prevents the server from accepting connections it cannot monitor
+        // This check is a security measure to prevent a Denial of Service (DoS) attack.
+        // Without it, if more than `FD_SETSIZE / 3` clients connect, `select` would
+        // silently fail to monitor the excess sockets, leaving them unresponsive.
+        // By failing explicitly, we prevent the server from accepting connections
+        // it cannot properly manage.
         return error.TooManyFileDescriptors;
     }
 
