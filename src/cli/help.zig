@@ -118,6 +118,12 @@ pub fn printHelp() void {
         \\  --scan-workers <n>            Number of worker threads for parallel scanning (default: 10)
         \\                                Recommended: 10-50 workers depending on network bandwidth
         \\                                Higher values = faster scans but more aggressive
+        \\  --scan-randomize              Randomize port scanning order (stealth mode)
+        \\                                Evades IDS/IPS signature detection of sequential scans
+        \\                                Use only for authorized security testing
+        \\  --scan-delay <ms>             Delay between port scans in milliseconds (stealth mode)
+        \\                                Reduces network spike detection and rate limiting
+        \\                                Example: --scan-delay 100 (100ms between scans)
         \\
         \\OTHER OPTIONS:
         \\  --keep-source-port            Bind to specific source port before connect
@@ -164,6 +170,14 @@ pub fn printHelp() void {
         \\                                  Scan ports 1-1024 with 20 workers (fast!)
         \\    zigcat -z -w 0.5 --scan-parallel --scan-workers 50 192.168.1.1 1-65535
         \\                                  Scan all ports with 50 workers and 500ms timeout
+        \\
+        \\  Stealth port scanning:
+        \\    zigcat -z --scan-parallel --scan-randomize target.com 1-1024
+        \\                                  Randomize scan order (evade IDS signatures)
+        \\    zigcat -z --scan-randomize --scan-delay 100 example.com 1-1024
+        \\                                  Randomized + 100ms delay (very stealthy)
+        \\    zigcat -z -w 0.5 --scan-parallel --scan-randomize --scan-delay 50 --scan-workers 10 192.168.1.1 1-65535
+        \\                                  Full stealth scan: parallel, randomized, delayed
         \\
     , .{});
 }

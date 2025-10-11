@@ -46,8 +46,17 @@ pub const UnixServer = struct {
         // SECURITY: Set restrictive umask before creating socket file
         // This prevents brief exposure with permissive default umask permissions
         // Socket file will be created with 0o700 (rwx------) permissions
-        const old_umask = posix.umask(0o077); // Deny all permissions to group and others
-        defer _ = posix.umask(old_umask); // Restore original umask
+        // Platform-specific umask handling
+        var old_umask: std.posix.mode_t = undefined;
+        if (builtin.os.tag == .linux or builtin.os.tag == .macos or builtin.os.tag == .freebsd or builtin.os.tag == .netbsd or builtin.os.tag == .openbsd) {
+            // Use system call directly on Unix-like systems
+            old_umask = std.posix.system.umask(0o077);
+        }
+        defer {
+            if (builtin.os.tag == .linux or builtin.os.tag == .macos or builtin.os.tag == .freebsd or builtin.os.tag == .netbsd or builtin.os.tag == .openbsd) {
+                _ = std.posix.system.umask(old_umask);
+            }
+        }
 
         try posix.bind(sock, @ptrCast(&addr), addr.getLen());
         errdefer std.fs.cwd().deleteFile(path) catch {};

@@ -38,7 +38,7 @@ pub fn connectTls(
     }
 
     comptime {
-        if (!build_options.use_openssl) {
+        if (!build_options.enable_tls) {
             @compileError(
                 \\TLS support requires OpenSSL.
                 \\
@@ -89,7 +89,7 @@ pub fn acceptTls(
     }
 
     comptime {
-        if (!build_options.use_openssl) {
+        if (!build_options.enable_tls) {
             @compileError(
                 \\TLS support requires OpenSSL.
                 \\

@@ -29,15 +29,131 @@
 //! - 10-100x faster for large port ranges (with parallel mode)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tcp = @import("../net/tcp.zig");
 const socket_mod = @import("../net/socket.zig");
 const logging = @import("logging.zig");
+const platform = @import("platform.zig");
+const portscan_uring = @import("portscan_uring.zig");
 
 /// Scan result for parallel scanning
 const ScanResult = struct {
     port: u16,
     is_open: bool,
 };
+
+/// Randomize port scanning order (stealth mode).
+///
+/// Uses Fisher-Yates shuffle algorithm to randomize the order of ports.
+/// This helps evade IDS/IPS systems that detect sequential port scans.
+///
+/// Security Note:
+/// - Port randomization reduces detection by signature-based IDS
+/// - Does NOT provide complete anonymity or undetectability
+/// - Use only for authorized security testing
+///
+/// Parameters:
+///   ports: Array of port numbers to shuffle in-place
+///
+/// Example:
+/// ```zig
+/// var ports = [_]u16{ 80, 443, 8080, 3000 };
+/// randomizePortOrder(&ports);
+/// // ports is now in random order, e.g., [3000, 80, 8080, 443]
+/// ```
+pub fn randomizePortOrder(ports: []u16) void {
+    if (ports.len <= 1) return; // Nothing to shuffle
+
+    // Seed PRNG with current timestamp for randomness
+    var prng = std.rand.DefaultPrng.init(@intCast(std.time.nanoTimestamp()));
+    const random = prng.random();
+
+    // Fisher-Yates shuffle algorithm
+    std.rand.shuffle(random, u16, ports);
+}
+
+/// Automatically select the best port scanning backend.
+///
+/// Selection priority:
+/// 1. io_uring (Linux 5.1+): Fastest, 500-1000 concurrent ops
+/// 2. Thread pool (all platforms): Fast, 10-100 concurrent ops
+/// 3. Sequential (fallback): Slowest, 1 operation at a time
+///
+/// Platform-specific behavior:
+/// - Linux 5.1+: Tries io_uring, falls back to thread pool
+/// - macOS/Windows/BSD: Uses thread pool if parallel enabled
+/// - All platforms: Falls back to sequential if parallel disabled
+///
+/// Parameters:
+///   allocator: Memory allocator for results
+///   host: Target hostname or IP address
+///   ports: Array of port numbers to scan
+///   timeout_ms: Connection timeout per port in milliseconds
+///   parallel: Enable parallel scanning (thread pool or io_uring)
+///   workers: Number of worker threads (ignored for io_uring)
+///   randomize: Randomize port order before scanning
+///   delay_ms: Delay between scans in milliseconds
+///
+/// Returns: ArrayList of ScanResult sorted by port number
+///
+/// Example:
+/// ```zig
+/// var results = try scanPortsAuto(allocator, "example.com", ports, 1000, true, 10, true, 0);
+/// defer results.deinit(allocator);
+/// ```
+pub fn scanPortsAuto(
+    allocator: std.mem.Allocator,
+    host: []const u8,
+    ports: []u16,
+    timeout_ms: u32,
+    parallel: bool,
+    workers: usize,
+    randomize: bool,
+    delay_ms: u32,
+) !std.ArrayList(ScanResult) {
+    // Apply randomization if requested (do this once before backend selection)
+    if (randomize) {
+        randomizePortOrder(ports);
+    }
+
+    // Try io_uring on Linux (if available and parallel mode enabled)
+    if (parallel and builtin.os.tag == .linux) {
+        if (platform.isIoUringSupported()) {
+            logging.logVerbose(null, "Using io_uring scanner ({d} ports, kernel 5.1+)\n", .{ports.len});
+
+            // Try io_uring, fall back to thread pool if it fails
+            if (portscan_uring.scanPortsIoUring(allocator, host, ports, timeout_ms, false, delay_ms)) |results| {
+                return results;
+            } else |err| {
+                logging.logVerbose(null, "io_uring failed ({}), falling back to thread pool\n", .{err});
+            }
+        }
+    }
+
+    // Use thread pool if parallel mode enabled
+    if (parallel) {
+        logging.logVerbose(null, "Using thread pool scanner ({d} workers, {d} ports)\n", .{ workers, ports.len });
+        return try scanPortsParallel(allocator, host, ports, timeout_ms, workers, delay_ms);
+    }
+
+    // Fall back to sequential scanning
+    logging.logVerbose(null, "Using sequential scanner ({d} ports)\n", .{ports.len});
+
+    var results = std.ArrayList(ScanResult).init(allocator);
+    errdefer results.deinit(allocator);
+
+    for (ports) |port| {
+        const is_open = try scanPort(allocator, host, port, timeout_ms);
+        try results.append(allocator, .{ .port = port, .is_open = is_open });
+
+        // Apply delay if configured
+        if (delay_ms > 0) {
+            std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+        }
+    }
+
+    return results;
+}
 
 /// Port range specification (e.g., "80", "1-1024")
 pub const PortRange = struct {
@@ -93,20 +209,29 @@ pub const PortRange = struct {
     }
 };
 
-/// Work queue for parallel scanning
-const ScanTask = struct {
-    host: []const u8,
-    port: u16,
-    timeout_ms: u32,
+/// Workload description for scanning workers.
+const Workload = union(enum) {
+    /// Iterate over an explicit slice of ports.
+    ports_slice: struct {
+        ports: []const u16,
+        index: *std.atomic.Value(usize),
+    },
+    /// Iterate over an inclusive port range via atomic counter.
+    port_range: struct {
+        next_port: *std.atomic.Value(u32),
+        end_port: u16,
+    },
 };
 
 /// Worker context for parallel scanning
 const WorkerContext = struct {
     allocator: std.mem.Allocator,
-    tasks: *std.ArrayList(ScanTask),
     results: *std.ArrayList(ScanResult),
-    task_index: *std.atomic.Value(usize),
     mutex: *std.Thread.Mutex,
+    timeout_ms: u32,
+    delay_ms: u32, // Inter-scan delay in milliseconds (stealth mode)
+    host: []const u8,
+    workload: Workload,
 };
 
 /// Zero-I/O mode: connect to port and immediately close
@@ -265,42 +390,50 @@ pub fn scanPortRange(
 
 /// Worker thread function for parallel port scanning
 ///
-/// Architecture:
-/// 1. Atomically fetch next task index from shared counter
-/// 2. Scan port using existing scanPort() function
-/// 3. Store result in thread-safe results array
-/// 4. Repeat until all tasks completed
-///
-/// Thread Safety:
-/// - Task assignment via atomic counter (lock-free)
-/// - Result storage protected by mutex
-/// - No shared mutable state between workers
-///
-/// Parameters:
-/// - ctx: Worker context containing tasks, results, and synchronization primitives
+/// Workers ask the workload for the next port to scan via atomic fetch.
+/// Results are appended under a mutex (to keep the array consistent) and open
+/// ports are logged immediately before releasing the lock. Optional delay is
+/// applied after each scan.
 fn scanWorker(ctx: WorkerContext) void {
     while (true) {
-        // Atomically get next task index
-        const task_idx = ctx.task_index.fetchAdd(1, .monotonic);
-        if (task_idx >= ctx.tasks.items.len) {
-            break; // No more tasks
-        }
+        const maybe_port = switch (ctx.workload) {
+            .ports_slice => |slice_work| blk: {
+                const task_idx = slice_work.index.fetchAdd(1, .monotonic);
+                if (task_idx >= slice_work.ports.len) break :blk null;
+                break :blk slice_work.ports[task_idx];
+            },
+            .port_range => |range_work| blk: {
+                const port_value = range_work.next_port.fetchAdd(1, .monotonic);
+                if (port_value > range_work.end_port) break :blk null;
+                break :blk @as(u16, @intCast(port_value));
+            },
+        };
 
-        const task = ctx.tasks.items[task_idx];
+        const port = maybe_port orelse break;
 
         // Perform scan (uses existing scanPort function)
-        const is_open = scanPort(ctx.allocator, task.host, task.port, task.timeout_ms) catch false;
+        const is_open = scanPort(ctx.allocator, ctx.host, port, ctx.timeout_ms) catch false;
 
-        // Store result (thread-safe)
+        // Store result and print immediately (thread-safe)
         ctx.mutex.lock();
-        defer ctx.mutex.unlock();
-        ctx.results.append(.{
-            .port = task.port,
+        const append_result = ctx.results.append(.{
+            .port = port,
             .is_open = is_open,
-        }) catch {
+        });
+        if (is_open) {
+            logging.logVerbose(null, "{s}:{d} - open\n", .{ ctx.host, port });
+        }
+        ctx.mutex.unlock();
+
+        append_result catch {
             // Silently ignore append errors (results may be incomplete)
             // Better than crashing the worker thread
         };
+
+        // Apply inter-scan delay if configured (stealth mode)
+        if (ctx.delay_ms > 0) {
+            std.Thread.sleep(ctx.delay_ms * std.time.ns_per_ms);
+        }
     }
 }
 
@@ -310,19 +443,18 @@ fn scanWorker(ctx: WorkerContext) void {
 /// Significantly faster than sequential scanning for large port lists.
 ///
 /// Architecture:
-/// 1. Create work queue with all ports to scan
-/// 2. Spawn worker threads (default: 10)
-/// 3. Workers atomically fetch tasks from queue
-/// 4. Collect results in thread-safe array
-/// 5. Sort results by port number before returning
+/// 1. Spawn worker threads (default: 10)
+/// 2. Workers atomically fetch next port index from shared slice
+/// 3. Record results under mutex
+/// 4. Sort results by port number before returning
 ///
 /// Thread Safety:
-/// - Lock-free task distribution via atomic counter
-/// - Mutex-protected result collection
+/// - Atomic index ensures lock-free task distribution
+/// - Mutex guards result collection
 /// - All threads joined before returning
 ///
 /// Parameters:
-/// - allocator: Memory allocator for tasks/results/threads
+/// - allocator: Memory allocator for result storage and thread bookkeeping
 /// - host: Target hostname or IP address
 /// - ports: Array of port numbers to scan
 /// - timeout_ms: Connection timeout per port in milliseconds
@@ -355,37 +487,33 @@ pub fn scanPortsParallel(
     ports: []const u16,
     timeout_ms: u32,
     num_workers: usize,
+    delay_ms: u32,
 ) !std.ArrayList(ScanResult) {
     // Validate worker count (min 1, max 100)
     const workers = @max(1, @min(num_workers, 100));
-
-    // Build task list
-    var tasks = std.ArrayList(ScanTask).init(allocator);
-    defer tasks.deinit(allocator);
-
-    for (ports) |port| {
-        try tasks.append(.{
-            .host = host,
-            .port = port,
-            .timeout_ms = timeout_ms,
-        });
-    }
 
     // Initialize result collection
     var results = std.ArrayList(ScanResult).init(allocator);
     errdefer results.deinit(allocator);
 
     // Initialize synchronization primitives
-    var task_index = std.atomic.Value(usize).init(0);
     var mutex = std.Thread.Mutex{};
+    var task_index = std.atomic.Value(usize).init(0);
 
     // Create worker context
     const ctx = WorkerContext{
         .allocator = allocator,
-        .tasks = &tasks,
         .results = &results,
-        .task_index = &task_index,
         .mutex = &mutex,
+        .timeout_ms = timeout_ms,
+        .delay_ms = delay_ms,
+        .host = host,
+        .workload = .{
+            .ports_slice = .{
+                .ports = ports,
+                .index = &task_index,
+            },
+        },
     };
 
     // Spawn worker threads
@@ -419,9 +547,9 @@ pub fn scanPortsParallel(
 /// Uses thread pool to scan multiple ports concurrently.
 ///
 /// Architecture:
-/// 1. Builds array of ports in range
-/// 2. Delegates to scanPortsParallel()
-/// 3. Filters and prints only open ports
+/// - Randomized scans build and shuffle a temporary port slice
+/// - Default scans use an atomic next-port counter (no preallocation)
+/// - Open ports print as soon as workers finish scanning
 ///
 /// Parameters:
 /// - allocator: Memory allocator
@@ -461,31 +589,69 @@ pub fn scanPortRangeParallel(
     end_port: u16,
     timeout_ms: u32,
     num_workers: usize,
+    randomize: bool,
+    delay_ms: u32,
 ) !void {
     if (start_port > end_port) {
         return error.InvalidPortRange;
     }
 
-    // Build port array
-    const port_count = @as(usize, @intCast(end_port - start_port + 1));
-    const ports = try allocator.alloc(u16, port_count);
-    defer allocator.free(ports);
+    const workers = @max(1, @min(num_workers, 100));
 
-    var port = start_port;
-    var idx: usize = 0;
-    while (port <= end_port) : (port += 1) {
-        ports[idx] = port;
-        idx += 1;
-    }
-
-    // Scan in parallel
-    var results = try scanPortsParallel(allocator, host, ports, timeout_ms, num_workers);
+    var results: std.ArrayList(ScanResult) = undefined;
     defer results.deinit(allocator);
 
-    // Print open ports only
-    for (results.items) |result| {
-        if (result.is_open) {
-            logging.logVerbose(null, "{s}:{d} - open\n", .{ host, result.port });
+    if (randomize) {
+        // Fallback to slice-based scanning to support shuffle behaviour.
+        const port_count = @as(usize, @intCast(end_port - start_port + 1));
+        const ports = try allocator.alloc(u16, port_count);
+        defer allocator.free(ports);
+
+        var port = start_port;
+        var idx: usize = 0;
+        while (port <= end_port) : (port += 1) {
+            ports[idx] = port;
+            idx += 1;
+        }
+
+        randomizePortOrder(ports);
+
+        results = try scanPortsParallel(allocator, host, ports, timeout_ms, workers, delay_ms);
+    } else {
+        results = std.ArrayList(ScanResult).init(allocator);
+
+        var mutex = std.Thread.Mutex{};
+        var next_port = std.atomic.Value(u32).init(@as(u32, start_port));
+
+        const ctx = WorkerContext{
+            .allocator = allocator,
+            .results = &results,
+            .mutex = &mutex,
+            .timeout_ms = timeout_ms,
+            .delay_ms = delay_ms,
+            .host = host,
+            .workload = .{
+                .port_range = .{
+                    .next_port = &next_port,
+                    .end_port = end_port,
+                },
+            },
+        };
+
+        var threads = std.ArrayList(std.Thread).init(allocator);
+        defer threads.deinit(allocator);
+
+        var i: usize = 0;
+        while (i < workers) : (i += 1) {
+            const thread = try std.Thread.spawn(.{}, scanWorker, .{ctx});
+            try threads.append(thread);
+        }
+
+        for (threads.items) |thread| {
+            thread.join();
         }
     }
+
+    // Results are retained to keep API parity with non-range parallel scanning,
+    // but open ports were already logged from worker threads for immediacy.
 }

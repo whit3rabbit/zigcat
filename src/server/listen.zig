@@ -177,14 +177,14 @@ pub fn createAccessListFromConfig(
 /// ```
 ///
 /// Parameters:
-///   _: Allocator (unused in current implementation)
+///   allocator: Memory allocator for file content
 ///   file_path: Path to rules file
 ///   access_list: AccessList to add rules to
 ///   is_allow: true for allow rules, false for deny rules
 ///
 /// Returns: Error if file cannot be read or rules are invalid
 fn loadRulesFromFile(
-    _: std.mem.Allocator,
+    allocator: std.mem.Allocator,
     file_path: []const u8,
     access_list: *allowlist.AccessList,
     is_allow: bool,
@@ -199,8 +199,8 @@ fn loadRulesFromFile(
     defer file.close();
 
     const max_file_size = 1024 * 1024; // 1MB max
-    const content = try file.readToEndAlloc(std.heap.page_allocator, max_file_size);
-    defer std.heap.page_allocator.free(content);
+    const content = try file.readToEndAlloc(allocator, max_file_size);
+    defer allocator.free(content);
 
     var line_iter = std.mem.splitScalar(u8, content, '\n');
     while (line_iter.next()) |line| {

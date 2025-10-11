@@ -162,6 +162,8 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             cfg.zero_io = true;
         } else if (std.mem.eql(u8, arg, "--scan-parallel")) {
             cfg.scan_parallel = true;
+        } else if (std.mem.eql(u8, arg, "--scan-randomize")) {
+            cfg.scan_randomize = true;
         }
         // Flags with values
         else if (std.mem.eql(u8, arg, "-s") or std.mem.eql(u8, arg, "--source")) {
@@ -310,6 +312,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
             cfg.scan_workers = try std.fmt.parseInt(usize, args[i], 10);
+        } else if (std.mem.eql(u8, arg, "--scan-delay")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.scan_delay_ms = try std.fmt.parseInt(u32, args[i], 10);
         } else {
             logging.logError(error.UnknownOption, "Unknown option");
             logging.logWarning("  Option: {s}\n", .{arg});
@@ -512,17 +518,26 @@ fn parseCommaSeparatedList(
 
 fn ensureCliPathSafe(path: []const u8, context: []const u8, is_test: bool) CliError!void {
     if (path.len == 0) {
-        if (!is_test) logging.logError(error.InvalidOutputPath, "{s} path cannot be empty", .{context});
+        if (!is_test) {
+            logging.logError(error.InvalidOutputPath, context);
+            logging.logWarning("{s} path cannot be empty\n", .{context});
+        }
         return CliError.InvalidOutputPath;
     }
 
     if (std.mem.indexOf(u8, path, "\x00") != null) {
-        if (!is_test) logging.logError(error.InvalidOutputPath, "{s} path contains null bytes", .{context});
+        if (!is_test) {
+            logging.logError(error.InvalidOutputPath, context);
+            logging.logWarning("{s} path contains null bytes\n", .{context});
+        }
         return CliError.InvalidOutputPath;
     }
 
     if (!path_safety.isSafePath(path)) {
-        if (!is_test) logging.logError(error.InvalidOutputPath, "{s} path contains invalid traversal sequences", .{context});
+        if (!is_test) {
+            logging.logError(error.InvalidOutputPath, context);
+            logging.logWarning("{s} path contains invalid traversal sequences\n", .{context});
+        }
         return CliError.InvalidOutputPath;
     }
 }

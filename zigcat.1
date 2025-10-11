@@ -40,7 +40,7 @@ Listen for incoming connections.
 Keep listening after a client disconnects.
 .TP
 .BR -m ", " --max-conns " <n>"
-Maximum number of concurrent connections.
+Maximum number of concurrent connections (u32).
 .SS "BROKER/CHAT MODE"
 .TP
 .B --broker
@@ -49,10 +49,10 @@ Enable broker mode. In this mode,
 relays data between all connected clients.
 .TP
 .B --chat
-Enable chat mode. This is similar to broker mode, but is line-oriented and includes nicknames for clients.
+Enable chat mode. This is similar to broker mode, but is line-oriented and includes nicknames for clients (mutually exclusive with \fB--broker\fR).
 .TP
 .BR --max-clients " <n>"
-Maximum number of clients for broker/chat mode. The default is 50.
+Maximum number of clients for broker/chat mode (u32, default 50).
 .SS "PROTOCOL OPTIONS"
 .TP
 .BR -u ", " --udp
@@ -69,6 +69,18 @@ Use IPv4 only.
 .TP
 .B -6
 Use IPv6 only.
+.TP
+.BR -s ", " --source " <addr>"
+Bind to the specified local source address before connecting.
+.TP
+.BR -p ", " --source-port " <port>"
+Bind to the specified local source port (0-65535).
+.TP
+.B --keep-source-port
+Retry connection attempts without changing the bound source port.
+.TP
+.BR -n ", " --nodns
+Disable DNS lookups; treat the host argument as a literal address.
 .SS "TIMING OPTIONS"
 .TP
 .BR -w ", " --wait " <secs>"
@@ -77,15 +89,15 @@ Connect timeout in seconds.
 .BR -i ", " --idle-timeout " <secs>"
 Idle timeout in seconds.
 .TP
-.BR -q ", " --close-on-eof
+.B --close-on-eof
 Close the connection on EOF from stdin.
 .SS "TRANSFER OPTIONS"
 .TP
 .B --send-only
-Only send data, ignoring received data.
+Only send data, ignoring received data (mutually exclusive with \fB--recv-only\fR).
 .TP
 .B --recv-only
-Only receive data, ignoring sent data.
+Only receive data, ignoring sent data (mutually exclusive with \fB--send-only\fR).
 .TP
 .BR -C ", " --crlf
 Convert LF to CRLF.
@@ -97,7 +109,7 @@ Act like a telnet client.
 Do not shutdown the write half of the socket after EOF on stdin.
 .TP
 .BR -d ", " --delay " <ms>"
-Wait between reads and writes to shape traffic.
+Wait between reads and writes to shape traffic (milliseconds, u32).
 .SS "SSL/TLS OPTIONS"
 .TP
 .B --ssl
@@ -108,6 +120,9 @@ Verify the server certificate. This is the default.
 .TP
 .B --no-ssl-verify
 Do not verify the server certificate.
+.TP
+.B --ssl-verify=false
+Alternate form to disable certificate verification.
 .TP
 .BR --ssl-cert " <file>"
 The SSL certificate file to use in server mode.
@@ -135,13 +150,13 @@ The ALPN protocol list (e.g., "h2,http/1.1").
 The proxy URL (e.g., http://host:port, socks5://host:port).
 .TP
 .BR --proxy-type " <type>"
-The proxy type (http, socks4, socks5).
+Proxy protocol selection; accepted values are http, socks4, socks5.
 .TP
 .BR --proxy-auth " <user:pass>"
 The proxy authentication credentials.
 .TP
 .BR --proxy-dns " <mode>"
-The DNS resolution mode (local, remote, both).
+Proxy DNS resolution mode; accepted values are local, remote, both.
 .SS "EXECUTION OPTIONS"
 .TP
 .BR -e ", " --exec " <cmd> " [\fIargs...\fR]
@@ -150,8 +165,17 @@ Execute the given command with its arguments.
 .BR -c ", " --sh-exec " <cmd>"
 Execute the given command via a shell.
 .TP
+.B --no-stdin
+Do not forward client stdin to the executed command.
+.TP
+.B --no-stdout
+Discard stdout from the executed command.
+.TP
+.B --no-stderr
+Discard stderr from the executed command.
+.TP
 .B --allow
-Allow dangerous operations.
+Acknowledge and permit potentially dangerous exec operations.
 .SS "OUTPUT OPTIONS"
 .TP
 .BR -v ", " --verbose
@@ -203,13 +227,23 @@ Read deny rules from a file (one per line).
 .TP
 .BR --drop-user " <user>"
 Drop privileges to the specified user after binding (Unix only).
-.SS "OTHER OPTIONS"
+.SS "PORT SCANNING"
 .TP
 .BR -z ", " --zero-io
-Zero-I/O mode (for port scanning).
+Zero-I/O mode (for port scanning and reachability checks).
 .TP
-.B --keep-source-port
-Bind to a specific source port before connecting.
+.B --scan-parallel
+Enable parallel workers for zero-I/O scans.
+.TP
+.B --scan-randomize
+Randomize the scan order for stealthier probing.
+.TP
+.BR --scan-workers " <count>"
+Set the number of worker threads for parallel scans (usize).
+.TP
+.BR --scan-delay " <ms>"
+Insert a delay between probes in milliseconds (u32).
+.SS "OTHER OPTIONS"
 .TP
 .B --
 End of options. All following arguments are treated as positional arguments.
@@ -366,6 +400,28 @@ Execute grep with -v flag (using --):
 .RS
 .EX
 zigcat -l -e -- grep -v foo
+.EE
+.RE
+.SS "Port scanning"
+.PP
+Test if a single port is reachable without transferring data:
+.RS
+.EX
+zigcat -z example.com 443
+.EE
+.RE
+.PP
+Scan a range with parallel workers and randomized order:
+.RS
+.EX
+zigcat -z --scan-parallel --scan-workers 20 --scan-randomize example.com 1-1024
+.EE
+.RE
+.PP
+Perform a stealthier scan with added delay between probes:
+.RS
+.EX
+zigcat -z --scan-parallel --scan-delay 100 target.example 1-65535
 .EE
 .RE
 .SH "SEE ALSO"

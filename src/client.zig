@@ -103,7 +103,7 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
                         cfg.scan_workers,
                     });
                 }
-                try portscan.scanPortRangeParallel(allocator, host, port_range.start, port_range.end, timeout, cfg.scan_workers);
+                try portscan.scanPortRangeParallel(allocator, host, port_range.start, port_range.end, timeout, cfg.scan_workers, cfg.scan_randomize, cfg.scan_delay_ms);
             } else {
                 // Sequential scanning
                 if (cfg.verbose) {

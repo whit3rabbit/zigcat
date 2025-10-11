@@ -802,7 +802,7 @@ pub const BrokerServer = struct {
 
         logging.logTrace("Performing health check on {} clients\n", .{client_ids.len});
 
-        var failed_clients = std.ArrayList(u32){};
+        var failed_clients = std.ArrayList(u32).init(self.allocator);
         defer failed_clients.deinit(self.allocator);
 
         for (client_ids) |client_id| {

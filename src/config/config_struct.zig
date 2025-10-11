@@ -111,8 +111,10 @@ pub const Config = struct {
 
     // Zero-I/O mode
     zero_io: bool = false,
-    scan_parallel: bool = false, // Enable parallel port scanning
-    scan_workers: usize = 10,    // Number of worker threads for parallel scanning
+    scan_parallel: bool = false,    // Enable parallel port scanning
+    scan_workers: usize = 10,       // Number of worker threads for parallel scanning
+    scan_randomize: bool = false,   // Randomize port scanning order (stealth mode)
+    scan_delay_ms: u32 = 0,         // Delay between port scans in milliseconds (stealth mode)
 
     // Security options
     allow_dangerous: bool = false,

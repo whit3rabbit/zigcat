@@ -407,6 +407,39 @@ pub fn build(b: *std.Build) void {
     const parallel_scan_test_step = b.step("test-parallel-scan", "Run parallel port scanning tests (PortRange parsing, parallel correctness, thread safety)");
     parallel_scan_test_step.dependOn(&run_parallel_scan_tests.step);
 
+    const platform_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_platform.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const platform_tests = b.addTest(.{ .root_module = platform_test_module });
+    platform_tests.linkLibC();
+    const run_platform_tests = b.addRunArtifact(platform_tests);
+    const platform_test_step = b.step("test-platform", "Run platform detection and kernel version parsing tests (20 tests)");
+    platform_test_step.dependOn(&run_platform_tests.step);
+
+    const portscan_features_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_portscan_features.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const portscan_features_tests = b.addTest(.{ .root_module = portscan_features_test_module });
+    portscan_features_tests.linkLibC();
+    const run_portscan_features_tests = b.addRunArtifact(portscan_features_tests);
+    const portscan_features_test_step = b.step("test-portscan-features", "Run port scanning feature tests (randomization, delays, auto-selection) (23 tests)");
+    portscan_features_test_step.dependOn(&run_portscan_features_tests.step);
+
+    const portscan_uring_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_portscan_uring.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const portscan_uring_tests = b.addTest(.{ .root_module = portscan_uring_test_module });
+    portscan_uring_tests.linkLibC();
+    const run_portscan_uring_tests = b.addRunArtifact(portscan_uring_tests);
+    const portscan_uring_test_step = b.step("test-portscan-uring", "Run io_uring compile-time tests (7 tests)");
+    portscan_uring_test_step.dependOn(&run_portscan_uring_tests.step);
+
     const validation_test_step = b.step("test-validation", "Run all validation tests (13 tests: 8 CRLF + 5 shell)");
     validation_test_step.dependOn(&run_crlf_memory_tests.step);
     validation_test_step.dependOn(&run_shell_memory_tests.step);
