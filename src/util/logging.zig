@@ -1,7 +1,7 @@
-//! Verbose output logging system
+//! Configuration-based logging system for zigcat.
 //!
-//! Provides leveled logging for zigcat with runtime verbosity control.
-//! Used via -v flag (can be specified multiple times for higher verbosity).
+//! All logging functions now require a Config reference to determine verbosity.
+//! This eliminates global state and improves testability.
 //!
 //! Verbosity Levels:
 //! - quiet (0): Silent (errors only)
@@ -10,102 +10,16 @@
 //! - debug (3): Protocol details (via -vv)
 //! - trace (4): All internal state (via -vvv)
 //!
-//! Architecture:
-//! - Global verbose_level variable controls output filtering
-//! - All log functions check level before printing
-//! - Errors always print regardless of verbosity
-//! - Uses std.debug.print for immediate stderr output
-//!
 //! Usage:
 //! ```zig
 //! const cfg = Config{ .verbosity = .verbose };
 //! logging.logVerbose(&cfg, "Connected to {s}\n", .{host});  // Level 2
-//! logging.logDebug(&cfg, "Data: {x}\n", .{data});  // Level 3
-//! logging.logTrace(&cfg, "Protocol state: {}\n", .{state});  // Level 4
+//! logging.logDebugCfg(&cfg, "Data: {x}\n", .{data});  // Level 3
+//! logging.logTraceCfg(&cfg, "Protocol state: {}\n", .{state});  // Level 4
 //! ```
 
 const std = @import("std");
 const config = @import("../config.zig");
-
-/// Global verbosity level (0-4)
-/// Modified via setVerbosity(), checked by all log functions
-/// Deprecated: Use Config.verbosity instead
-var verbose_level: u8 = 0;
-
-/// Set the verbosity level (deprecated)
-///
-/// Deprecated: Use Config.verbosity instead for type safety
-///
-/// Controls which log messages are printed to stderr.
-///
-/// Levels:
-/// - 0: Quiet (errors only via logError)
-/// - 1: Normal (connections, warnings, transfer stats)
-/// - 2: Verbose (connection details)
-/// - 3: Debug (protocol details)
-/// - 4: Trace (all internal state)
-///
-/// Parameters:
-/// - level: New verbosity level (0-4)
-pub fn setVerbosity(level: u8) void {
-    verbose_level = level;
-}
-
-/// Get current verbosity level (deprecated)
-///
-/// Deprecated: Use Config.verbosity instead
-///
-/// Returns: Current global verbosity level
-pub fn getVerbosity() u8 {
-    return verbose_level;
-}
-
-/// Log message at a specific verbosity level
-///
-/// Generic logging function that checks level before printing.
-///
-/// Parameters:
-/// - level: Required verbosity level for this message (comptime)
-/// - fmt: Format string (comptime)
-/// - args: Format arguments (tuple of values)
-///
-/// Note: Only prints if current verbose_level >= level
-pub fn log(comptime level: u8, comptime fmt: []const u8, args: anytype) void {
-    if (level <= verbose_level) {
-        logInternal("INFO", fmt, args);
-    }
-}
-
-/// Log connection events (level 1)
-///
-/// Logs connection accept/close events with IP address.
-///
-/// Parameters:
-/// - address: Client/server network address
-/// - action: Event type (e.g., "ACCEPT", "CONNECT", "CLOSE")
-///
-/// Example output: "[ACCEPT] Connection from 127.0.0.1:54321"
-pub fn logConnection(address: std.net.Address, action: []const u8) void {
-    if (verbose_level > 0) {
-        std.debug.print("[{s}] Connection from {any}\n", .{action, address});
-    }
-}
-
-/// Log connection event with custom format (level 1)
-///
-/// Logs connection events with explicit host:port instead of Address.
-///
-/// Parameters:
-/// - host: Hostname or IP address string
-/// - port: Port number
-/// - action: Event type (e.g., "CONNECT", "RESOLVE")
-///
-/// Example output: "[CONNECT] google.com:80"
-pub fn logConnectionString(host: []const u8, port: u16, action: []const u8) void {
-    if (verbose_level > 0) {
-        logInternal(action, "{s}:{d}\n", .{ host, port });
-    }
-}
 
 /// Log errors (always printed regardless of verbosity)
 ///
