@@ -51,7 +51,7 @@ pub fn handleClientData(self: *broker.BrokerServer, client_id: u64) !void {
 
     logging.logDebug("Client {} sent {} bytes (total received: {}\n", .{ client_id, bytes_read, client.bytes_received });
 
-    if (self.config.verbose_level >= 3) {
+    if (logging.isVerbosityEnabled(self.config, .debug)) {
         const received_data = client.read_buffer[client.read_buffer_len - bytes_read .. client.read_buffer_len];
         logging.logHexDump(received_data, "Client Data");
     }

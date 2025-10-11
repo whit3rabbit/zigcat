@@ -108,11 +108,9 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             if (std.mem.startsWith(u8, arg, "-v")) {
                 const v_count = arg.len - 1; // Subtract the leading '-'
                 verbose_count += @as(u8, @intCast(v_count));
-                cfg.verbose = true; // Backward compatibility
             } else {
                 // --verbose counts as 1
                 verbose_count += 1;
-                cfg.verbose = true;
             }
         } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
             cfg.verbosity = .quiet;
@@ -333,7 +331,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             2 => .debug,
             else => .trace, // 3 or more -> trace
         };
-        cfg.verbose_level = @intFromEnum(cfg.verbosity); // Backward compatibility
+        // verbosity enum is now the only source of truth
     }
 
     // Validate I/O control flags

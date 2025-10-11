@@ -340,13 +340,10 @@ pub const BrokerServer = struct {
     pub fn run(self: *BrokerServer) !void {
         self.running = true;
 
-        // Set logging verbosity from config
-        logging.setVerbosity(self.config.verbose_level);
-
         // Log server startup with comprehensive information
-        logging.log(1, "Broker server starting in {any} mode (max {} clients, TLS: {}, Access control: {})\n", .{ self.mode, self.max_clients, self.config.ssl, self.access_list.allow_rules.items.len > 0 or self.access_list.deny_rules.items.len > 0 });
+        logging.logNormal(self.config, "Broker server starting in {any} mode (max {} clients, TLS: {}, Access control: {})\n", .{ self.mode, self.max_clients, self.config.ssl, self.access_list.allow_rules.items.len > 0 or self.access_list.deny_rules.items.len > 0 });
 
-        logging.logDebug("Server configuration: connect_timeout={}ms, idle_timeout={}ms\n", .{
+        logging.logDebugCfg(self.config, "Server configuration: connect_timeout={}ms, idle_timeout={}ms\n", .{
             self.config.connect_timeout,
             self.config.idle_timeout,
         });
@@ -716,9 +713,9 @@ pub const BrokerServer = struct {
         logging.logDebug("Active clients after removal: {} / {} max\n", .{ remaining_clients, self.max_clients });
 
         // Log capacity utilization for trace level
-        if (self.config.verbose_level >= 3) {
+        if (logging.isVerbosityEnabled(self.config, .debug)) {
             const utilization = @as(f64, @floatFromInt(remaining_clients)) / @as(f64, @floatFromInt(self.max_clients)) * 100.0;
-            logging.logTrace("Server capacity utilization: {d:.1}%\n", .{utilization});
+            logging.logTraceCfg(self.config, "Server capacity utilization: {d:.1}%\n", .{utilization});
         }
     }
 
@@ -773,7 +770,7 @@ pub const BrokerServer = struct {
             logging.logTrace("Active clients: {} / {} max\n", .{ client_count, self.max_clients });
 
             // Log detailed client statistics if very verbose
-            if (self.config.verbose_level >= 4) {
+            if (logging.isVerbosityEnabled(self.config, .trace)) {
                 self.logClientStatistics();
             }
         }
@@ -1085,7 +1082,7 @@ pub const BrokerServer = struct {
         }
 
         // Log final statistics and performance summary
-        if (self.config.verbose_level >= 2) {
+        if (logging.isVerbosityEnabled(self.config, .verbose)) {
             self.logClientStatistics();
         }
 

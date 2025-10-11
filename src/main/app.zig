@@ -53,8 +53,6 @@ pub fn run() !void {
         std.process.exit(1);
     };
 
-    logging.setVerbosity(cfg.verbose_level);
-
     if (cfg.listen_mode) {
         common.registerSignalHandlers(&cfg);
         try server_mode.runServer(allocator, &cfg);
