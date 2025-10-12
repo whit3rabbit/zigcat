@@ -81,7 +81,7 @@ log_success "Working directory is clean"
 
 # Step 3: Verify version in build.zig
 log_info "Verifying version in build.zig..."
-BUILD_VERSION=$(grep 'options.addOption.*version' build.zig | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+BUILD_VERSION=$(grep 'options.addOption.*"version"' build.zig | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
 
 if [[ "$BUILD_VERSION" != "$VERSION_NUMBER" ]]; then
     log_error "Version mismatch!"
