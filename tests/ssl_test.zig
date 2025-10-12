@@ -29,6 +29,7 @@ const std = @import("std");
 const testing = std.testing;
 const posix = std.posix;
 const fs = std.fs;
+const ssl = @import("utils/ssl_fixtures.zig");
 
 // Platform-specific constants for macOS portability
 const O_NONBLOCK: u32 = 0x0004;
@@ -44,126 +45,7 @@ const LONG_TIMEOUT: i32 = 5000;
 // Test Utilities - Self-signed Certificate Generation
 // ============================================================================
 
-/// Generate a self-signed certificate for testing
-/// Returns paths to cert and key files (must be cleaned up by caller)
-const CertPaths = struct {
-    cert_path: []const u8,
-    key_path: []const u8,
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *CertPaths) void {
-        // Clean up generated files
-        fs.cwd().deleteFile(self.cert_path) catch {};
-        fs.cwd().deleteFile(self.key_path) catch {};
-        self.allocator.free(self.cert_path);
-        self.allocator.free(self.key_path);
-    }
-};
-
-fn generateSelfSignedCert(allocator: std.mem.Allocator, common_name: []const u8) !CertPaths {
-    // Ensure .zig-cache/tmp directory exists (portable temp directory)
-    const cwd = fs.cwd();
-    cwd.makePath(".zig-cache/tmp") catch {};
-
-    // Get absolute path to temp directory
-    const cache_path = try cwd.realpathAlloc(allocator, ".zig-cache/tmp");
-    defer allocator.free(cache_path);
-
-    // Generate unique filenames in temp directory
-    const timestamp = std.time.milliTimestamp();
-    const cert_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/ssl_test_cert_{d}.pem",
-        .{ cache_path, timestamp },
-    );
-    errdefer allocator.free(cert_path);
-    const key_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/ssl_test_key_{d}.pem",
-        .{ cache_path, timestamp },
-    );
-    errdefer allocator.free(key_path);
-
-    // Use OpenSSL to generate self-signed certificate
-    // This requires openssl to be installed on the system
-    var argv = [_][]const u8{
-        "openssl",
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-keyout",
-        key_path,
-        "-out",
-        cert_path,
-        "-days",
-        "1",
-        "-nodes",
-        "-subj",
-        try std.fmt.allocPrint(allocator, "/CN={s}", .{common_name}),
-    };
-    defer allocator.free(argv[argv.len - 1]);
-
-    var child = std.process.Child.init(&argv, allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-
-    const term = try child.spawnAndWait();
-    if (term != .Exited or term.Exited != 0) {
-        return error.CertGenerationFailed;
-    }
-
-    return CertPaths{
-        .cert_path = cert_path,
-        .key_path = key_path,
-        .allocator = allocator,
-    };
-}
-
-/// Start a simple OpenSSL s_server for testing
-const TestServer = struct {
-    child: std.process.Child,
-    port: u16,
-    allocator: std.mem.Allocator,
-
-    pub fn start(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8, port: u16) !TestServer {
-        const port_str = try std.fmt.allocPrint(allocator, "{d}", .{port});
-        defer allocator.free(port_str);
-
-        var argv = [_][]const u8{
-            "openssl",
-            "s_server",
-            "-accept",
-            port_str,
-            "-cert",
-            cert_path,
-            "-key",
-            key_path,
-            "-quiet",
-            "-no_dhe",
-        };
-
-        var child = std.process.Child.init(&argv, allocator);
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-
-        try child.spawn();
-
-        // Give server time to start (using Thread.sleep)
-        std.Thread.sleep(500 * std.time.ns_per_ms);
-
-        return TestServer{
-            .child = child,
-            .port = port,
-            .allocator = allocator,
-        };
-    }
-
-    pub fn stop(self: *TestServer) void {
-        _ = self.child.kill() catch {};
-        _ = self.child.wait() catch {};
-    }
-};
+const TestServer = ssl.TestServer;
 
 // ============================================================================
 // Category 1: Certificate Generation Tests (5 tests)
@@ -172,7 +54,7 @@ const TestServer = struct {
 test "SSL: Generate self-signed certificate with common name" {
     const allocator = testing.allocator;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     // Verify certificate file exists and is readable
@@ -186,7 +68,7 @@ test "SSL: Generate self-signed certificate with common name" {
 test "SSL: Generate certificate with custom common name" {
     const allocator = testing.allocator;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "test.example.com");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "test.example.com");
     defer cert_paths.deinit();
 
     // Verify key file exists
@@ -200,7 +82,7 @@ test "SSL: Generate certificate with custom common name" {
 test "SSL: Verify certificate contains expected common name" {
     const allocator = testing.allocator;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "zigcat.test");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "zigcat.test");
     defer cert_paths.deinit();
 
     // Use openssl to verify CN in certificate
@@ -232,7 +114,7 @@ test "SSL: Verify certificate contains expected common name" {
 test "SSL: Certificate and key are valid PEM format" {
     const allocator = testing.allocator;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     // Verify cert is valid PEM
@@ -271,12 +153,12 @@ test "SSL: Certificate and key are valid PEM format" {
 test "SSL: Multiple certificate generation creates unique files" {
     const allocator = testing.allocator;
 
-    var cert1 = try generateSelfSignedCert(allocator, "host1.test");
+    var cert1 = try ssl.generateSelfSignedCert(allocator, "host1.test");
     defer cert1.deinit();
 
     std.Thread.sleep(10 * std.time.ns_per_ms); // Ensure different timestamp
 
-    var cert2 = try generateSelfSignedCert(allocator, "host2.test");
+    var cert2 = try ssl.generateSelfSignedCert(allocator, "host2.test");
     defer cert2.deinit();
 
     // Verify different paths
@@ -471,7 +353,7 @@ test "SSL: Start TLS server with self-signed cert" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44301;
@@ -497,7 +379,7 @@ test "SSL: TLS handshake with openssl s_client" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44302;
@@ -550,7 +432,7 @@ test "SSL: TLS 1.2 handshake" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44303;
@@ -621,7 +503,7 @@ test "SSL: TLS 1.3 handshake" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44304;
@@ -689,7 +571,7 @@ test "SSL: SNI (Server Name Indication) support" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "example.com");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "example.com");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44305;
@@ -790,10 +672,10 @@ test "SSL: Mismatched certificate and key" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert1 = try generateSelfSignedCert(allocator, "host1.test");
+    var cert1 = try ssl.generateSelfSignedCert(allocator, "host1.test");
     defer cert1.deinit();
 
-    var cert2 = try generateSelfSignedCert(allocator, "host2.test");
+    var cert2 = try ssl.generateSelfSignedCert(allocator, "host2.test");
     defer cert2.deinit();
 
     // Try to use cert1 with key2 (mismatch)
@@ -872,7 +754,7 @@ test "SSL: Certificate verification failure simulation" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "wrong-host.test");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "wrong-host.test");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44403;
@@ -1017,7 +899,7 @@ test "SSL: End-to-end data transfer simulation" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44500;
@@ -1069,7 +951,7 @@ test "SSL: Multiple concurrent connections" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     const test_port: u16 = 44501;
@@ -1130,7 +1012,7 @@ test "SSL: Certificate expiry handling" {
     check_child.stdout_behavior = .Ignore;
     _ = check_child.spawnAndWait() catch return error.SkipZigTest;
 
-    var cert_paths = try generateSelfSignedCert(allocator, "localhost");
+    var cert_paths = try ssl.generateSelfSignedCert(allocator, "localhost");
     defer cert_paths.deinit();
 
     // Check certificate expiry date

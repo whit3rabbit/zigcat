@@ -18,9 +18,27 @@ const logging = @import("../../util/logging.zig");
 const config = @import("../../config.zig");
 
 /// Platform support detection for Unix domain sockets.
+/// On Windows, returns true only for Windows 10 RS4+ (Build 17063+) which supports AF_UNIX.
+/// For older Windows versions, use windows_backend.zig Named Pipes fallback separately.
 pub const unix_socket_supported = switch (builtin.os.tag) {
     .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true,
+    .windows => builtin.os.version_range.windows.isAtLeast(.win10_rs4) orelse false,
     else => false,
+};
+
+/// Platform-specific Unix socket path maximum length.
+///
+/// - Linux: 108 bytes (standard POSIX)
+/// - BSD (macOS, FreeBSD, etc.): 104 bytes (smaller sockaddr_un)
+/// - Windows: 63 wchar_t elements (NOT bytes - UTF-16 encoding)
+///
+/// Note: Windows uses UTF-16 wide characters, so actual byte length
+/// depends on encoding. Use this constant for validation only.
+pub const UNIX_PATH_MAX = switch (builtin.os.tag) {
+    .linux => 108,
+    .macos, .freebsd, .openbsd, .netbsd, .dragonfly => 104,
+    .windows => 63, // wchar_t elements, not bytes!
+    else => 104, // Conservative default for unknown platforms
 };
 
 /// Comprehensive error types for Unix socket operations with detailed categorization.
@@ -75,7 +93,8 @@ pub const UnixAddress = struct {
 
     pub fn fromPath(path: []const u8) !UnixAddress {
         if (path.len == 0) return error.InvalidPath;
-        if (path.len >= 108) return error.PathTooLong;
+        // Use platform-specific max length for validation
+        if (path.len >= UNIX_PATH_MAX) return error.PathTooLong;
 
         var addr = UnixAddress{
             .family = posix.AF.UNIX,
@@ -187,7 +206,7 @@ pub fn handleExistingSocketFile(path: []const u8) UnixSocketError!void {
 /// Comprehensive Unix socket path validation with detailed error reporting.
 ///
 /// Validates Unix socket paths for:
-/// - Length limits (107 bytes max for portability)
+/// - Length limits (platform-specific: 108 Linux, 104 BSD, 63 Windows)
 /// - Invalid characters (null bytes, control characters)
 /// - Directory accessibility and permissions
 /// - Platform-specific path requirements
@@ -198,7 +217,7 @@ pub fn handleExistingSocketFile(path: []const u8) UnixSocketError!void {
 pub fn validatePath(path: []const u8) UnixSocketError!void {
     // Basic path validation
     if (path.len == 0) return UnixSocketError.InvalidPath;
-    if (path.len >= 108) return UnixSocketError.PathTooLong;
+    if (path.len >= UNIX_PATH_MAX) return UnixSocketError.PathTooLong;
 
     // Check for null bytes (invalid in Unix paths)
     if (std.mem.indexOfScalar(u8, path, 0) != null) {
@@ -253,6 +272,24 @@ fn validatePlatformSpecificPath(path: []const u8) UnixSocketError!void {
             if (path.len >= 104) {
                 logging.logDebug("Path too long for BSD platform: {d} bytes (max 103)\n", .{path.len});
                 return UnixSocketError.PathTooLong;
+            }
+        },
+        .windows => {
+            // Windows AF_UNIX uses wchar_t[63] (UTF-16), not char[108]
+            // Path length is measured in UTF-16 code units, not bytes
+            // Conservative check: Assume worst case of 1 char = 1 wchar_t
+            if (path.len >= 63) {
+                logging.logDebug("Path too long for Windows platform: {d} bytes (max 62 for safety)\n", .{path.len});
+                return UnixSocketError.PathTooLong;
+            }
+            // Additional Windows validation: Must not contain certain characters
+            // Windows file paths cannot contain: < > : " | ? *
+            for (path) |byte| {
+                if (byte == '<' or byte == '>' or byte == ':' or byte == '"' or
+                    byte == '|' or byte == '?' or byte == '*')
+                {
+                    return UnixSocketError.InvalidPathCharacters;
+                }
             }
         },
         else => {
@@ -328,7 +365,15 @@ pub fn getErrorMessage(err: UnixSocketError, path: []const u8, operation: []cons
     _ = operation;
     return switch (err) {
         // Path validation errors
-        UnixSocketError.PathTooLong => "Unix socket path is too long (max 107 characters)",
+        UnixSocketError.PathTooLong => blk: {
+            if (builtin.os.tag == .windows) {
+                break :blk "Unix socket path is too long for Windows (max 62 characters)";
+            } else if (builtin.os.tag == .linux) {
+                break :blk "Unix socket path is too long (max 107 characters)";
+            } else {
+                break :blk "Unix socket path is too long (max 103 characters for BSD)";
+            }
+        },
         UnixSocketError.InvalidPath => "Unix socket path is invalid or empty",
         UnixSocketError.PathContainsNull => "Unix socket path contains null bytes",
         UnixSocketError.DirectoryNotFound => "Parent directory for Unix socket does not exist",

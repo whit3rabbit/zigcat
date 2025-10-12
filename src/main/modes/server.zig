@@ -383,7 +383,7 @@ fn handleClient(
     };
     defer output_logger.deinit();
 
-    var hex_dumper = hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file) catch |err| {
+    var hex_dumper = hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file) catch |err| {
         common.handleIOInitError(cfg, err, "hex dumper");
         return err;
     };
@@ -556,11 +556,11 @@ fn handleUdpServer(
             };
             defer output_logger.deinit();
 
-            var hex_dumper = hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file) catch |err| blk: {
+            var hex_dumper = hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file) catch |err| blk: {
                 if (cfg.verbose) {
                     logging.logWarning("Failed to initialize hex dumper for UDP: {}\n", .{err});
                 }
-                break :blk hexdump.HexDumperAuto.init(allocator, null) catch unreachable;
+                break :blk hexdump.HexDumperAuto.initFromPath(allocator, null) catch unreachable;
             };
             defer hex_dumper.deinit();
 

@@ -80,7 +80,62 @@ init_test_environment() {
     log_success "Test environment initialized successfully"
 }
 
-# Execute a single Zig test file
+# Execute a Zig build test target
+execute_zig_build_test() {
+    local test_target="$1"
+    local test_name="${test_target}"
+    local start_time
+    local end_time
+    local duration
+    local exit_code
+    local output_file="${LOGS_DIR}/${TEST_PLATFORM}-${TEST_ARCH}/${test_name}.log"
+
+    log_info "Running build test: ${test_name}"
+
+    start_time=$(date +%s.%N)
+
+    # Execute the test with timeout
+    set +e
+    if [[ "${VERBOSE}" == "true" ]]; then
+        cd "${PROJECT_ROOT}" && timeout "${TEST_TIMEOUT}" zig build "${test_target}" \
+            2>&1 | tee "${output_file}"
+        exit_code=${PIPESTATUS[0]}
+    else
+        cd "${PROJECT_ROOT}" && timeout "${TEST_TIMEOUT}" zig build "${test_target}" \
+            >"${output_file}" 2>&1
+        exit_code=$?
+    fi
+    set -e
+
+    end_time=$(date +%s.%N)
+    duration=$(echo "${end_time} - ${start_time}" | bc -l)
+
+    # Store results
+    test_results["${test_name}"]=${exit_code}
+    test_durations["${test_name}"]=${duration}
+    test_outputs["${test_name}"]="${output_file}"
+
+    ((total_tests++))
+
+    if [[ ${exit_code} -eq 0 ]]; then
+        ((passed_tests++))
+        log_success "Test ${test_name} passed (${duration}s)"
+    elif [[ ${exit_code} -eq 124 ]]; then
+        log_warn "Test ${test_name} timed out after ${TEST_TIMEOUT}s"
+        ((failed_tests++))
+    else
+        log_error "Test ${test_name} failed with exit code ${exit_code}"
+        ((failed_tests++))
+
+        # Show last few lines of output for failed tests
+        if [[ "${VERBOSE}" == "true" ]]; then
+            echo "Last 10 lines of output:"
+            tail -n 10 "${output_file}" || true
+        fi
+    fi
+}
+
+# Execute a single Zig test file (legacy support)
 execute_zig_test() {
     local test_file="$1"
     local test_name="$(basename "${test_file}" .zig)"
@@ -89,11 +144,11 @@ execute_zig_test() {
     local duration
     local exit_code
     local output_file="${LOGS_DIR}/${TEST_PLATFORM}-${TEST_ARCH}/${test_name}.log"
-    
+
     log_info "Running test: ${test_name}"
-    
+
     start_time=$(date +%s.%N)
-    
+
     # Execute the test with timeout
     set +e
     if [[ "${VERBOSE}" == "true" ]]; then
@@ -108,17 +163,17 @@ execute_zig_test() {
         exit_code=$?
     fi
     set -e
-    
+
     end_time=$(date +%s.%N)
     duration=$(echo "${end_time} - ${start_time}" | bc -l)
-    
+
     # Store results
     test_results["${test_name}"]=${exit_code}
     test_durations["${test_name}"]=${duration}
     test_outputs["${test_name}"]="${output_file}"
-    
+
     ((total_tests++))
-    
+
     if [[ ${exit_code} -eq 0 ]]; then
         ((passed_tests++))
         log_success "Test ${test_name} passed (${duration}s)"
@@ -128,7 +183,7 @@ execute_zig_test() {
     else
         log_error "Test ${test_name} failed with exit code ${exit_code}"
         ((failed_tests++))
-        
+
         # Show last few lines of output for failed tests
         if [[ "${VERBOSE}" == "true" ]]; then
             echo "Last 10 lines of output:"
@@ -366,7 +421,17 @@ execute_udp_echo_test() {
 # Check if test should be skipped for this platform
 should_skip_test() {
     local test_name="$1"
-    
+
+    # Skip io_uring tests on non-Linux platforms
+    case "${test_name}" in
+        "test-portscan-uring")
+            if [[ "${TEST_PLATFORM}" != "linux" ]]; then
+                log_info "Skipping ${test_name} on ${TEST_PLATFORM} (io_uring is Linux-only)"
+                return 0  # Skip
+            fi
+            ;;
+    esac
+
     case "${TEST_PLATFORM}" in
         "freebsd")
             # Skip tests that may not work well in FreeBSD containers
@@ -379,14 +444,15 @@ should_skip_test() {
         "alpine")
             # Alpine-specific skips
             case "${test_name}" in
-                "tls_test")
+                "tls_test"|"test-ssl")
                     # May need different TLS setup
+                    log_info "Skipping ${test_name} on Alpine (TLS setup differences)"
                     return 0  # Skip for now
                     ;;
             esac
             ;;
     esac
-    
+
     return 1  # Don't skip
 }
 
@@ -493,24 +559,29 @@ main() {
         exit 1
     fi
     
-    # List of Zig test files to execute
-    local zig_tests=(
-        "cli_test.zig"
-        "net_test.zig"
-        "security_test.zig"
-        "proxy_test.zig"
-        "tls_test.zig"
-        "transfer_test.zig"
-        "integration_test.zig"
-        "platform_test.zig"
-        "exec_safety_test.zig"
+    # List of Zig build test targets to execute
+    local zig_build_targets=(
+        "test"                    # Core unit tests
+        "test-timeout"            # Timeout handling tests (10 tests)
+        "test-udp"                # UDP server tests (5 tests)
+        "test-zero-io"            # Zero-I/O mode tests (6 tests)
+        "test-quit-eof"           # Quit-after-EOF tests (9 tests)
+        "test-platform"           # Platform detection tests (20 tests)
+        "test-portscan-features"  # Port scanning features (23 tests)
+        "test-portscan-uring"     # io_uring compile-time tests (7 tests)
+        "test-validation"         # Memory safety tests (13 tests)
+        "test-parallel-scan"      # Parallel scan tests
+        "test-exec-threads"       # Exec thread lifecycle tests
+        "test-telnet"             # Telnet protocol tests
+        "test-poll-wrapper"       # Poll wrapper tests
+        "test-ssl"                # SSL/TLS tests (31 tests)
     )
-    
-    # Execute Zig unit tests
-    log_info "Executing Zig unit tests..."
-    for test_file in "${zig_tests[@]}"; do
-        local test_name="$(basename "${test_file}" .zig)"
-        
+
+    # Execute Zig build test targets
+    log_info "Executing Zig build test targets..."
+    for test_target in "${zig_build_targets[@]}"; do
+        local test_name="${test_target}"
+
         if should_skip_test "${test_name}"; then
             log_warn "Skipping test ${test_name} for platform ${TEST_PLATFORM}"
             test_results["${test_name}"]=2
@@ -520,12 +591,8 @@ main() {
             ((skipped_tests++))
             continue
         fi
-        
-        if [[ -f "${PROJECT_ROOT}/tests/${test_file}" ]]; then
-            execute_zig_test "${test_file}"
-        else
-            log_warn "Test file not found: ${test_file}"
-        fi
+
+        execute_zig_build_test "${test_target}"
     done
     
     # Execute integration tests

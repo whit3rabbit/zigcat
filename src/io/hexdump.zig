@@ -36,7 +36,8 @@
 //! const allocator = std.heap.page_allocator;
 //!
 //! // Create hex dumper with file output
-//! var dumper = try HexDumper.init(allocator, "dump.txt");
+//! const cfg = try parseHexDumpConfig("dump.txt");
+//! var dumper = try HexDumper.init(allocator, cfg);
 //! defer dumper.deinit();
 //!
 //! // Dump binary data
@@ -74,12 +75,15 @@ const std = @import("std");
 const config = @import("../config.zig");
 
 // Import submodules
-const formatter = @import("hexdump/formatter.zig");
+const format = @import("hexdump/format.zig");
 const output = @import("hexdump/output.zig");
+const hex_config = @import("hexdump/config.zig");
 
-// Re-export functions
+// Re-export helpers for external consumers
 pub const mapHexDumpFileError = output.mapHexDumpFileError;
-pub const formatHexLine = formatter.formatHexLine;
+pub const formatHexLine = format.formatLine;
+pub const HexDumpConfig = hex_config.HexDumpConfig;
+pub const parseHexDumpConfig = hex_config.parse;
 
 /// HexDumper handles formatting binary data in hexadecimal format with ASCII sidebar
 /// and optional file output support.
@@ -94,43 +98,48 @@ pub const formatHexLine = formatter.formatHexLine;
 pub const HexDumper = struct {
     file: ?std.fs.File = null,
     allocator: std.mem.Allocator,
-    path: ?[]const u8 = null,
+    cfg: HexDumpConfig,
     offset: u64 = 0,
 
-    /// Initialize HexDumper with optional file path for output.
+    /// Initialize HexDumper with validated configuration.
     ///
-    /// Creates a new HexDumper instance. If a file path is provided, the file
-    /// will be created (truncated if it exists) for hex dump output. The offset
-    /// is initialized to zero.
+    /// Creates a new HexDumper instance. When a file path is provided inside
+    /// the config it will be created (truncated if it exists) for hex dump
+    /// output. The offset is initialized to zero.
     ///
     /// Parameters:
     ///   - allocator: Memory allocator (stored for future use)
-    ///   - path: Optional file path for saving hex dump (null for stdout-only)
+    ///   - cfg: Validated hex dump configuration
     ///
     /// Returns:
     ///   Initialized HexDumper instance with offset at 0
     ///
     /// Errors:
-    ///   - InvalidOutputPath: Empty path string
     ///   - Various IOControlErrors from mapHexDumpFileError()
     ///
     /// Example:
     /// ```zig
-    /// var dumper = try HexDumper.init(allocator, "network.hex");
+    /// const cfg = try parseHexDumpConfig("network.hex");
+    /// var dumper = try HexDumper.init(allocator, cfg);
     /// defer dumper.deinit();
     /// ```
-    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumper {
+    pub fn init(allocator: std.mem.Allocator, cfg: HexDumpConfig) !HexDumper {
         var dumper = HexDumper{
             .allocator = allocator,
-            .path = path,
+            .cfg = cfg,
             .offset = 0,
         };
 
-        if (path) |file_path| {
+        if (cfg.filePath()) |file_path| {
             dumper.file = try output.openHexDumpFile(file_path);
         }
 
         return dumper;
+    }
+
+    /// Convenience wrapper that parses a raw path into configuration.
+    pub fn initFromPath(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumper {
+        return HexDumper.init(allocator, try parseHexDumpConfig(path));
     }
 
     /// Clean up resources and close file if open.
@@ -141,7 +150,8 @@ pub const HexDumper = struct {
     ///
     /// Example:
     /// ```zig
-    /// var dumper = try HexDumper.init(allocator, "data.hex");
+    /// const cfg = try parseHexDumpConfig("data.hex");
+    /// var dumper = try HexDumper.init(allocator, cfg);
     /// defer dumper.deinit(); // Ensures cleanup even on error
     /// ```
     pub fn deinit(self: *HexDumper) void {
@@ -200,10 +210,10 @@ pub const HexDumper = struct {
     fn formatAndWriteLine(self: *HexDumper, data: []const u8, offset: u64) !void {
         // Use a fixed-size buffer for the formatted line
         var line_buffer: [80]u8 = undefined;
-        const formatted_line = try formatter.formatHexLine(data, offset, &line_buffer);
+        const formatted_line = try format.formatLine(data, offset, &line_buffer);
 
         // Write to stdout and file
-        try output.writeHexLine(formatted_line, self.file, self.path);
+        try output.writeHexLine(formatted_line, self.file, self.cfg.filePath());
     }
 
     /// Flush any buffered data to disk with error recovery.
@@ -221,7 +231,7 @@ pub const HexDumper = struct {
     /// ```
     pub fn flush(self: *HexDumper) !void {
         if (self.file) |file| {
-            if (self.path) |path| {
+            if (self.cfg.filePath()) |path| {
                 try output.flushHexDumpFile(file, path);
             }
         }
@@ -238,7 +248,7 @@ pub const HexDumper = struct {
     ///
     /// Returns: File path string if configured, null for stdout-only mode
     pub fn getPath(self: *const HexDumper) ?[]const u8 {
-        return self.path;
+        return self.cfg.filePath();
     }
 
     /// Get current offset for next dump operation.
@@ -269,7 +279,7 @@ pub const HexDumper = struct {
 test "HexDumper - init with no path" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     try testing.expect(!dumper.isFileEnabled());
@@ -280,13 +290,13 @@ test "HexDumper - init with no path" {
 test "HexDumper - init with empty path" {
     const testing = std.testing;
 
-    try testing.expectError(config.IOControlError.InvalidOutputPath, HexDumper.init(testing.allocator, ""));
+    try testing.expectError(config.IOControlError.InvalidOutputPath, HexDumper.initFromPath(testing.allocator, ""));
 }
 
 test "HexDumper - offset tracking" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     try testing.expect(dumper.getOffset() == 0);
@@ -302,7 +312,7 @@ test "HexDumper - offset tracking" {
 test "HexDumper - flush with no file" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Should not error when no file is configured
@@ -319,7 +329,7 @@ test "HexDumper - create and write to file" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         try testing.expect(dumper.isFileEnabled());
@@ -349,7 +359,7 @@ test "HexDumper - create and write to file" {
 test "HexDumper - empty data handling" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Should handle empty data gracefully
@@ -360,7 +370,7 @@ test "HexDumper - empty data handling" {
 test "HexDumper - large data handling" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Test with data larger than 16 bytes (multiple lines)
@@ -373,7 +383,7 @@ test "HexDumper - large data handling" {
 test "HexDumper - binary data with non-printable characters" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Test with binary data including null bytes and control characters
@@ -388,7 +398,7 @@ test "HexDumper - error recovery and graceful handling" {
 
     // Test initialization with invalid directory
     const invalid_path = "/nonexistent/directory/hexdump.txt";
-    try testing.expectError(config.IOControlError.DirectoryNotFound, HexDumper.init(testing.allocator, invalid_path));
+    try testing.expectError(config.IOControlError.DirectoryNotFound, HexDumper.initFromPath(testing.allocator, invalid_path));
 }
 
 test "mapHexDumpFileError - comprehensive error mapping" {
@@ -433,7 +443,7 @@ test "HexDumper - comprehensive initialization and properties" {
     const testing = std.testing;
 
     // Test with no file path
-    var dumper1 = try HexDumper.init(testing.allocator, null);
+    var dumper1 = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper1.deinit();
 
     try testing.expect(!dumper1.isFileEnabled());
@@ -445,7 +455,7 @@ test "HexDumper - comprehensive initialization and properties" {
     std.fs.cwd().deleteFile(test_file) catch {};
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
-    var dumper2 = try HexDumper.init(testing.allocator, test_file);
+    var dumper2 = try HexDumper.initFromPath(testing.allocator, test_file);
     defer dumper2.deinit();
 
     try testing.expect(dumper2.isFileEnabled());
@@ -456,13 +466,13 @@ test "HexDumper - comprehensive initialization and properties" {
 test "HexDumper - comprehensive empty path validation" {
     const testing = std.testing;
 
-    try testing.expectError(config.IOControlError.InvalidOutputPath, HexDumper.init(testing.allocator, ""));
+    try testing.expectError(config.IOControlError.InvalidOutputPath, HexDumper.initFromPath(testing.allocator, ""));
 }
 
 test "HexDumper - comprehensive offset tracking" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     try testing.expectEqual(@as(u64, 0), dumper.getOffset());
@@ -488,7 +498,7 @@ test "HexDumper - comprehensive offset tracking" {
 test "HexDumper - comprehensive empty data handling" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Should handle empty data gracefully
@@ -510,7 +520,7 @@ test "HexDumper - comprehensive file output functionality" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         const test_data = "Hello, World!";
@@ -543,7 +553,7 @@ test "HexDumper - comprehensive formatting accuracy for various data sizes" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Test with exactly 16 bytes
@@ -594,7 +604,7 @@ test "HexDumper - comprehensive binary data with non-printable characters" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Test with all possible byte values
@@ -640,7 +650,7 @@ test "HexDumper - comprehensive mixed printable and non-printable data" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Mix of printable and non-printable characters
@@ -675,7 +685,7 @@ test "HexDumper - comprehensive flush operations" {
     const testing = std.testing;
 
     // Test flush without file
-    var dumper1 = try HexDumper.init(testing.allocator, null);
+    var dumper1 = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper1.deinit();
 
     try dumper1.flush(); // Should not error
@@ -685,7 +695,7 @@ test "HexDumper - comprehensive flush operations" {
     std.fs.cwd().deleteFile(test_file) catch {};
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
-    var dumper2 = try HexDumper.init(testing.allocator, test_file);
+    var dumper2 = try HexDumper.initFromPath(testing.allocator, test_file);
     defer dumper2.deinit();
 
     try dumper2.dump("Test data");
@@ -697,7 +707,7 @@ test "HexDumper - comprehensive flush operations" {
 test "HexDumper - comprehensive multiple dump operations with offset tracking" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Multiple dumps with different sizes
@@ -730,7 +740,7 @@ test "HexDumper - comprehensive error recovery scenarios" {
 
     // Test initialization with invalid directory
     const invalid_path = "/nonexistent/directory/hexdump.txt";
-    try testing.expectError(config.IOControlError.DirectoryNotFound, HexDumper.init(testing.allocator, invalid_path));
+    try testing.expectError(config.IOControlError.DirectoryNotFound, HexDumper.initFromPath(testing.allocator, invalid_path));
 }
 
 test "mapHexDumpFileError - comprehensive error mapping coverage" {
@@ -782,7 +792,7 @@ test "mapHexDumpFileError - comprehensive error mapping coverage" {
 test "HexDumper - comprehensive edge cases and boundary conditions" {
     const testing = std.testing;
 
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Test with exactly 15 bytes (one less than full line)
@@ -817,7 +827,7 @@ test "HexDumper - comprehensive file truncation behavior" {
 
     // First write
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         try dumper.dump("Original content");
@@ -826,7 +836,7 @@ test "HexDumper - comprehensive file truncation behavior" {
 
     // Second write (should truncate)
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         try dumper.dump("New content");
@@ -871,21 +881,21 @@ pub const HexDumperAuto = union(enum) {
     ///
     /// Parameters:
     ///   - allocator: Memory allocator
-    ///   - path: Optional file path (null for stdout-only mode)
+    ///   - cfg: Validated hex dump configuration
     ///
     /// Returns: Initialized HexDumperAuto with best available backend
     ///
     /// Errors: Same as HexDumper.init()
-    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumperAuto {
+    pub fn init(allocator: std.mem.Allocator, cfg: HexDumpConfig) !HexDumperAuto {
         // Try io_uring on Linux 5.1+
         if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
-            const uring_dumper = HexDumperUring.init(allocator, path) catch |err| {
+            const uring_dumper = HexDumperUring.init(allocator, cfg) catch |err| {
                 // Log fallback reason (only in verbose mode)
                 if (std.os.getenv("ZIGCAT_VERBOSE")) |_| {
                     std.debug.print("Note: io_uring hex dump I/O unavailable, using blocking I/O ({})\n", .{err});
                 }
                 // Fallback to blocking
-                return HexDumperAuto{ .blocking = try HexDumper.init(allocator, path) };
+                return HexDumperAuto{ .blocking = try HexDumper.init(allocator, cfg) };
             };
 
             // Check if io_uring was actually enabled
@@ -895,12 +905,17 @@ pub const HexDumperAuto = union(enum) {
                 // io_uring init succeeded but ring is null, use blocking instead
                 var dumper_copy = uring_dumper;
                 dumper_copy.deinit();
-                return HexDumperAuto{ .blocking = try HexDumper.init(allocator, path) };
+                return HexDumperAuto{ .blocking = try HexDumper.init(allocator, cfg) };
             }
         }
 
         // Non-Linux or kernel < 5.1: Use blocking dumper
-        return HexDumperAuto{ .blocking = try HexDumper.init(allocator, path) };
+        return HexDumperAuto{ .blocking = try HexDumper.init(allocator, cfg) };
+    }
+
+    /// Convenience wrapper that parses a raw path into configuration.
+    pub fn initFromPath(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumperAuto {
+        return HexDumperAuto.init(allocator, try parseHexDumpConfig(path));
     }
 
     /// Clean up resources and close file.
@@ -992,7 +1007,8 @@ pub const HexDumperAuto = union(enum) {
 ///
 /// Example:
 /// ```zig
-/// var dumper = try HexDumperUring.init(allocator, "dump.hex");
+/// const cfg = try parseHexDumpConfig("dump.hex");
+/// var dumper = try HexDumperUring.init(allocator, cfg);
 /// defer dumper.deinit();
 ///
 /// try dumper.dump(binary_data);  // Asynchronous hex dump
@@ -1001,7 +1017,7 @@ pub const HexDumperAuto = union(enum) {
 pub const HexDumperUring = struct {
     file: ?std.fs.File = null,
     allocator: std.mem.Allocator,
-    path: ?[]const u8 = null,
+    cfg: HexDumpConfig = .{},
     offset: u64 = 0,
     ring: ?uring_wrapper.UringEventLoop = null,
 
@@ -1016,20 +1032,20 @@ pub const HexDumperUring = struct {
     ///
     /// Parameters:
     ///   - allocator: Memory allocator
-    ///   - path: Optional file path (null for stdout-only mode)
+    ///   - cfg: Validated hex dump configuration
     ///
     /// Returns: Initialized HexDumperUring instance
     ///
     /// Errors: Same as HexDumper.init()
-    pub fn init(allocator: std.mem.Allocator, path: ?[]const u8) !HexDumperUring {
+    pub fn init(allocator: std.mem.Allocator, cfg: HexDumpConfig) !HexDumperUring {
         var dumper = HexDumperUring{
             .allocator = allocator,
-            .path = path,
+            .cfg = cfg,
             .offset = 0,
         };
 
         // Open file if path provided
-        if (path) |file_path| {
+        if (cfg.filePath()) |file_path| {
             dumper.file = try output.openHexDumpFile(file_path);
 
             // Try to initialize io_uring (only on Linux 5.1+)
@@ -1083,12 +1099,12 @@ pub const HexDumperUring = struct {
     fn formatAndWriteLine(self: *HexDumperUring, data: []const u8, offset: u64) !void {
         // Format the hex line (same as blocking version)
         var line_buffer: [80]u8 = undefined;
-        const formatted_line = try formatter.formatHexLine(data, offset, &line_buffer);
+        const formatted_line = try format.formatLine(data, offset, &line_buffer);
 
         // Write to stdout (always blocking, suppress during tests)
         const is_test = @import("builtin").is_test;
         if (!is_test) {
-            std.debug.print("{s}\n", .{formatted_line});
+            std.debug.print("{s}", .{formatted_line});
         }
 
         // Write to file with io_uring (if available)
@@ -1097,17 +1113,15 @@ pub const HexDumperUring = struct {
                 // io_uring path: Asynchronous file write
                 const fd = file.handle;
 
-                // Need to append newline to the formatted line
-                var write_buffer: [81]u8 = undefined;
+                var write_buffer: [80]u8 = undefined;
                 @memcpy(write_buffer[0..formatted_line.len], formatted_line);
-                write_buffer[formatted_line.len] = '\n';
-                const write_data = write_buffer[0 .. formatted_line.len + 1];
+                const write_data = write_buffer[0..formatted_line.len];
 
                 // Submit write operation (offset -1 = current position)
                 ring.submitWriteFile(fd, write_data, -1, USER_DATA_WRITE) catch {
                     // Fallback to blocking write on error
                     return file.writeAll(write_data) catch |err| {
-                        if (self.path) |path| {
+                        if (self.cfg.filePath()) |path| {
                             return output.mapHexDumpFileError(err, path, "write");
                         } else {
                             return config.IOControlError.HexDumpFileWriteFailed;
@@ -1122,7 +1136,7 @@ pub const HexDumperUring = struct {
 
                 // Check for write errors
                 if (cqe.res < 0) {
-                    if (self.path) |path| {
+                    if (self.cfg.filePath()) |path| {
                         std.debug.print("Error: io_uring write failed for hex dump file '{s}'\n", .{path});
                     }
                     return config.IOControlError.HexDumpFileWriteFailed;
@@ -1131,20 +1145,15 @@ pub const HexDumperUring = struct {
                 // Verify all data was written
                 const bytes_written = @as(usize, @intCast(cqe.res));
                 if (bytes_written != write_data.len) {
-                    if (self.path) |path| {
+                    if (self.cfg.filePath()) |path| {
                         std.debug.print("Error: Partial write to hex dump file '{s}' ({d}/{d} bytes)\n", .{ path, bytes_written, write_data.len });
                     }
                     return config.IOControlError.HexDumpFileWriteFailed;
                 }
             } else {
-                // Blocking path: Write formatted line with newline
-                var write_buffer: [81]u8 = undefined;
-                @memcpy(write_buffer[0..formatted_line.len], formatted_line);
-                write_buffer[formatted_line.len] = '\n';
-                const write_data = write_buffer[0 .. formatted_line.len + 1];
-
-                file.writeAll(write_data) catch |err| {
-                    if (self.path) |path| {
+                // Blocking path: Write formatted line directly
+                file.writeAll(formatted_line) catch |err| {
+                    if (self.cfg.filePath()) |path| {
                         return output.mapHexDumpFileError(err, path, "write");
                     } else {
                         return config.IOControlError.HexDumpFileWriteFailed;
@@ -1169,7 +1178,7 @@ pub const HexDumperUring = struct {
                 ring.submitFsync(fd, USER_DATA_FSYNC) catch {
                     // Fallback to blocking sync on error
                     return file.sync() catch |err| {
-                        if (self.path) |path| {
+                        if (self.cfg.filePath()) |path| {
                             return output.mapHexDumpFileError(err, path, "flush");
                         } else {
                             return config.IOControlError.HexDumpFileWriteFailed;
@@ -1184,14 +1193,14 @@ pub const HexDumperUring = struct {
 
                 // Check for fsync errors
                 if (cqe.res != 0) {
-                    if (self.path) |path| {
+                    if (self.cfg.filePath()) |path| {
                         std.debug.print("Error: io_uring fsync failed for hex dump file '{s}'\n", .{path});
                     }
                     return config.IOControlError.HexDumpFileWriteFailed;
                 }
             } else {
                 // Blocking path: Same as original HexDumper
-                if (self.path) |path| {
+                if (self.cfg.filePath()) |path| {
                     try output.flushHexDumpFile(file, path);
                 }
             }
@@ -1205,7 +1214,7 @@ pub const HexDumperUring = struct {
 
     /// Get the configured file path (may be null).
     pub fn getPath(self: *const HexDumperUring) ?[]const u8 {
-        return self.path;
+        return self.cfg.filePath();
     }
 
     /// Get current offset for next dump operation.

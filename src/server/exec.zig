@@ -15,7 +15,7 @@ const builtin = @import("builtin");
 const config = @import("../config.zig");
 const logging = @import("../util/logging.zig");
 
-const session = @import("./exec_session.zig");
+const session = @import("./exec_session/mod.zig");
 const threaded = @import("./exec_threaded.zig");
 const types = @import("./exec_types.zig");
 const platform = @import("../util/platform.zig");
@@ -132,44 +132,15 @@ pub fn executeWithConnection(
         var telnet_conn = try @import("../protocol/telnet_connection.zig").fromConnection(connection, allocator);
         defer telnet_conn.deinit();
 
-        // Try io_uring on Linux 5.1+, fall back to poll-based on other platforms
-        if (platform.isIoUringSupported()) {
-            var exec_session = session.ExecSession.initIoUring(allocator, &telnet_conn, &child, exec_config.session_config) catch |err| {
-                // Fall back to poll if io_uring init fails
-                if (err == error.IoUringNotSupported) {
-                    logging.log(2, "io_uring not supported, falling back to poll\n", .{});
-                    var poll_session = try session.ExecSession.init(allocator, &telnet_conn, &child, exec_config.session_config);
-                    defer poll_session.deinit();
-                    poll_session.run() catch |poll_err| {
-                        closeChildPipes(&child);
-                        _ = child.kill() catch {};
-                        return poll_err;
-                    };
-                    closeChildPipes(&child);
-                    const term = try child.wait();
-                    logChildTermination(term);
-                    return;
-                }
-                return err;
-            };
-            defer exec_session.deinit();
+        // ExecSession.init() automatically selects best backend (io_uring or poll)
+        var exec_session = try session.ExecSession.init(allocator, &telnet_conn, &child, exec_config.session_config);
+        defer exec_session.deinit();
 
-            logging.log(2, "Using io_uring for exec session\n", .{});
-            exec_session.runIoUring() catch |err| {
-                closeChildPipes(&child);
-                _ = child.kill() catch {};
-                return err;
-            };
-        } else {
-            var exec_session = try session.ExecSession.init(allocator, &telnet_conn, &child, exec_config.session_config);
-            defer exec_session.deinit();
-
-            exec_session.run() catch |err| {
-                closeChildPipes(&child);
-                _ = child.kill() catch {};
-                return err;
-            };
-        }
+        exec_session.run() catch |err| {
+            closeChildPipes(&child);
+            _ = child.kill() catch {};
+            return err;
+        };
     }
 
     closeChildPipes(&child);
@@ -288,44 +259,15 @@ pub fn executeWithTelnetConnection(
         _ = child.wait() catch {};
     }
 
-    // Try io_uring on Linux 5.1+, fall back to poll-based on other platforms
-    if (platform.isIoUringSupported()) {
-        var exec_session = session.ExecSession.initIoUring(allocator, telnet_conn, &child, exec_config.session_config) catch |err| {
-            // Fall back to poll if io_uring init fails
-            if (err == error.IoUringNotSupported) {
-                logging.log(2, "io_uring not supported, falling back to poll\n", .{});
-                var poll_session = try session.ExecSession.init(allocator, telnet_conn, &child, exec_config.session_config);
-                defer poll_session.deinit();
-                poll_session.run() catch |poll_err| {
-                    closeChildPipes(&child);
-                    _ = child.kill() catch {};
-                    return poll_err;
-                };
-                closeChildPipes(&child);
-                const term = try child.wait();
-                logChildTermination(term);
-                return;
-            }
-            return err;
-        };
-        defer exec_session.deinit();
+    // ExecSession.init() automatically selects best backend (io_uring or poll)
+    var exec_session = try session.ExecSession.init(allocator, telnet_conn, &child, exec_config.session_config);
+    defer exec_session.deinit();
 
-        logging.log(2, "Using io_uring for Telnet exec session\n", .{});
-        exec_session.runIoUring() catch |err| {
-            closeChildPipes(&child);
-            _ = child.kill() catch {};
-            return err;
-        };
-    } else {
-        var exec_session = try session.ExecSession.init(allocator, telnet_conn, &child, exec_config.session_config);
-        defer exec_session.deinit();
-
-        exec_session.run() catch |err| {
-            closeChildPipes(&child);
-            _ = child.kill() catch {};
-            return err;
-        };
-    }
+    exec_session.run() catch |err| {
+        closeChildPipes(&child);
+        _ = child.kill() catch {};
+        return err;
+    };
 
     closeChildPipes(&child);
 

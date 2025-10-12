@@ -345,7 +345,7 @@ test "TLS transfer - hex dump integration" {
     std.fs.cwd().deleteFile(hex_file) catch {};
     defer std.fs.cwd().deleteFile(hex_file) catch {};
 
-    var hex_dumper = try hexdump.HexDumper.init(allocator, hex_file);
+    var hex_dumper = try hexdump.HexDumper.initFromPath(allocator, hex_file);
     defer hex_dumper.deinit();
 
     const test_data = "TLS hex dump test";

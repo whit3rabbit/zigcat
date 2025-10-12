@@ -20,6 +20,7 @@ const expectEqual = testing.expectEqual;
 const expectEqualStrings = testing.expectEqualStrings;
 const expectError = testing.expectError;
 const builtin = @import("builtin");
+const test_artifacts = @import("utils/test_artifacts.zig");
 
 // =============================================================================
 // SIMPLIFIED OUTPUT LOGGER FOR TESTING
@@ -157,14 +158,15 @@ const TestHexDumper = struct {
 
 test "performance - large file transfer with output logging" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test with progressively larger data sizes
     const test_sizes = [_]usize{ 1024, 10 * 1024, 100 * 1024, 1024 * 1024 }; // 1KB to 1MB
 
     for (test_sizes) |size| {
-        const test_output = "large_transfer_performance.tmp";
-        std.fs.cwd().deleteFile(test_output) catch {};
-        defer std.fs.cwd().deleteFile(test_output) catch {};
+        const test_output = try artifacts.makePath("large_transfer_{d}.tmp", .{size});
+        defer allocator.free(test_output);
 
         // Create test data
         const test_data = try allocator.alloc(u8, size);
@@ -214,14 +216,15 @@ test "performance - large file transfer with output logging" {
 
 test "performance - large file transfer with hex dump" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test hex dump performance with various data sizes
     const test_sizes = [_]usize{ 1024, 4096, 16384 }; // Smaller sizes for hex dump due to expansion
 
     for (test_sizes) |size| {
-        const test_hexdump = "large_hexdump_performance.tmp";
-        std.fs.cwd().deleteFile(test_hexdump) catch {};
-        defer std.fs.cwd().deleteFile(test_hexdump) catch {};
+        const test_hexdump = try artifacts.makePath("large_hexdump_{d}.tmp", .{size});
+        defer allocator.free(test_hexdump);
 
         // Create binary test data with varied patterns
         const test_data = try allocator.alloc(u8, size);
@@ -271,17 +274,16 @@ test "performance - large file transfer with hex dump" {
 
 test "performance - concurrent file operations" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test concurrent output logging and hex dump operations
     const test_data = "Concurrent operation test data with various characters: !@#$%^&*()_+{}|:<>?[]\\;'\",./" ** 10;
 
-    const output_file = "concurrent_output.tmp";
-    const hexdump_file = "concurrent_hexdump.tmp";
-
-    std.fs.cwd().deleteFile(output_file) catch {};
-    std.fs.cwd().deleteFile(hexdump_file) catch {};
-    defer std.fs.cwd().deleteFile(output_file) catch {};
-    defer std.fs.cwd().deleteFile(hexdump_file) catch {};
+    const output_file = try artifacts.relativePath("concurrent_output.tmp");
+    defer allocator.free(output_file);
+    const hexdump_file = try artifacts.relativePath("concurrent_hexdump.tmp");
+    defer allocator.free(hexdump_file);
 
     const start_time = std.time.nanoTimestamp();
 
@@ -332,6 +334,8 @@ test "performance - concurrent file operations" {
 
 test "performance - binary data patterns" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test various binary data patterns that might cause performance issues
     const test_patterns = [_]struct {
@@ -351,15 +355,10 @@ test "performance - binary data patterns" {
     defer allocator.free(test_data);
 
     for (test_patterns) |pattern| {
-        const output_file = try std.fmt.allocPrint(allocator, "binary_{s}_output.tmp", .{pattern.name});
+        const output_file = try artifacts.makePath("binary_{s}_output.tmp", .{pattern.name});
         defer allocator.free(output_file);
-        const hexdump_file = try std.fmt.allocPrint(allocator, "binary_{s}_hexdump.tmp", .{pattern.name});
+        const hexdump_file = try artifacts.makePath("binary_{s}_hexdump.tmp", .{pattern.name});
         defer allocator.free(hexdump_file);
-
-        std.fs.cwd().deleteFile(output_file) catch {};
-        std.fs.cwd().deleteFile(hexdump_file) catch {};
-        defer std.fs.cwd().deleteFile(output_file) catch {};
-        defer std.fs.cwd().deleteFile(hexdump_file) catch {};
 
         // Generate test pattern
         pattern.generator(test_data);
@@ -414,17 +413,16 @@ test "performance - binary data patterns" {
 
 test "performance - null byte handling" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test handling of data with embedded null bytes
     const test_data = [_]u8{ 'H', 'e', 'l', 'l', 'o', 0, 'W', 'o', 'r', 'l', 'd', 0, 0, 0, 'E', 'n', 'd' };
 
-    const output_file = "null_bytes_output.tmp";
-    const hexdump_file = "null_bytes_hexdump.tmp";
-
-    std.fs.cwd().deleteFile(output_file) catch {};
-    std.fs.cwd().deleteFile(hexdump_file) catch {};
-    defer std.fs.cwd().deleteFile(output_file) catch {};
-    defer std.fs.cwd().deleteFile(hexdump_file) catch {};
+    const output_file = try artifacts.relativePath("null_bytes_output.tmp");
+    defer allocator.free(output_file);
+    const hexdump_file = try artifacts.relativePath("null_bytes_hexdump.tmp");
+    defer allocator.free(hexdump_file);
 
     // Test output logging with null bytes
     var output_logger = try TestOutputLogger.init(allocator, output_file, false);
@@ -470,6 +468,8 @@ test "performance - null byte handling" {
 
 test "performance - memory usage under load" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test memory usage with multiple simultaneous operations
     const num_operations = 10;
@@ -481,7 +481,7 @@ test "performance - memory usage under load" {
     var hex_dumpers = try allocator.alloc(TestHexDumper, num_operations);
     defer allocator.free(hex_dumpers);
 
-    var file_paths = try allocator.alloc([]u8, num_operations * 2);
+    var file_paths = try allocator.alloc([]const u8, num_operations * 2);
     defer {
         for (file_paths) |path| {
             allocator.free(path);
@@ -491,11 +491,8 @@ test "performance - memory usage under load" {
 
     // Initialize multiple loggers and hex dumpers
     for (0..num_operations) |i| {
-        file_paths[i * 2] = try std.fmt.allocPrint(allocator, "memory_test_output_{d}.tmp", .{i});
-        file_paths[i * 2 + 1] = try std.fmt.allocPrint(allocator, "memory_test_hexdump_{d}.tmp", .{i});
-
-        std.fs.cwd().deleteFile(file_paths[i * 2]) catch {};
-        std.fs.cwd().deleteFile(file_paths[i * 2 + 1]) catch {};
+        file_paths[i * 2] = try artifacts.makePath("memory_test_output_{d}.tmp", .{i});
+        file_paths[i * 2 + 1] = try artifacts.makePath("memory_test_hexdump_{d}.tmp", .{i});
 
         loggers[i] = try TestOutputLogger.init(allocator, file_paths[i * 2], false);
         hex_dumpers[i] = try TestHexDumper.init(allocator, file_paths[i * 2 + 1]);
@@ -506,8 +503,6 @@ test "performance - memory usage under load" {
         for (0..num_operations) |i| {
             loggers[i].deinit();
             hex_dumpers[i].deinit();
-            std.fs.cwd().deleteFile(file_paths[i * 2]) catch {};
-            std.fs.cwd().deleteFile(file_paths[i * 2 + 1]) catch {};
         }
     }
 
@@ -553,17 +548,19 @@ test "performance - memory usage under load" {
 
 test "performance - resource cleanup verification" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test that resources are properly cleaned up even under error conditions
-    const test_files = [_][]const u8{
-        "cleanup_test_1.tmp",
-        "cleanup_test_2.tmp",
-        "cleanup_test_3.tmp",
+    var test_files = [_][]const u8{
+        try artifacts.relativePath("cleanup_test_1.tmp"),
+        try artifacts.relativePath("cleanup_test_2.tmp"),
+        try artifacts.relativePath("cleanup_test_3.tmp"),
     };
-
-    // Clean up any existing files
-    for (test_files) |file| {
-        std.fs.cwd().deleteFile(file) catch {};
+    defer {
+        for (&test_files) |path| {
+            allocator.free(path);
+        }
     }
 
     // Test normal cleanup
@@ -600,17 +597,15 @@ test "performance - resource cleanup verification" {
     }
 
     // Clean up test files
-    for (test_files) |file| {
-        std.fs.cwd().deleteFile(file) catch {};
-    }
 }
 
 test "performance - append mode performance" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
-    const test_file = "append_performance.tmp";
-    std.fs.cwd().deleteFile(test_file) catch {};
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    const test_file = try artifacts.relativePath("append_performance.tmp");
+    defer allocator.free(test_file);
 
     const chunk_size = 1024;
     const num_chunks = 10;
@@ -660,26 +655,23 @@ test "performance - append mode performance" {
 
 test "compatibility - cross-platform path handling" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test various path formats that should work across platforms
-    const test_paths = [_][]const u8{
-        "simple_file.tmp",
-        "file_with_spaces.tmp",
-        "file-with-dashes.tmp",
-        "file_with_underscores.tmp",
-        "file.with.dots.tmp",
-        "UPPERCASE_FILE.tmp",
-        "lowercase_file.tmp",
-        "MixedCase_File.tmp",
+    var test_paths = [_][]const u8{
+        try artifacts.relativePath("simple_file.tmp"),
+        try artifacts.relativePath("file_with_spaces.tmp"),
+        try artifacts.relativePath("file-with-dashes.tmp"),
+        try artifacts.relativePath("file_with_underscores.tmp"),
+        try artifacts.relativePath("file.with.dots.tmp"),
+        try artifacts.relativePath("UPPERCASE_FILE.tmp"),
+        try artifacts.relativePath("lowercase_file.tmp"),
+        try artifacts.relativePath("MixedCase_File.tmp"),
     };
-
-    // Clean up any existing files
-    for (test_paths) |path| {
-        std.fs.cwd().deleteFile(path) catch {};
-    }
     defer {
         for (test_paths) |path| {
-            std.fs.cwd().deleteFile(path) catch {};
+            allocator.free(path);
         }
     }
 
@@ -706,10 +698,11 @@ test "compatibility - cross-platform path handling" {
 
 test "compatibility - file permissions and access" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
-    const test_file = "permissions_test.tmp";
-    std.fs.cwd().deleteFile(test_file) catch {};
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    const test_file = try artifacts.relativePath("permissions_test.tmp");
+    defer allocator.free(test_file);
 
     // Test file creation with default permissions
     {
@@ -741,11 +734,12 @@ test "compatibility - file permissions and access" {
 
 test "compatibility - platform-specific behavior" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test behavior that might vary across platforms
-    const test_file = "platform_behavior.tmp";
-    std.fs.cwd().deleteFile(test_file) catch {};
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    const test_file = try artifacts.relativePath("platform_behavior.tmp");
+    defer allocator.free(test_file);
 
     // Test line ending handling
     const test_data = switch (builtin.os.tag) {
@@ -771,9 +765,8 @@ test "compatibility - platform-specific behavior" {
     // Test that we can handle both line ending styles regardless of platform
     const mixed_endings = "Unix line\nWindows line\r\nMac line\r";
 
-    const mixed_file = "mixed_endings.tmp";
-    std.fs.cwd().deleteFile(mixed_file) catch {};
-    defer std.fs.cwd().deleteFile(mixed_file) catch {};
+    const mixed_file = try artifacts.relativePath("mixed_endings.tmp");
+    defer allocator.free(mixed_file);
 
     var mixed_logger = try TestOutputLogger.init(allocator, mixed_file, false);
     defer mixed_logger.deinit();
@@ -793,6 +786,8 @@ test "compatibility - platform-specific behavior" {
 
 test "compatibility - unicode and special characters" {
     const allocator = testing.allocator;
+    var artifacts = test_artifacts.ArtifactDir.init(allocator);
+    defer artifacts.deinit();
 
     // Test handling of various character encodings and special characters
     const test_cases = [_]struct {
@@ -806,15 +801,10 @@ test "compatibility - unicode and special characters" {
     };
 
     for (test_cases) |test_case| {
-        const output_file = try std.fmt.allocPrint(allocator, "unicode_{s}_output.tmp", .{test_case.name});
+        const output_file = try artifacts.makePath("unicode_{s}_output.tmp", .{test_case.name});
         defer allocator.free(output_file);
-        const hexdump_file = try std.fmt.allocPrint(allocator, "unicode_{s}_hexdump.tmp", .{test_case.name});
+        const hexdump_file = try artifacts.makePath("unicode_{s}_hexdump.tmp", .{test_case.name});
         defer allocator.free(hexdump_file);
-
-        std.fs.cwd().deleteFile(output_file) catch {};
-        std.fs.cwd().deleteFile(hexdump_file) catch {};
-        defer std.fs.cwd().deleteFile(output_file) catch {};
-        defer std.fs.cwd().deleteFile(hexdump_file) catch {};
 
         // Test output logging
         var logger = try TestOutputLogger.init(allocator, output_file, false);

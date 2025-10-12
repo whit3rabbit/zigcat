@@ -259,7 +259,7 @@ fn handleUnixSocketClient(
     };
     defer output_logger.deinit();
 
-    var hex_dumper = hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file) catch |err| {
+    var hex_dumper = hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file) catch |err| {
         common.handleIOInitError(cfg, err, "hex dumper");
         return err;
     };

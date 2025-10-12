@@ -19,6 +19,11 @@ const ExecError = @import("./exec_types.zig").ExecError;
 const TelnetConnection = @import("../protocol/telnet_connection.zig").TelnetConnection;
 const UringEventLoop = @import("../util/io_uring_wrapper.zig").UringEventLoop;
 
+// Phase 1 refactoring: Extracted modules
+const flow_control = @import("./exec_session/flow_control.zig");
+const FlowState = flow_control.FlowState;
+const computeThresholdBytes = flow_control.computeThresholdBytes;
+
 /// Set a POSIX file descriptor to non-blocking mode.
 fn setFdNonBlocking(fd: posix.fd_t) !void {
     if (builtin.os.tag == .windows) {
@@ -32,42 +37,6 @@ fn setFdNonBlocking(fd: posix.fd_t) !void {
         else => 0x0004, // BSD/macOS default
     };
     _ = try posix.fcntl(fd, posix.F.SETFL, flags | o_nonblock);
-}
-
-/// Flow control state machine for exec session buffers.
-const FlowState = struct {
-    pause_threshold_bytes: usize,
-    resume_threshold_bytes: usize,
-    paused: bool = false,
-
-    /// Update state based on current buffered byte count.
-    pub fn update(self: *FlowState, buffered_bytes: usize) void {
-        if (!self.paused and buffered_bytes >= self.pause_threshold_bytes) {
-            self.paused = true;
-        } else if (self.paused and buffered_bytes <= self.resume_threshold_bytes) {
-            self.paused = false;
-        }
-    }
-
-    /// Whether flow control currently pauses new reads.
-    pub fn shouldPause(self: *const FlowState) bool {
-        return self.paused;
-    }
-};
-
-/// Compute flow control threshold in bytes from percentage.
-fn computeThresholdBytes(max_total: usize, percent: f32) usize {
-    if (max_total == 0) return 0;
-    var clamped = percent;
-    if (clamped < 0.0) clamped = 0.0;
-    if (clamped > 1.0) clamped = 1.0;
-
-    const total_f64 = @as(f64, @floatFromInt(max_total));
-    const raw = total_f64 * @as(f64, clamped);
-    var threshold: usize = @intFromFloat(raw);
-    if (threshold == 0 and clamped > 0.0) threshold = 1;
-    if (threshold > max_total) threshold = max_total;
-    return threshold;
 }
 
 /// Manages the I/O loop for a command execution session, relaying data between

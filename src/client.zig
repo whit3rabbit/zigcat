@@ -322,7 +322,7 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     var output_logger = try output.OutputLoggerAuto.init(allocator, cfg.output_file, cfg.append_output);
     defer output_logger.deinit();
 
-    var hex_dumper = try hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file);
+    var hex_dumper = try hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file);
     defer hex_dumper.deinit();
 
     // Handle Telnet protocol mode
@@ -676,7 +676,7 @@ fn runUnixSocketClient(allocator: std.mem.Allocator, cfg: *const config.Config, 
     var output_logger = try output.OutputLoggerAuto.init(allocator, cfg.output_file, cfg.append_output);
     defer output_logger.deinit();
 
-    var hex_dumper = try hexdump.HexDumperAuto.init(allocator, cfg.hex_dump_file);
+    var hex_dumper = try hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file);
     defer hex_dumper.deinit();
 
     // Handle Telnet protocol mode for Unix sockets

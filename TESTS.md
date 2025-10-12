@@ -6,7 +6,7 @@ This document provides comprehensive information about the Zigcat test suite, in
 
 ```bash
 # Run all tests
-zig build test                    # Unit tests (20 tests, ~2s)
+zig build test                    # Core unit tests (~2s)
 zig build test-timeout            # Timeout tests (10 tests)
 zig build test-features           # All feature tests
 zig build test-validation         # Memory safety tests (13 tests)
@@ -24,7 +24,7 @@ zig build test-portscan-uring     # io_uring compile-time tests (7 tests)
 
 ### Unit Tests (built into src/)
 
-**Test Count**: 20 tests
+**Test Count**: dynamic (`zig build test` aggregates all built-in tests)
 **Build Command**: `zig build test`
 **Coverage**: Core functionality embedded in source files
 **Runtime**: ~2 seconds
@@ -35,6 +35,7 @@ Tests are embedded in source files using `test "name" { }` blocks. These tests v
 - Network protocol handlers
 - TLS functionality
 - Utility functions
+- Hex dump formatting, ASCII sanitisation, and configuration parsing
 
 ### Standalone Test Suites
 
@@ -219,6 +220,77 @@ test "io_uring initialization attempt" {
 **Build Command**: `zig build test-ssl`
 **Purpose**: Comprehensive SSL/TLS testing (cert generation, handshake, error handling)
 
+### Exec Session Module Tests
+
+#### Exec Session Modules (NEW)
+**Location**: `src/server/exec_session/`
+**Test Count**: 17 unit tests embedded in modules
+**Build Command**: `zig build test` (includes all module tests)
+**Purpose**: Validate modular exec session architecture
+
+**Module Test Breakdown**:
+
+1. **flow_control.zig** - 5 tests
+   - Flow state pause/resume logic
+   - Threshold calculation (75%/25% hysteresis)
+   - Edge cases (zero buffers, 100% threshold)
+   - Precision handling
+
+2. **state.zig** - 5 tests
+   - Generic SessionState instantiation
+   - Stream closure tracking
+   - Buffer management
+   - IoRingBuffer integration
+   - Mock buffer type support
+
+3. **socket_io.zig** - 2 tests
+   - SocketReadContext validation
+   - SocketWriteContext validation
+   - Compile-time type safety
+
+4. **child_io.zig** - 3 tests
+   - ChildReadContext validation
+   - ChildWriteContext validation
+   - Stream closure handling
+   - Compile-time type safety
+
+5. **mod.zig** - 2 tests
+   - ExecSession union type validation
+   - Backend dispatch (poll vs uring)
+
+**Test Strategy**:
+- **poll_backend.zig** and **uring_backend.zig**: Integration-heavy modules tested via end-to-end exec mode tests (no dedicated unit tests)
+- **Helper modules**: Focused unit tests for reusable I/O logic
+- **Flow control**: Edge case testing for threshold calculations
+- **State management**: Generic type parameter validation
+
+**Example Test (flow_control.zig)**:
+```zig
+test "FlowState pause and resume with hysteresis" {
+    var flow = FlowState{
+        .pause_threshold_bytes = 7500,   // 75%
+        .resume_threshold_bytes = 2500,  // 25%
+        .paused = false,
+    };
+
+    flow.update(8000);  // Above pause threshold
+    try testing.expect(flow.shouldPause());
+
+    flow.update(3000);  // Between thresholds (stays paused)
+    try testing.expect(flow.shouldPause());
+
+    flow.update(2000);  // Below resume threshold
+    try testing.expect(!flow.shouldPause());
+}
+```
+
+**Architecture Benefits**:
+- ✅ Each module has focused unit tests
+- ✅ Backend modules tested via integration (realistic scenarios)
+- ✅ Generic types validated at compile time
+- ✅ Context structs ensure type safety
+- ✅ All tests pass via `zig build test`
+
 ### Thread Lifecycle Tests
 
 #### Exec Thread Lifecycle
@@ -270,6 +342,13 @@ stdin_thread.join();  // PANIC: Thread already terminated
 | src/net/udp.zig | Embedded | 5 (UDP) | 5+ |
 | src/tls/* | Embedded | 31 (SSL) | 31+ |
 | src/server/exec.zig | Embedded | Thread lifecycle | 5+ |
+| **src/server/exec_session/** | **17 (6 modules)** | **-** | **17** |
+| ├─ flow_control.zig | 5 | - | 5 |
+| ├─ state.zig | 5 | - | 5 |
+| ├─ socket_io.zig | 2 | - | 2 |
+| ├─ child_io.zig | 3 | - | 3 |
+| ├─ mod.zig | 2 | - | 2 |
+| └─ poll/uring backends | Integration tests | - | - |
 
 ## Running Tests
 
@@ -385,6 +464,7 @@ When creating a new test suite:
 | **Category** | **Test Count** |
 |--------------|----------------|
 | Unit Tests (src/) | 20 |
+| Exec Session Modules | 17 |
 | Timeout Tests | 10 |
 | UDP Tests | 5 |
 | Zero-I/O Tests | 6 |
@@ -396,7 +476,7 @@ When creating a new test suite:
 | Shell Memory Tests | 5 |
 | SSL/TLS Tests | 31 |
 | **Total Standalone** | **~124** |
-| **Grand Total** | **~144+** |
+| **Grand Total** | **~161+** |
 
 ## CI/CD Integration
 

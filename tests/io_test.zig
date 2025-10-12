@@ -462,7 +462,7 @@ test "OutputLogger - binary data handling" {
 
 test "HexDumper - initialization and basic properties" {
     // Test with no file path
-    var dumper1 = try HexDumper.init(testing.allocator, null);
+    var dumper1 = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper1.deinit();
 
     try expect(!dumper1.isFileEnabled());
@@ -474,7 +474,7 @@ test "HexDumper - initialization and basic properties" {
     std.fs.cwd().deleteFile(test_file) catch {};
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
-    var dumper2 = try HexDumper.init(testing.allocator, test_file);
+    var dumper2 = try HexDumper.initFromPath(testing.allocator, test_file);
     defer dumper2.deinit();
 
     try expect(dumper2.isFileEnabled());
@@ -482,11 +482,11 @@ test "HexDumper - initialization and basic properties" {
 }
 
 test "HexDumper - empty path validation" {
-    try expectError(config.IOControlError.InvalidOutputPath, HexDumper.init(testing.allocator, ""));
+    try expectError(config.IOControlError.InvalidOutputPath, HexDumper.initFromPath(testing.allocator, ""));
 }
 
 test "HexDumper - offset tracking without file" {
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     try expectEqual(@as(u64, 0), dumper.getOffset());
@@ -502,7 +502,7 @@ test "HexDumper - offset tracking without file" {
 }
 
 test "HexDumper - dump without file" {
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Should not error when no file is configured
@@ -516,7 +516,7 @@ test "HexDumper - file output functionality" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         const test_data = "Hello, World!";
@@ -545,7 +545,7 @@ test "HexDumper - formatting accuracy for short data" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Test with exactly 16 bytes
@@ -575,7 +575,7 @@ test "HexDumper - formatting accuracy for long data" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Test with more than 16 bytes (should create multiple lines)
@@ -609,7 +609,7 @@ test "HexDumper - binary data with non-printable characters" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Test with binary data (all bytes 0x00-0x0F)
@@ -641,7 +641,7 @@ test "HexDumper - mixed printable and non-printable data" {
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     {
-        var dumper = try HexDumper.init(testing.allocator, test_file);
+        var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
         defer dumper.deinit();
 
         // Mix of printable and non-printable characters
@@ -665,7 +665,7 @@ test "HexDumper - mixed printable and non-printable data" {
 }
 
 test "HexDumper - flush operations without file" {
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // Should not error when no file is configured
@@ -673,7 +673,7 @@ test "HexDumper - flush operations without file" {
 }
 
 test "HexDumper - multiple dump operations with offset tracking" {
-    var dumper = try HexDumper.init(testing.allocator, null);
+    var dumper = try HexDumper.initFromPath(testing.allocator, null);
     defer dumper.deinit();
 
     // First dump
@@ -741,7 +741,7 @@ test "Integration - CLI to Config to HexDumper" {
     std.fs.cwd().deleteFile(test_file) catch {};
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
-    var dumper = try HexDumper.init(testing.allocator, test_file);
+    var dumper = try HexDumper.initFromPath(testing.allocator, test_file);
     defer dumper.deinit();
 
     try dumper.dump("Integration hex test");
@@ -777,7 +777,7 @@ test "Integration - complete I/O control workflow" {
     var logger = try OutputLogger.init(testing.allocator, cfg.output_file, cfg.append_output);
     defer logger.deinit();
 
-    var dumper = try HexDumper.init(testing.allocator, cfg.hex_dump_file);
+    var dumper = try HexDumper.initFromPath(testing.allocator, cfg.hex_dump_file);
     defer dumper.deinit();
 
     // Simulate data processing

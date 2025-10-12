@@ -39,6 +39,25 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Windows API declarations for CPU monitoring
+const WindowsCpuMonitor = if (builtin.os.tag == .windows) struct {
+    const windows = std.os.windows;
+    const FILETIME = windows.FILETIME;
+    const BOOL = windows.BOOL;
+
+    // GetSystemTimes extern declaration
+    pub extern "kernel32" fn GetSystemTimes(
+        lpIdleTime: ?*FILETIME,
+        lpKernelTime: ?*FILETIME,
+        lpUserTime: ?*FILETIME,
+    ) callconv(windows.WINAPI) BOOL;
+
+    // Convert FILETIME to u64 (100-nanosecond intervals)
+    pub fn fileTimeToU64(ft: FILETIME) u64 {
+        return (@as(u64, ft.dwHighDateTime) << 32) | @as(u64, ft.dwLowDateTime);
+    }
+} else struct {};
+
 /// Performance monitoring configuration
 pub const PerformanceConfig = struct {
     /// Monitoring interval in milliseconds
@@ -315,6 +334,12 @@ pub const PerformanceMonitor = struct {
     prev_network_rx: u64 = 0,
     prev_network_tx: u64 = 0,
     prev_network_time: i64 = 0,
+    /// Windows CPU monitoring state (only used on Windows)
+    prev_idle_time: u64 = 0,
+    prev_kernel_time: u64 = 0,
+    prev_user_time: u64 = 0,
+    /// macOS/FreeBSD CPU monitoring state (only used on macOS/FreeBSD)
+    prev_cpu_ticks: ?[5]c_long = null,
 
     /// Initialize performance monitor
     pub fn init(allocator: std.mem.Allocator, config: PerformanceConfig) !PerformanceMonitor {
@@ -493,8 +518,7 @@ pub const PerformanceMonitor = struct {
     fn collectMacOSMemoryInfo(self: *PerformanceMonitor, snapshot: *ResourceSnapshot) void {
         _ = self;
 
-        // Use sysctl to get real memory information on macOS
-        // hw.memsize gives total physical memory
+        // Step 1: Get total physical memory via sysctl (hw.memsize)
         var total_mem: u64 = 0;
         var len: usize = @sizeOf(u64);
         const hw_memsize = [_]c_int{ 6, 24 }; // CTL_HW, HW_MEMSIZE
@@ -506,12 +530,41 @@ pub const PerformanceMonitor = struct {
             snapshot.available_memory = 8 * 1024 * 1024 * 1024; // Assume 8GB
         }
 
-        // Get VM statistics for memory usage
-        // On macOS, we approximate usage from vm.swapusage or use basic heuristic
-        // vm.swapusage is more complex (requires parsing), so we'll use host_statistics
-        // For simplicity, estimate memory usage as 25% of total (typical for idle system)
-        snapshot.memory_usage = snapshot.available_memory / 4;
-        snapshot.calculateMemoryPercent(snapshot.available_memory);
+        // Step 2: Get actual memory usage via host_statistics64
+        const c = @cImport({
+            @cInclude("mach/mach.h");
+            @cInclude("mach/vm_statistics.h");
+            @cInclude("unistd.h");
+        });
+
+        var vm_stat: c.vm_statistics64_data_t = undefined;
+        var count: c.mach_msg_type_number_t = @intCast(@sizeOf(c.vm_statistics64_data_t) / @sizeOf(c_int));
+        const host_port = c.mach_host_self();
+
+        const result = c.host_statistics64(
+            host_port,
+            c.HOST_VM_INFO64,
+            @as(c.host_info64_t, @ptrCast(&vm_stat)),
+            &count,
+        );
+
+        if (result == c.KERN_SUCCESS) {
+            // Get page size (typically 4096 bytes on x86_64, 16384 on ARM64)
+            const page_size: u64 = @intCast(c.sysconf(c._SC_PAGE_SIZE));
+
+            // Calculate memory usage: (active + wired + compressed) × page_size
+            // This matches Activity Monitor's "Memory Used" calculation
+            const used_pages: u64 = vm_stat.active_count +
+                vm_stat.wire_count +
+                vm_stat.compressor_page_count;
+
+            snapshot.memory_usage = used_pages * page_size;
+            snapshot.calculateMemoryPercent(snapshot.available_memory);
+        } else {
+            // Fallback to estimate if host_statistics64 fails
+            snapshot.memory_usage = snapshot.available_memory / 4;
+            snapshot.calculateMemoryPercent(snapshot.available_memory);
+        }
     }
 
     /// Collect basic memory information (fallback)
@@ -527,13 +580,16 @@ pub const PerformanceMonitor = struct {
 
     /// Collect CPU information
     fn collectCpuInfo(self: *PerformanceMonitor, snapshot: *ResourceSnapshot) void {
-
         // Platform-specific CPU collection
         if (builtin.os.tag == .linux) {
             self.collectLinuxCpuInfo(snapshot);
+        } else if (builtin.os.tag == .windows) {
+            self.collectWindowsCpuInfo(snapshot);
+        } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
+            self.collectCpuInfoSysctl(snapshot);
         } else {
-            // Fallback: use a simple estimate
-            snapshot.cpu_percent = 10.0; // Placeholder
+            // Fallback: use a simple estimate for unsupported platforms
+            snapshot.cpu_percent = 0.0;
         }
     }
 
@@ -555,6 +611,110 @@ pub const PerformanceMonitor = struct {
             // Convert load average to approximate CPU percentage
             snapshot.cpu_percent = @min(snapshot.load_average * 100.0, 100.0);
         }
+    }
+
+    /// Collect Windows CPU information using GetSystemTimes
+    fn collectWindowsCpuInfo(self: *PerformanceMonitor, snapshot: *ResourceSnapshot) void {
+        if (builtin.os.tag != .windows) return;
+
+        const windows = std.os.windows;
+        var idle_time: windows.FILETIME = undefined;
+        var kernel_time: windows.FILETIME = undefined;
+        var user_time: windows.FILETIME = undefined;
+
+        // Call GetSystemTimes
+        const result = WindowsCpuMonitor.GetSystemTimes(&idle_time, &kernel_time, &user_time);
+        if (result == 0) {
+            // API call failed, use fallback
+            snapshot.cpu_percent = 0.0;
+            return;
+        }
+
+        // Convert FILETIME to u64
+        const idle = WindowsCpuMonitor.fileTimeToU64(idle_time);
+        const kernel = WindowsCpuMonitor.fileTimeToU64(kernel_time);
+        const user = WindowsCpuMonitor.fileTimeToU64(user_time);
+
+        // First call - initialize previous values
+        if (self.prev_kernel_time == 0) {
+            self.prev_idle_time = idle;
+            self.prev_kernel_time = kernel;
+            self.prev_user_time = user;
+            snapshot.cpu_percent = 0.0;
+            return;
+        }
+
+        // Calculate deltas
+        const idle_delta = idle - self.prev_idle_time;
+        const kernel_delta = kernel - self.prev_kernel_time;
+        const user_delta = user - self.prev_user_time;
+
+        // Total system time = kernel + user (kernel already includes idle)
+        const total_delta = kernel_delta + user_delta;
+
+        // Calculate CPU usage percentage
+        if (total_delta > 0) {
+            const cpu_load = 1.0 - (@as(f64, @floatFromInt(idle_delta)) / @as(f64, @floatFromInt(total_delta)));
+            snapshot.cpu_percent = @as(f32, @floatCast(@max(0.0, @min(100.0, cpu_load * 100.0))));
+        } else {
+            snapshot.cpu_percent = 0.0;
+        }
+
+        // Update previous values for next poll
+        self.prev_idle_time = idle;
+        self.prev_kernel_time = kernel;
+        self.prev_user_time = user;
+    }
+
+    /// Collect macOS/FreeBSD CPU information using sysctl (kern.cp_time)
+    fn collectCpuInfoSysctl(self: *PerformanceMonitor, snapshot: *ResourceSnapshot) void {
+        const c = @cImport({
+            @cInclude("sys/types.h");
+            @cInclude("sys/sysctl.h");
+        });
+
+        _ = 0; // CP_USER (unused, reserved for future use)
+        _ = 1; // CP_NICE (unused, reserved for future use)
+        _ = 2; // CP_SYS (unused, reserved for future use)
+        _ = 3; // CP_INTR (unused, reserved for future use)
+        const CP_IDLE = 4;
+        const CPUSTATES = 5;
+
+        var cur_ticks: [CPUSTATES]c_long = undefined;
+        var len: usize = @sizeOf(@TypeOf(cur_ticks));
+
+        // Call sysctlbyname to get CPU time counters
+        if (c.sysctlbyname("kern.cp_time", &cur_ticks, &len, null, 0) < 0) {
+            snapshot.cpu_percent = 0.0;
+            return;
+        }
+
+        // Calculate CPU percentage if we have a previous sample
+        if (self.prev_cpu_ticks) |prev| {
+            var deltas: [CPUSTATES]i64 = undefined;
+            var total_delta: i64 = 0;
+
+            // Calculate deltas for each CPU state
+            for (0..CPUSTATES) |i| {
+                deltas[i] = cur_ticks[i] - prev[i];
+                total_delta += deltas[i];
+            }
+
+            // Calculate CPU usage percentage
+            if (total_delta > 0) {
+                const idle_delta = @as(f64, @floatFromInt(deltas[CP_IDLE]));
+                const total = @as(f64, @floatFromInt(total_delta));
+                snapshot.cpu_percent = @as(f32, @floatCast(100.0 - (idle_delta / total * 100.0)));
+            } else {
+                snapshot.cpu_percent = 0.0;
+            }
+        } else {
+            // First sample - no previous data, return 0%
+            snapshot.cpu_percent = 0.0;
+        }
+
+        // Save current ticks for next iteration
+        self.prev_cpu_ticks = cur_ticks;
     }
 
     /// Collect network information

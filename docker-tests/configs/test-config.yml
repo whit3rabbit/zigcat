@@ -76,6 +76,156 @@ test_suites:
       - broker-mode-test
     enabled: true
 
+  timeout_tests:
+    description: "Timeout handling tests (10 tests)"
+    timeout: 60
+    zig_build_target: "test-timeout"
+    tests:
+      - tcp-connect-timeout
+      - idle-timeout
+      - poll-timeout-enforcement
+      - tty-timeout-behavior
+      - timeout-value-conversion
+    enabled: true
+
+  udp_tests:
+    description: "UDP server functionality (5 tests)"
+    timeout: 30
+    zig_build_target: "test-udp"
+    tests:
+      - udp-socket-creation
+      - udp-bind-listen
+      - udp-send-receive
+      - udp-timeout
+      - udp-error-conditions
+    enabled: true
+
+  zero_io_tests:
+    description: "Zero-I/O port scanning (6 tests)"
+    timeout: 60
+    zig_build_target: "test-zero-io"
+    tests:
+      - port-scan-basics
+      - connection-only-mode
+      - scan-result-accuracy
+      - scan-timeout-enforcement
+      - scan-error-handling
+    enabled: true
+
+  quit_eof_tests:
+    description: "Quit-after-EOF tests (9 tests)"
+    timeout: 45
+    zig_build_target: "test-quit-eof"
+    tests:
+      - eof-detection
+      - clean-shutdown
+      - bidirectional-eof
+      - resource-cleanup
+      - eof-edge-cases
+    enabled: true
+
+  platform_tests:
+    description: "Platform detection and kernel version parsing (20 tests)"
+    timeout: 30
+    zig_build_target: "test-platform"
+    tests:
+      - kernel-version-parsing
+      - ubuntu-format
+      - fedora-format
+      - rhel-format
+      - arch-format
+      - version-comparison
+      - io_uring-availability
+      - platform-detection
+    enabled: true
+
+  portscan_tests:
+    description: "Port scanning features (23 tests)"
+    timeout: 60
+    zig_build_target: "test-portscan-features"
+    tests:
+      - port-randomization
+      - fisher-yates-shuffle
+      - inter-scan-delays
+      - sequential-auto-selection
+      - parallel-auto-selection
+      - thread-pool-management
+      - result-consistency
+    enabled: true
+
+  portscan_uring_tests:
+    description: "io_uring compile-time tests (7 tests)"
+    timeout: 30
+    zig_build_target: "test-portscan-uring"
+    tests:
+      - io_uring-compile-availability
+      - io_uring-unavailability-non-linux
+      - io_uring-initialization
+      - sqe-operations
+      - platform-detection
+      - socket-types
+      - kernel-timespec
+    platform_filter: "linux"  # Only run on Linux
+    enabled: true
+
+  validation_tests:
+    description: "Memory safety validation (13 tests)"
+    timeout: 45
+    zig_build_target: "test-validation"
+    tests:
+      - crlf-memory-tests
+      - shell-memory-tests
+    enabled: true
+
+  parallel_scan_tests:
+    description: "Parallel port scanning tests"
+    timeout: 120
+    zig_build_target: "test-parallel-scan"
+    tests:
+      - port-range-parsing
+      - parallel-correctness
+      - thread-safety
+    enabled: true
+
+  exec_thread_tests:
+    description: "Exec mode thread lifecycle tests"
+    timeout: 60
+    zig_build_target: "test-exec-threads"
+    tests:
+      - thread-join-ordering
+      - resource-cleanup-timing
+      - panic-prevention
+    enabled: true
+
+  telnet_tests:
+    description: "Telnet protocol state machine tests"
+    timeout: 30
+    zig_build_target: "test-telnet"
+    tests:
+      - telnet-state-machine
+      - protocol-handling
+    enabled: true
+
+  poll_wrapper_tests:
+    description: "Cross-platform poll wrapper tests"
+    timeout: 30
+    zig_build_target: "test-poll-wrapper"
+    tests:
+      - poll-wrapper-validation
+      - cross-platform-poll
+    enabled: true
+
+  ssl_tests:
+    description: "SSL/TLS comprehensive tests (31 tests)"
+    timeout: 180
+    zig_build_target: "test-ssl"
+    tests:
+      - cert-generation
+      - tls-handshake
+      - tls-error-handling
+      - ssl-context-management
+    enabled: true
+
   security:
     description: "Security and access control tests"
     timeout: 90

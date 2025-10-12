@@ -8,6 +8,8 @@
 
 ZigCat is a modern, secure alternative to netcat/ncat built in Zig. It keeps the classic "Swiss army knife for TCP/UDP" feel while adding TLS, access control, and broker/chat collaboration modes.
 
+* This should not be used in any production environments. This is just a hobby project to test zig. *
+
 ## Getting started
 - Download the latest release binary for your platform from the [Releases](https://github.com/whit3rabbit/zigcat/releases) page.
 - Make it executable (`chmod +x zigcat` on Unix-like systems).
@@ -27,6 +29,8 @@ ZigCat is a modern, secure alternative to netcat/ncat built in Zig. It keeps the
 - **Powerful modes**: Broker/chat relays, exec pipelines, zero-I/O port scanning.
 - **Observability**: Verbosity levels up to trace, hex dump logging, structured output files.
 - **Portable**: Runs on Linux, macOS, BSD, and Windows with small binaries.
+- **Platform-native I/O**: Leverages Linux `io_uring` when available (with epoll/poll fallbacks), and on Windows pairs IOCP with named pipe/Unix socket shims so the same CLI works everywhere.
+- **TLS backends**: Supports OpenSSL and wolfSSL (TLS only—wolfSSL builds currently disable DTLS/UDP) so you can match licensing and footprint needs.
 
 ## Building from source
 Prebuilt downloads live on the Releases page. If you prefer to compile locally, follow the detailed instructions in `BUILD.md`.

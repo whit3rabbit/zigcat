@@ -63,7 +63,13 @@ pub fn tlsBidirectionalTransfer(
             return tlsBidirectionalTransferPosix(allocator, tls_conn, cfg, output_logger, hex_dumper);
         },
         .windows => {
-            return tlsBidirectionalTransferWindows(allocator, tls_conn, cfg, output_logger, hex_dumper);
+            // Try IOCP on Windows for ~4x better performance
+            const transfer_iocp = @import("transfer_iocp.zig");
+            return transfer_iocp.tlsBidirectionalTransferIocp(allocator, tls_conn, cfg, output_logger, hex_dumper) catch |err| {
+                // Fall back to poll-based implementation on IOCP errors
+                logging.logVerbose(cfg, "IOCP for TLS failed ({any}), falling back to poll\n", .{err});
+                return tlsBidirectionalTransferWindows(allocator, tls_conn, cfg, output_logger, hex_dumper);
+            };
         },
         else => {
             // Fallback for other OSes mirrors Windows behaviour (blocking loop).

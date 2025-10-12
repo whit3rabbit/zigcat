@@ -109,7 +109,7 @@ pub fn dropPrivileges(target_user: []const u8) !void {
     }
 
     // Check if we're running as root
-    const euid = std.os.linux.geteuid();
+    const euid = std.posix.geteuid();
     if (euid != 0) {
         logging.log(1, "Not running as root (euid={any}), skipping privilege drop\n", .{euid});
         return;
@@ -147,8 +147,8 @@ pub fn dropPrivileges(target_user: []const u8) !void {
     try std.posix.setuid(pw.uid);
 
     // Verify we can't get root back
-    const new_euid = std.os.linux.geteuid();
-    const new_egid = std.os.linux.getegid();
+    const new_euid = std.posix.geteuid();
+    const new_egid = c.getegid();
 
     // Verify supplementary groups were cleared
     var group_buf: [32]c.gid_t = undefined;
@@ -157,7 +157,7 @@ pub fn dropPrivileges(target_user: []const u8) !void {
     logging.log(1, "✓ Privileges dropped successfully:\n", .{});
     logging.log(1, "  User: {s}\n", .{target_user});
     logging.log(1, "  UID:  {any} -> {any}\n", .{ euid, new_euid });
-    logging.log(1, "  GID:  {any} -> {any}\n", .{ std.os.linux.getegid(), new_egid });
+    logging.log(1, "  GID:  {any} -> {any}\n", .{ c.getegid(), new_egid });
 
     // Log supplementary groups for security audit
     if (ngroups > 0) {
@@ -399,8 +399,8 @@ pub fn displayExecWarning(exec_program: []const u8, allow_list_count: usize) voi
 /// 5. Log warnings with remediation advice
 ///
 /// Platform Support:
-/// - Unix/Linux: Full permission checking
-/// - Windows: No-op (returns immediately)
+/// - Unix/Linux: POSIX mode bits checking (rwxrwxrwx)
+/// - Windows: ACL DACL enumeration checking (Everyone, Network, Users groups)
 ///
 /// Parameters:
 /// - socket_path: Path to Unix socket file to validate
@@ -423,11 +423,35 @@ pub fn displayExecWarning(exec_program: []const u8, allow_list_count: usize) voi
 /// ```
 pub fn validateUnixSocketPermissions(socket_path: []const u8) !void {
     if (builtin.os.tag == .windows) {
-        // Unix sockets not supported on Windows
+        // Windows: Validate ACL permissions instead of POSIX mode bits
+        const win_security = @import("windows_security.zig");
+
+        const is_insecure = win_security.validateWindowsSocketPermissions(socket_path) catch |err| {
+            if (err == error.GetSecurityInfoFailed) {
+                logging.logWarning("Cannot validate Windows ACL for socket '{s}': Access denied or file not found\n", .{socket_path});
+                return error.AccessDenied;
+            }
+            return err;
+        };
+
+        if (is_insecure) {
+            logging.logWarning("\n", .{});
+            logging.logWarning("╔═══════════════════════════════════════════════════════════╗\n", .{});
+            logging.logWarning("║  ⚠️  SECURITY WARNING: Unix Socket Permissions           ║\n", .{});
+            logging.logWarning("║                                                           ║\n", .{});
+            logging.logWarning("║  Socket has WORLD-ACCESSIBLE ACL!                        ║\n", .{});
+            logging.logWarning("║  Path: {s:<50}║\n", .{socket_path});
+            logging.logWarning("║                                                           ║\n", .{});
+            logging.logWarning("║  Any user on the system can access this socket!          ║\n", .{});
+            logging.logWarning("║  Socket file grants access to Everyone, Network,         ║\n", .{});
+            logging.logWarning("║  Authenticated Users, or Users groups.                   ║\n", .{});
+            logging.logWarning("╚═══════════════════════════════════════════════════════════╝\n", .{});
+            logging.logWarning("\n", .{});
+        }
         return;
     }
 
-    // Stat the socket file to get permissions
+    // Unix/Linux: Stat the socket file to get permissions
     const stat_result = std.fs.cwd().statFile(socket_path) catch |err| {
         // FileNotFound is expected if socket not yet created
         if (err == error.FileNotFound) {

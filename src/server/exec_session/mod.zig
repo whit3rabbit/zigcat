@@ -34,7 +34,30 @@ const platform = @import("../../util/platform.zig");
 
 const PollSession = @import("./poll_backend.zig").PollSession;
 const UringSession = @import("./uring_backend.zig").UringSession;
-const IocpSession = @import("./iocp_backend.zig").IocpSession;
+
+// Conditionally import IOCP backend (Windows only)
+const IocpSession = if (builtin.os.tag == .windows)
+    @import("./iocp_backend.zig").IocpSession
+else
+    struct {
+        // Dummy struct for non-Windows platforms (never instantiated)
+        _dummy: u8 = 0,
+
+        pub fn init(
+            _: std.mem.Allocator,
+            _: *TelnetConnection,
+            _: *std.process.Child,
+            _: ExecSessionConfig,
+        ) error{Unsupported}!@This() {
+            return error.Unsupported;
+        }
+
+        pub fn deinit(_: *@This()) void {}
+
+        pub fn run(_: *@This()) error{Unsupported}!void {
+            return error.Unsupported;
+        }
+    };
 
 /// Unified exec session with automatic backend selection.
 ///

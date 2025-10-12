@@ -34,8 +34,16 @@
 //! - Batch retrieval reduces syscall overhead significantly
 
 const std = @import("std");
-const windows = std.os.windows;
 const builtin = @import("builtin");
+
+// This module is Windows-only
+comptime {
+    if (builtin.os.tag != .windows) {
+        @compileError("iocp_windows.zig is Windows-only. IOCP is a Windows-specific API.");
+    }
+}
+
+const windows = std.os.windows;
 
 const IOCP_HANDLE = windows.HANDLE;
 
