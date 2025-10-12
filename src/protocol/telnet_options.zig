@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! Telnet option handlers covering RFC 857 (echo), RFC 858 (suppress go-ahead),
 //! RFC 1073 (NAWS), RFC 1091 (terminal type), and RFC 1184 (linemode).
 //! These helpers encapsulate the WILL/WONT/DO/DONT exchange for each option so

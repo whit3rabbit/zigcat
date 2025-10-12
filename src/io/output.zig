@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! Output file logging with support for truncate and append modes.
 //!
 //! This module provides the `OutputLogger` type for writing data to output files

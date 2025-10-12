@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! Cross-platform socket abstraction layer for Zigcat.
 //!
 //! This module provides a unified interface for socket operations across Windows and Unix platforms,

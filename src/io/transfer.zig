@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! Cross-platform I/O pipeline that mirrors ncat's interactive behavior.
 //! This module owns the stdin/stdout ↔ socket event loop used by both client
 //! and server paths, layering Telnet processing, logging, throttling, and

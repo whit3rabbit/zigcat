@@ -1,21 +1,11 @@
-MIT License
+The zigcat project is licensed under the terms of the MIT license, which can be found in the LICENSE-MIT file.
 
-Copyright (c) 2025 whit3rabbit
+However, this project offers optional functionality that depends on third-party libraries with different licenses. When zigcat is compiled and distributed with certain dependencies, a different license may apply to the resulting binary.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+- **Standard Build (with OpenSSL):**
+  When built using the default TLS backend (OpenSSL), the project as a whole is licensed under the MIT license. OpenSSL itself is licensed under the Apache License 2.0.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+- **wolfSSL Build:**
+  If you build zigcat with wolfSSL support (by using the `-Dtls-backend=wolfssl` build flag), the resulting binary is a derivative work of wolfSSL. Since wolfSSL is licensed under the GNU General Public License v2 (GPLv2), any binary you create that includes wolfSSL must be licensed under the GPLv2. The text of this license is available in the LICENSE-GPLv2 file.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+By choosing to build with wolfSSL, you agree to comply with the terms of the GPLv2 for the resulting work.

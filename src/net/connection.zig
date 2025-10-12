@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! Connection abstraction layer providing unified interface for TCP, TLS, and Unix domain sockets.
 //!
 //! Uses tagged union to enable polymorphic operations across connection types while maintaining

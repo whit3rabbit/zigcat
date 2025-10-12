@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! HTTP CONNECT proxy implementation (RFC 7231 Section 4.3.6).
 //!
 //! Establishes a TCP tunnel through an HTTP proxy server using the

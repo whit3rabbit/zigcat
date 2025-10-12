@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! # High-Level `io_uring` Event Loop Wrapper
 //!
 //! This module provides a reusable, high-level abstraction over the Linux `io_uring`

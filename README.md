@@ -36,5 +36,13 @@ Prebuilt downloads live on the Releases page. If you prefer to compile locally, 
 - [`BUILD.md`](BUILD.md) - platform-specific build commands and packaging tips.
 - `docs/` - additional architecture notes, testing guides, and plans.
 
-## License
-See `LICENSE` or the documentation bundle for full licensing terms.
+## Licensing
+
+The core source code of zigcat is licensed under the **MIT License**.
+
+However, the license of the final compiled binary depends on the build options you choose:
+
+-   **Default (OpenSSL build):** The binary is licensed under the **MIT License**.
+-   **wolfSSL build (`-Dtls-backend=wolfssl`):** Due to the GPLv2 license of wolfSSL, any binary built with this option is subject to the **GNU GPLv2**.
+
+Please see the `LICENSE` file for full details. The texts for the MIT and GPLv2 licenses are available in `LICENSE-MIT` and `LICENSE-GPLv2`, respectively.
