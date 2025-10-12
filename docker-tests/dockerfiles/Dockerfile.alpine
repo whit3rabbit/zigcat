@@ -3,20 +3,23 @@ FROM --platform=$BUILDPLATFORM alpine:3.18 AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-ARG ZIG_VERSION=0.13.0
+ARG ZIG_VERSION=0.15.1
 
 # Install system dependencies
 RUN apk add --no-cache \
     wget \
     xz \
     ca-certificates \
-    bash
+    bash \
+    openssl-dev \
+    openssl-static
 
-# Install Zig compiler
-RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && tar -xf zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && mv zig-linux-x86_64-${ZIG_VERSION} /opt/zig \
-    && rm zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+# Install Zig compiler (architecture-aware)
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
@@ -35,15 +38,16 @@ case "$1" in\n\
 esac' > /usr/local/bin/platform-to-zig-target.sh \
     && chmod +x /usr/local/bin/platform-to-zig-target.sh
 
-# Build for musl target
+# Build for musl target with TLS (dynamic linking)
+# NOTE: -Dstatic=true is incompatible with -Dtls=true per build.zig constraints
 RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Building for Zig target: $ZIG_TARGET" && \
-    zig build -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSafe
+    echo "Building for Zig target: $ZIG_TARGET with TLS enabled (dynamic)" && \
+    zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
 
 # Run unit tests
 RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Running tests for Zig target: $ZIG_TARGET" && \
-    zig build test -Dtarget=$ZIG_TARGET
+    echo "Running tests for Zig target: $ZIG_TARGET with TLS enabled" && \
+    zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
 
 # Export stage for artifacts
 FROM scratch AS artifacts
@@ -70,12 +74,13 @@ RUN apk add --no-cache \
     bind-tools \
     ca-certificates
 
-# Install Zig for test execution
-ARG ZIG_VERSION=0.13.0
-RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && tar -xf zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && mv zig-linux-x86_64-${ZIG_VERSION} /opt/zig \
-    && rm zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+# Install Zig for test execution (architecture-aware)
+ARG ZIG_VERSION=0.15.1
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 

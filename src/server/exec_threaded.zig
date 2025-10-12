@@ -7,6 +7,7 @@
 
 //! Thread-based execution logic for Windows and Telnet.
 const std = @import("std");
+const config = @import("../config.zig");
 const logging = @import("../util/logging.zig");
 
 const ExecConfig = @import("./exec_types.zig").ExecConfig;
@@ -111,14 +112,15 @@ pub fn executeWithTelnetConnectionThreaded(
     telnet_conn: anytype, // *TelnetConnection
     exec_config: ExecConfig,
     client_addr: std.net.Address,
+    cfg: *const config.Config,
 ) !void {
     // SECURITY WARNING: Log this dangerous operation
-    logging.logNormal("╔══════════════════════════════════════════╗\n", .{});
-    logging.logNormal("║ SECURITY: Executing command (Telnet)    ║\n", .{});
-    logging.logNormal("║ Program: {s:<31}║\n", .{exec_config.program});
-    logging.logNormal("║ Client:  {any:<31}║\n", .{client_addr});
-    logging.logNormal("║ Mode:    {s:<31}║\n", .{@tagName(exec_config.mode)});
-    logging.logNormal("╚══════════════════════════════════════════╝\n", .{});
+    logging.logNormal(cfg, "╔══════════════════════════════════════════╗\n", .{});
+    logging.logNormal(cfg, "║ SECURITY: Executing command (Telnet)    ║\n", .{});
+    logging.logNormal(cfg, "║ Program: {s:<31}║\n", .{exec_config.program});
+    logging.logNormal(cfg, "║ Client:  {any:<31}║\n", .{client_addr});
+    logging.logNormal(cfg, "║ Mode:    {s:<31}║\n", .{@tagName(exec_config.mode)});
+    logging.logNormal(cfg, "╚══════════════════════════════════════════╝\n", .{});
 
     // Build command with args
     var argv = std.ArrayList([]const u8){};

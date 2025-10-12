@@ -44,13 +44,31 @@ const WindowsCpuMonitor = if (builtin.os.tag == .windows) struct {
     const windows = std.os.windows;
     const FILETIME = windows.FILETIME;
     const BOOL = windows.BOOL;
-    const WINAPI = windows.WINAPI;
+    const WINAPI = std.builtin.CallingConvention.C;
 
     // GetSystemTimes extern declaration
     pub extern "kernel32" fn GetSystemTimes(
         lpIdleTime: ?*FILETIME,
         lpKernelTime: ?*FILETIME,
         lpUserTime: ?*FILETIME,
+    ) callconv(WINAPI) BOOL;
+
+    // MEMORYSTATUSEX structure (use u64 for DWORDLONG fields)
+    pub const MEMORYSTATUSEX = extern struct {
+        dwLength: windows.DWORD,
+        dwMemoryLoad: windows.DWORD,
+        ullTotalPhys: u64,
+        ullAvailPhys: u64,
+        ullTotalPageFile: u64,
+        ullAvailPageFile: u64,
+        ullTotalVirtual: u64,
+        ullAvailVirtual: u64,
+        ullAvailExtendedVirtual: u64,
+    };
+
+    // GlobalMemoryStatusEx extern declaration
+    pub extern "kernel32" fn GlobalMemoryStatusEx(
+        lpBuffer: *MEMORYSTATUSEX,
     ) callconv(WINAPI) BOOL;
 
     // Convert FILETIME to u64 (100-nanosecond intervals)
@@ -478,29 +496,11 @@ pub const PerformanceMonitor = struct {
 
         // Use Windows API GlobalMemoryStatusEx to get real memory information
         if (builtin.os.tag == .windows) {
-            const windows = std.os.windows;
+            var mem_status: WindowsCpuMonitor.MEMORYSTATUSEX = undefined;
+            mem_status.dwLength = @sizeOf(WindowsCpuMonitor.MEMORYSTATUSEX);
 
-            // MEMORYSTATUSEX structure (use u64 for DWORDLONG fields)
-            const MEMORYSTATUSEX = extern struct {
-                dwLength: windows.DWORD,
-                dwMemoryLoad: windows.DWORD,
-                ullTotalPhys: u64,
-                ullAvailPhys: u64,
-                ullTotalPageFile: u64,
-                ullAvailPageFile: u64,
-                ullTotalVirtual: u64,
-                ullAvailVirtual: u64,
-                ullAvailExtendedVirtual: u64,
-            };
-
-            var mem_status: MEMORYSTATUSEX = undefined;
-            mem_status.dwLength = @sizeOf(MEMORYSTATUSEX);
-
-            // GlobalMemoryStatusEx function (from kernel32.dll)
-            const kernel32 = windows.kernel32;
-            const GlobalMemoryStatusEx = kernel32.GlobalMemoryStatusEx;
-
-            if (GlobalMemoryStatusEx(&mem_status) != 0) {
+            // Call GlobalMemoryStatusEx extern function
+            if (WindowsCpuMonitor.GlobalMemoryStatusEx(&mem_status) != 0) {
                 snapshot.available_memory = mem_status.ullTotalPhys;
                 snapshot.memory_usage = mem_status.ullTotalPhys - mem_status.ullAvailPhys;
                 snapshot.calculateMemoryPercent(snapshot.available_memory);

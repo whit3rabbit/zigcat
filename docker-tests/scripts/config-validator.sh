@@ -8,7 +8,8 @@ set -euo pipefail
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CONFIG_FILE="${PROJECT_ROOT}/docker-tests/configs/test-config.yml"
+DEFAULT_CONFIG_FILE="${PROJECT_ROOT}/docker-tests/configs/test-config.yml"
+CONFIG_FILE="$DEFAULT_CONFIG_FILE"
 
 # Colors for output
 RED='\033[0;31m'
@@ -269,6 +270,20 @@ print_summary() {
     echo "  - Cleanup: $(get_config_value 'timeouts.cleanup')s"
 }
 
+# Parse command-line arguments for --config-file flag
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --config-file)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
+        *)
+            # Not a flag, break out to process commands
+            break
+            ;;
+    esac
+done
+
 # Command-line interface
 case "${1:-validate}" in
     "validate")
@@ -285,27 +300,30 @@ case "${1:-validate}" in
         ;;
     "platform-archs")
         if [[ $# -lt 2 ]]; then
-            log_error "Usage: $0 platform-archs <platform>"
+            log_error "Usage: $0 [--config-file FILE] platform-archs <platform>"
             exit 1
         fi
         get_platform_architectures "$2"
         ;;
     "zig-target")
         if [[ $# -lt 3 ]]; then
-            log_error "Usage: $0 zig-target <platform> <arch>"
+            log_error "Usage: $0 [--config-file FILE] zig-target <platform> <arch>"
             exit 1
         fi
         get_zig_target "$2" "$3"
         ;;
     "config-value")
         if [[ $# -lt 2 ]]; then
-            log_error "Usage: $0 config-value <path>"
+            log_error "Usage: $0 [--config-file FILE] config-value <path>"
             exit 1
         fi
         get_config_value "$2"
         ;;
     *)
-        echo "Usage: $0 {validate|summary|platforms|test-suites|platform-archs|zig-target|config-value}"
+        echo "Usage: $0 [--config-file FILE] {validate|summary|platforms|test-suites|platform-archs|zig-target|config-value}"
+        echo ""
+        echo "Options:"
+        echo "  --config-file FILE          - Path to configuration YAML file (default: test-config.yml)"
         echo ""
         echo "Commands:"
         echo "  validate                    - Validate entire configuration"

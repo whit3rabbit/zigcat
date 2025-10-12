@@ -27,6 +27,7 @@ KEEP_ARTIFACTS=false
 BUILD_TIMEOUT=300
 SELECTED_PLATFORMS=""
 SELECTED_ARCHITECTURES=""
+USE_DOCKER=false
 
 # Logging functions
 log_info() {
@@ -67,6 +68,7 @@ OPTIONS:
     -v, --verbose                  Enable verbose logging
     -j, --parallel                 Enable parallel builds where possible
     -k, --keep-artifacts           Keep build artifacts after completion
+    --use-docker                   Build inside Docker containers (for TLS)
     -h, --help                     Show this help message
 
 EXAMPLES:
@@ -105,6 +107,10 @@ parse_args() {
                 ;;
             -k|--keep-artifacts)
                 KEEP_ARTIFACTS=true
+                shift
+                ;;
+            --use-docker)
+                USE_DOCKER=true
                 shift
                 ;;
             -h|--help)
@@ -192,6 +198,136 @@ get_platform_architectures() {
         done
     else
         "$CONFIG_VALIDATOR" platform-archs "$platform" | tr -d '"'
+    fi
+}
+
+# Build binary using Docker (for TLS cross-compilation)
+build_binary_docker() {
+    local platform="$1"
+    local arch="$2"
+    local zig_target="$3"
+    local build_id="${platform}-${arch}"
+    local log_file="$LOGS_DIR/build-${build_id}.log"
+    local artifact_dir="$ARTIFACTS_DIR/$build_id"
+
+    log_info "Building $build_id using Docker (target: $zig_target)..."
+
+    # Create artifact directory
+    mkdir -p "$artifact_dir"
+
+    # Get dockerfile path
+    local dockerfile_path="$PROJECT_ROOT/docker-tests/dockerfiles/Dockerfile.$platform"
+    if [[ ! -f "$dockerfile_path" ]]; then
+        log_error "Dockerfile not found: $dockerfile_path"
+        return 1
+    fi
+
+    # Map arch to Docker platform
+    local docker_platform
+    case "$arch" in
+        amd64|x86_64)
+            docker_platform="linux/amd64"
+            ;;
+        arm64|aarch64)
+            docker_platform="linux/arm64"
+            ;;
+        *)
+            log_error "Unsupported architecture for Docker: $arch"
+            return 1
+            ;;
+    esac
+
+    # Start build with timeout
+    local build_start_time
+    build_start_time=$(date +%s)
+
+    {
+        echo "=== Docker Build Log for $build_id ==="
+        echo "Platform: $platform"
+        echo "Architecture: $arch"
+        echo "Zig Target: $zig_target"
+        echo "Dockerfile: $dockerfile_path"
+        echo "Docker Platform: $docker_platform"
+        echo "Start Time: $(date)"
+        echo "Build Timeout: ${BUILD_TIMEOUT}s"
+        echo ""
+        echo "=== Starting Docker Build ==="
+
+        # Build using Docker with the artifacts stage
+        if timeout "$BUILD_TIMEOUT" docker build \
+            --platform="$docker_platform" \
+            --file="$dockerfile_path" \
+            --target=artifacts \
+            --output="$artifact_dir" \
+            "$PROJECT_ROOT" 2>&1; then
+
+            echo ""
+            echo "=== Build Successful ==="
+
+            # Verify binary was created
+            local binary_name="zigcat"
+            local binary_path="$artifact_dir/bin/$binary_name"
+
+            if [[ -f "$binary_path" ]]; then
+                # Move binary from bin/ subdirectory to artifact_dir root
+                mv "$binary_path" "$artifact_dir/"
+                rmdir "$artifact_dir/bin" 2>/dev/null || true
+
+                echo "Binary extracted to: $artifact_dir/$binary_name"
+
+                # Get binary info
+                local binary_size
+                binary_size=$(stat -f%z "$artifact_dir/$binary_name" 2>/dev/null || stat -c%s "$artifact_dir/$binary_name" 2>/dev/null || echo "unknown")
+                echo "Binary size: $binary_size bytes"
+
+                echo ""
+                echo "=== Binary Validation ==="
+                echo "✓ Cross-compiled binary created in Docker"
+                echo "✓ Binary file exists and has reasonable size"
+            else
+                echo "✗ Binary not found at expected path: $binary_path"
+                return 1
+            fi
+
+        else
+            local exit_code=$?
+            echo ""
+            echo "=== Build Failed ==="
+            echo "Exit code: $exit_code"
+            if [[ $exit_code -eq 124 ]]; then
+                echo "Build timed out after ${BUILD_TIMEOUT} seconds"
+            fi
+            return 1
+        fi
+
+    } > "$log_file" 2>&1
+
+    local build_exit_code=$?
+    local build_end_time
+    build_end_time=$(date +%s)
+    local build_duration=$((build_end_time - build_start_time))
+
+    # Append timing information to log
+    {
+        echo ""
+        echo "=== Build Summary ==="
+        echo "End Time: $(date)"
+        echo "Duration: ${build_duration}s"
+        echo "Exit Code: $build_exit_code"
+    } >> "$log_file"
+
+    if [[ $build_exit_code -eq 0 ]]; then
+        log_success "Build completed: $build_id (${build_duration}s)"
+        return 0
+    else
+        log_error "Build failed: $build_id (${build_duration}s)"
+        if [[ "$VERBOSE" == "true" ]]; then
+            log_error "Build log: $log_file"
+            echo "--- Last 30 lines of build log ---" >&2
+            tail -30 "$log_file" >&2
+            echo "--- End of build log excerpt ---" >&2
+        fi
+        return 1
     fi
 }
 
@@ -402,15 +538,27 @@ build_all() {
             
             if [[ "$PARALLEL" == "true" ]]; then
                 # Build in background
-                build_binary "$platform" "$arch" "$zig_target" &
+                if [[ "$USE_DOCKER" == "true" ]]; then
+                    build_binary_docker "$platform" "$arch" "$zig_target" &
+                else
+                    build_binary "$platform" "$arch" "$zig_target" &
+                fi
                 build_pids+=($!)
                 log_debug "Started background build for $platform-$arch (PID: $!)"
             else
                 # Build sequentially
-                if build_binary "$platform" "$arch" "$zig_target"; then
-                    ((successful_builds++))
+                if [[ "$USE_DOCKER" == "true" ]]; then
+                    if build_binary_docker "$platform" "$arch" "$zig_target"; then
+                        ((successful_builds++))
+                    else
+                        ((failed_builds++))
+                    fi
                 else
-                    ((failed_builds++))
+                    if build_binary "$platform" "$arch" "$zig_target"; then
+                        ((successful_builds++))
+                    else
+                        ((failed_builds++))
+                    fi
                 fi
             fi
             

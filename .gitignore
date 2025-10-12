@@ -52,3 +52,8 @@ docks-archive/
 *.DS_Store
 CLAUDE.md
 *.xml
+/docker-tests/reports
+/docker-tests/logs
+*.log
+/docker-tests/build
+/docker-tests/artifacts

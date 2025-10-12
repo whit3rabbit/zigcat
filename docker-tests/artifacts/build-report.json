@@ -1,10 +1,14 @@
 {
   "build_report": {
-    "timestamp": "2025-10-05T13:46:52Z",
+    "timestamp": "2025-10-12T23:37:33Z",
     "build_system": "zig",
     "project": "zigcat",
     "artifacts": [
-      {"build_id": "linux-amd64", "platform": "linux", "architecture": "amd64", "binary_exists": true, "binary_size": 1786984, "build_success": true, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat/docker-tests/artifacts/linux-amd64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat/docker-tests/logs/build-linux-amd64.log"}
+      {"build_id": "alpine-amd64", "platform": "alpine", "architecture": "amd64", "binary_exists": false, "binary_size": 0, "build_success": false, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/artifacts/alpine-amd64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/logs/build-alpine-amd64.log"},
+      {"build_id": "alpine-arm64", "platform": "alpine", "architecture": "arm64", "binary_exists": false, "binary_size": 0, "build_success": false, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/artifacts/alpine-arm64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/logs/build-alpine-arm64.log"},
+      {"build_id": "freebsd-amd64", "platform": "freebsd", "architecture": "amd64", "binary_exists": false, "binary_size": 0, "build_success": false, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/artifacts/freebsd-amd64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/logs/build-freebsd-amd64.log"},
+      {"build_id": "linux-amd64", "platform": "linux", "architecture": "amd64", "binary_exists": false, "binary_size": 0, "build_success": false, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/artifacts/linux-amd64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/logs/build-linux-amd64.log"},
+      {"build_id": "linux-arm64", "platform": "linux", "architecture": "arm64", "binary_exists": false, "binary_size": 0, "build_success": false, "artifact_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/artifacts/linux-arm64", "log_path": "/Users/whit3rabbit/Documents/GitHub/zigcat-github/docker-tests/logs/build-linux-arm64.log"}
     ]
   }
 }

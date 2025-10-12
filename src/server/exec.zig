@@ -218,10 +218,10 @@ pub fn executeWithTelnetConnection(
     telnet_conn: anytype,
     exec_config: ExecConfig,
     client_addr: std.net.Address,
-    _: *const config.Config,
+    cfg: *const config.Config,
 ) !void {
     if (builtin.os.tag == .windows) {
-        return executeWithTelnetConnectionThreaded(allocator, telnet_conn, exec_config, client_addr);
+        return executeWithTelnetConnectionThreaded(allocator, telnet_conn, exec_config, client_addr, cfg);
     }
 
     // POSIX implementation using ExecSession

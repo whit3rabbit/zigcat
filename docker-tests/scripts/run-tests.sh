@@ -20,7 +20,11 @@ if [[ -f "$SCRIPT_DIR/logging-system.sh" ]]; then
 fi
 
 if [[ -f "$SCRIPT_DIR/error-handler.sh" ]]; then
-    source "$SCRIPT_DIR/error-handler.sh"
+    if [[ "${BASH_VERSINFO[0]:-0}" -ge 4 ]]; then
+        source "$SCRIPT_DIR/error-handler.sh"
+    else
+        echo "[WARN] Advanced error handler requires Bash >=4; continuing without it." >&2
+    fi
 fi
 
 # Colors for output
@@ -43,6 +47,8 @@ TEST_TIMEOUT=60
 CLEANUP_TIMEOUT=30
 DRY_RUN=false
 SKIP_BUILD=false
+USE_DOCKER=false
+CONFIG_FILE="${PROJECT_ROOT}/docker-tests/configs/test-config.yml"
 
 # Process tracking
 declare -a CLEANUP_PIDS=()
@@ -79,6 +85,8 @@ Usage: $0 [OPTIONS]
 ZigCat Docker Test System - Main test runner with configuration management.
 
 OPTIONS:
+    -c, --config FILE              Path to configuration YAML file
+                                   (default: docker-tests/configs/test-config.yml)
     -p, --platforms PLATFORMS      Comma-separated list of platforms to test
                                    (default: all enabled platforms from config)
     -a, --architectures ARCHS      Comma-separated list of architectures to test
@@ -94,10 +102,12 @@ OPTIONS:
     -k, --keep-artifacts           Keep build artifacts and containers after completion
     -n, --dry-run                  Show what would be done without executing
     --skip-build                   Skip build phase (use existing artifacts)
+    --use-docker                   Build inside Docker containers (required for TLS)
     -h, --help                     Show this help message
 
 EXAMPLES:
     $0                             # Run all enabled platforms and test suites
+    $0 -c configs/tls-test.yml     # Use custom configuration file
     $0 -p linux,alpine             # Test only Linux and Alpine platforms
     $0 -p linux -s basic,protocols # Test Linux with basic and protocol suites
     $0 -v -j                       # Verbose output with parallel execution
@@ -112,6 +122,10 @@ EOF
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
+            -c|--config)
+                CONFIG_FILE="$2"
+                shift 2
+                ;;
             -p|--platforms)
                 SELECTED_PLATFORMS="$2"
                 shift 2
@@ -158,6 +172,10 @@ parse_args() {
                 ;;
             --skip-build)
                 SKIP_BUILD=true
+                shift
+                ;;
+            --use-docker)
+                USE_DOCKER=true
                 shift
                 ;;
             -h|--help)
@@ -208,7 +226,7 @@ validate_environment() {
     fi
     
     # Validate configuration
-    if ! "$CONFIG_VALIDATOR" validate > /dev/null 2>&1; then
+    if ! "$CONFIG_VALIDATOR" --config-file "$CONFIG_FILE" validate > /dev/null 2>&1; then
         log_error "Configuration validation failed"
         return 1
     fi
@@ -256,7 +274,7 @@ get_test_platforms() {
     if [[ -n "$SELECTED_PLATFORMS" ]]; then
         echo "$SELECTED_PLATFORMS" | tr ',' '\n'
     else
-        "$CONFIG_VALIDATOR" platforms
+        "$CONFIG_VALIDATOR" --config-file "$CONFIG_FILE" platforms
     fi
 }
 
@@ -265,7 +283,7 @@ get_test_suites() {
     if [[ -n "$SELECTED_TEST_SUITES" ]]; then
         echo "$SELECTED_TEST_SUITES" | tr ',' '\n'
     else
-        "$CONFIG_VALIDATOR" test-suites
+        "$CONFIG_VALIDATOR" --config-file "$CONFIG_FILE" test-suites
     fi
 }
 
@@ -306,7 +324,11 @@ build_phase() {
     if [[ "$KEEP_ARTIFACTS" == "true" ]]; then
         build_args+=("-k")
     fi
-    
+
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        build_args+=("--use-docker")
+    fi
+
     if [[ "$DRY_RUN" == "true" ]]; then
         log_info "DRY RUN: Would execute: $BUILD_SCRIPT ${build_args[*]}"
         return 0
@@ -362,7 +384,7 @@ test_phase() {
         
         local architectures
         platform_clean=$(echo "$platform" | tr -d '"')
-        architectures=$("$CONFIG_VALIDATOR" platform-archs "$platform_clean")
+        architectures=$("$CONFIG_VALIDATOR" --config-file "$CONFIG_FILE" platform-archs "$platform_clean")
         
         while IFS= read -r arch; do
             if [[ -z "$arch" ]]; then
@@ -395,7 +417,7 @@ test_phase() {
         
         local architectures
         platform_clean=$(echo "$platform" | tr -d '"')
-        architectures=$("$CONFIG_VALIDATOR" platform-archs "$platform_clean")
+        architectures=$("$CONFIG_VALIDATOR" --config-file "$CONFIG_FILE" platform-archs "$platform_clean")
         
         while IFS= read -r arch; do
             if [[ -z "$arch" ]]; then
@@ -486,7 +508,7 @@ execute_test() {
         
         # Get test suite timeout from configuration
         local suite_timeout
-        suite_timeout=$("$CONFIG_VALIDATOR" config-value "test_suites.$suite.timeout" 2>/dev/null || echo "$TEST_TIMEOUT")
+        suite_timeout=$("$CONFIG_VALIDATOR" --config-file "$CONFIG_FILE" config-value "test_suites.$suite.timeout" 2>/dev/null || echo "$TEST_TIMEOUT")
         
         echo "=== Starting Test Execution ==="
         

@@ -1,0 +1,50 @@
+platforms:
+  - name: linux
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.linux
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+      arm64: aarch64-linux-gnu
+    build_options:
+      - "-Drelease=true"
+      - "-Dtls=true"
+    enabled: true
+
+  - name: alpine
+    base_image: alpine:3.18
+    dockerfile: Dockerfile.alpine
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    build_options:
+      - "-Drelease=true"
+      - "-Dtls=true"
+    enabled: true
+
+  - name: freebsd
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.freebsd
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-freebsd
+    build_options:
+      - "-Drelease=true"
+      - "-Dtls=true"
+    enabled: true
+
+test_suites:
+  smoke:
+    description: "TLS build smoke tests"
+    timeout: 30
+    tests:
+      - help-output-test
+      - version-test
+    enabled: true
+
+timeouts:
+  global: 1800
+  build: 600
+  test: 60
+  cleanup: 30

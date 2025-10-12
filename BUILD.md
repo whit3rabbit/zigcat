@@ -74,6 +74,127 @@ make rpm
 
 Package metadata lives under `docs/packaging/`.
 
+## Docker cross-platform testing
+
+The Docker test system validates zigcat builds across multiple platforms and architectures with automated cross-compilation.
+
+### Quick start
+
+```bash
+# Run all enabled platforms and tests (Linux, Alpine, FreeBSD)
+./docker-tests/scripts/run-tests.sh --verbose
+
+# Test TLS builds across all platforms
+./docker-tests/scripts/run-tests.sh \
+  --config docker-tests/configs/examples/tls-cross-build-test.yml \
+  --verbose
+
+# Test specific platform only
+./docker-tests/scripts/run-tests.sh \
+  --platforms alpine \
+  --verbose
+```
+
+### Test configurations
+
+The test system uses YAML configuration files to define platforms, architectures, and test suites:
+
+```bash
+# Default configuration (all platforms, all tests)
+docker-tests/configs/test-config.yml
+
+# TLS-specific testing (Linux, Alpine, FreeBSD with TLS enabled)
+docker-tests/configs/examples/tls-cross-build-test.yml
+
+# Platform-specific configs
+docker-tests/configs/platforms/linux-only.yml
+docker-tests/configs/platforms/alpine-only.yml
+docker-tests/configs/platforms/freebsd-only.yml
+```
+
+### Available platforms
+
+| Platform | Base Image | Architectures | Libc | TLS Support |
+|----------|-----------|---------------|------|-------------|
+| Linux | Ubuntu 22.04 | x86_64, aarch64 | glibc | OpenSSL |
+| Alpine | Alpine 3.18 | x86_64, aarch64 | musl | OpenSSL |
+| FreeBSD | Ubuntu 22.04 (cross) | x86_64 | libc | OpenSSL |
+
+### Test suites
+
+The system includes multiple test suites covering different functionality:
+
+- **basic**: Core connectivity and functionality
+- **protocols**: TLS, proxy, HTTP CONNECT, SOCKS4/5
+- **features**: File transfer, exec mode, bidirectional I/O
+- **timeout_tests**: Timeout handling and enforcement
+- **ssl_tests**: Comprehensive TLS/SSL validation (31 tests)
+- **portscan_tests**: Port scanning features (23 tests)
+- **validation_tests**: Memory safety validation (13 tests)
+
+### Advanced usage
+
+```bash
+# Custom configuration with verbose output
+./docker-tests/scripts/run-tests.sh \
+  --config /path/to/custom-config.yml \
+  --verbose
+
+# Parallel execution (faster, more CPU)
+./docker-tests/scripts/run-tests.sh \
+  --parallel \
+  --verbose
+
+# Test specific platforms and suites
+./docker-tests/scripts/run-tests.sh \
+  --platforms linux,alpine \
+  --test-suites basic,protocols \
+  --verbose
+
+# Skip build phase (use existing artifacts)
+./docker-tests/scripts/run-tests.sh \
+  --skip-build \
+  --test-suites smoke
+
+# Dry run (see what would be executed)
+./docker-tests/scripts/run-tests.sh \
+  --config docker-tests/configs/examples/tls-cross-build-test.yml \
+  --dry-run
+```
+
+### Configuration validation
+
+```bash
+# Validate configuration file
+./docker-tests/scripts/config-validator.sh \
+  --config-file docker-tests/configs/examples/tls-cross-build-test.yml \
+  validate
+
+# Show configuration summary
+./docker-tests/scripts/config-validator.sh \
+  --config-file docker-tests/configs/examples/tls-cross-build-test.yml \
+  summary
+
+# List enabled platforms
+./docker-tests/scripts/config-validator.sh \
+  --config-file docker-tests/configs/examples/tls-cross-build-test.yml \
+  platforms
+```
+
+### Requirements
+
+- Docker
+- Docker Compose
+- `yq` (YAML processor): `brew install yq` (macOS) or `apt install yq` (Ubuntu)
+- Zig 0.15.1+ (only if not skipping build phase)
+
+### Test results
+
+Results are stored in:
+- `docker-tests/results/` - Test reports (JSON)
+- `docker-tests/logs/` - Detailed test logs
+- `docker-tests/artifacts/` - Built binaries
+
 ## TLS/SSL builds
 
 ZigCat supports TLS via two backends: **OpenSSL** (default, ubiquitous) and **wolfSSL** (lightweight, 60% smaller).

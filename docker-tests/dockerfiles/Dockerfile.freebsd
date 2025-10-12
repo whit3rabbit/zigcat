@@ -3,20 +3,23 @@ FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-ARG ZIG_VERSION=0.13.0
+ARG ZIG_VERSION=0.15.1
 
-# Install system dependencies
+# Install system dependencies and OpenSSL for TLS
 RUN apt-get update && apt-get install -y \
     wget \
     xz-utils \
     ca-certificates \
+    libssl-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Zig compiler
-RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && tar -xf zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && mv zig-linux-x86_64-${ZIG_VERSION} /opt/zig \
-    && rm zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+# Install Zig compiler (architecture-aware)
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
@@ -34,15 +37,15 @@ case "$1" in\n\
 esac' > /usr/local/bin/platform-to-zig-target.sh \
     && chmod +x /usr/local/bin/platform-to-zig-target.sh
 
-# Build for FreeBSD target
+# Build for FreeBSD target with TLS
 RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Building for Zig target: $ZIG_TARGET" && \
-    zig build -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSafe
+    echo "Building for Zig target: $ZIG_TARGET with TLS enabled" && \
+    zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
 
 # Run unit tests (cross-compiled)
 RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Running tests for Zig target: $ZIG_TARGET" && \
-    zig build test -Dtarget=$ZIG_TARGET
+    echo "Running tests for Zig target: $ZIG_TARGET with TLS enabled" && \
+    zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
 
 # Export stage for artifacts
 FROM scratch AS artifacts
@@ -70,12 +73,13 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Zig for test execution (for unit tests that can run cross-platform)
-ARG ZIG_VERSION=0.13.0
-RUN wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && tar -xf zig-linux-x86_64-${ZIG_VERSION}.tar.xz \
-    && mv zig-linux-x86_64-${ZIG_VERSION} /opt/zig \
-    && rm zig-linux-x86_64-${ZIG_VERSION}.tar.xz
+# Install Zig for test execution (for unit tests that can run cross-platform, architecture-aware)
+ARG ZIG_VERSION=0.15.1
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
