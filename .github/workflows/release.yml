@@ -25,14 +25,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x64 (dynamic)
+          # Linux x64 (no TLS - cross-compile limitation)
           - name: Linux x64
             os: ubuntu-latest
             target: x86_64-linux-gnu
             artifact: zigcat-linux-x64
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
           # Linux x64 static (musl, NO TLS)
           - name: Linux x64 Static
@@ -51,7 +51,7 @@ jobs:
             artifact: zigcat-linux-arm64
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
           # Linux ARM64 static (musl, NO TLS)
           - name: Linux ARM64 Static
@@ -70,7 +70,7 @@ jobs:
             artifact: zigcat-linux-x86
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
           # Linux x86 32-bit static (musl, NO TLS)
           - name: Linux x86 Static
@@ -89,7 +89,7 @@ jobs:
             artifact: zigcat-linux-arm
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
           # Linux ARM 32-bit static (musl, NO TLS)
           - name: Linux ARM Static
@@ -126,7 +126,7 @@ jobs:
             artifact: zigcat-windows-x64
             extension: '.exe'
             strip: true
-            tls: true
+            tls: false
 
           # Windows x86 (32-bit)
           - name: Windows x86
@@ -135,7 +135,7 @@ jobs:
             artifact: zigcat-windows-x86
             extension: '.exe'
             strip: true
-            tls: true
+            tls: false
 
           # FreeBSD x64
           - name: FreeBSD x64
@@ -144,7 +144,7 @@ jobs:
             artifact: zigcat-freebsd-x64
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
           # OpenBSD x64
           - name: OpenBSD x64
@@ -162,7 +162,7 @@ jobs:
             artifact: zigcat-netbsd-x64
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
     steps:
       - name: Checkout code
@@ -333,27 +333,27 @@ jobs:
           ## Downloads
 
           ### Linux
-          - **x64 (dynamic):** `zigcat-linux-x64`
+          - **x64:** `zigcat-linux-x64` (NO TLS)
           - **x64 (static musl):** `zigcat-linux-x64-static` - Portable, no dependencies, NO TLS
-          - **ARM64 (dynamic):** `zigcat-linux-arm64`
-          - **ARM64 (static musl):** `zigcat-linux-arm64-static` - Portable, no dependencies, NO TLS
-          - **x86 32-bit (dynamic):** `zigcat-linux-x86`
-          - **x86 32-bit (static musl):** `zigcat-linux-x86-static` - Portable, no dependencies, NO TLS
-          - **ARM 32-bit (dynamic):** `zigcat-linux-arm`
-          - **ARM 32-bit (static musl):** `zigcat-linux-arm-static` - Portable, no dependencies, NO TLS
+          - **ARM64:** `zigcat-linux-arm64` (NO TLS)
+          - **ARM64 (static musl):** `zigcat-linux-arm64-static` - Portable, NO TLS
+          - **x86 32-bit:** `zigcat-linux-x86` (NO TLS)
+          - **x86 32-bit (static musl):** `zigcat-linux-x86-static` - Portable, NO TLS
+          - **ARM 32-bit:** `zigcat-linux-arm` (NO TLS)
+          - **ARM 32-bit (static musl):** `zigcat-linux-arm-static` - Portable, NO TLS
 
-          ### macOS
-          - **Intel (x64):** `zigcat-macos-x64`
-          - **Apple Silicon (ARM64):** `zigcat-macos-arm64`
+          ### macOS (TLS Supported)
+          - **Intel (x64):** `zigcat-macos-x64` ✅ **With TLS**
+          - **Apple Silicon (ARM64):** `zigcat-macos-arm64` ✅ **With TLS**
 
           ### Windows
-          - **x64:** `zigcat-windows-x64.exe`
-          - **x86 (32-bit):** `zigcat-windows-x86.exe`
+          - **x64:** `zigcat-windows-x64.exe` (NO TLS)
+          - **x86 (32-bit):** `zigcat-windows-x86.exe` (NO TLS)
 
           ### BSD
-          - **FreeBSD x64:** `zigcat-freebsd-x64`
-          - **OpenBSD x64:** `zigcat-openbsd-x64`
-          - **NetBSD x64:** `zigcat-netbsd-x64`
+          - **FreeBSD x64:** `zigcat-freebsd-x64` (NO TLS)
+          - **OpenBSD x64:** `zigcat-openbsd-x64` (NO TLS)
+          - **NetBSD x64:** `zigcat-netbsd-x64` (NO TLS)
 
           ## Verification
 
@@ -369,9 +369,9 @@ jobs:
 
           ## Notes
 
-          - **Static builds** (musl) have TLS disabled for true portability and zero dependencies
-          - **Dynamic builds** include OpenSSL TLS support
-          - All binaries are stripped for minimal size (~1.8MB on Linux)
+          - **TLS support** is only available on macOS (native builds with OpenSSL)
+          - **Cross-compiled builds** (Linux, Windows, BSD) have TLS disabled due to cross-compilation limitations
+          - All binaries are stripped for minimal size (~1.8MB)
 
           ${{ steps.changelog.outputs.CHANGELOG }}
           NOTES
