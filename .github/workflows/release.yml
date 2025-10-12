@@ -1,0 +1,397 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  ZIG_VERSION: '0.15.1'
+
+jobs:
+  build-matrix:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64 (dynamic)
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-linux-gnu
+            artifact: zigcat-linux-x64
+            extension: ''
+            strip: true
+            tls: true
+
+          # Linux x64 static (musl, NO TLS)
+          - name: Linux x64 Static
+            os: ubuntu-latest
+            target: x86_64-linux-musl
+            artifact: zigcat-linux-x64-static
+            extension: ''
+            strip: true
+            tls: false
+            static: true
+
+          # Linux ARM64 (dynamic)
+          - name: Linux ARM64
+            os: ubuntu-latest
+            target: aarch64-linux-gnu
+            artifact: zigcat-linux-arm64
+            extension: ''
+            strip: true
+            tls: true
+
+          # Linux ARM64 static (musl, NO TLS)
+          - name: Linux ARM64 Static
+            os: ubuntu-latest
+            target: aarch64-linux-musl
+            artifact: zigcat-linux-arm64-static
+            extension: ''
+            strip: true
+            tls: false
+            static: true
+
+          # Linux x86 32-bit (dynamic)
+          - name: Linux x86
+            os: ubuntu-latest
+            target: x86-linux-gnu
+            artifact: zigcat-linux-x86
+            extension: ''
+            strip: true
+            tls: true
+
+          # Linux x86 32-bit static (musl, NO TLS)
+          - name: Linux x86 Static
+            os: ubuntu-latest
+            target: x86-linux-musl
+            artifact: zigcat-linux-x86-static
+            extension: ''
+            strip: true
+            tls: false
+            static: true
+
+          # Linux ARM 32-bit (dynamic)
+          - name: Linux ARM
+            os: ubuntu-latest
+            target: arm-linux-gnueabihf
+            artifact: zigcat-linux-arm
+            extension: ''
+            strip: true
+            tls: true
+
+          # Linux ARM 32-bit static (musl, NO TLS)
+          - name: Linux ARM Static
+            os: ubuntu-latest
+            target: arm-linux-musleabihf
+            artifact: zigcat-linux-arm-static
+            extension: ''
+            strip: true
+            tls: false
+            static: true
+
+          # macOS x64 (Intel)
+          - name: macOS x64
+            os: macos-latest
+            target: x86_64-macos-none
+            artifact: zigcat-macos-x64
+            extension: ''
+            strip: true
+            tls: true
+
+          # macOS ARM64 (Apple Silicon)
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-macos-none
+            artifact: zigcat-macos-arm64
+            extension: ''
+            strip: true
+            tls: true
+
+          # Windows x64
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-windows-gnu
+            artifact: zigcat-windows-x64
+            extension: '.exe'
+            strip: true
+            tls: true
+
+          # Windows x86 (32-bit)
+          - name: Windows x86
+            os: windows-latest
+            target: x86-windows-gnu
+            artifact: zigcat-windows-x86
+            extension: '.exe'
+            strip: true
+            tls: true
+
+          # FreeBSD x64
+          - name: FreeBSD x64
+            os: ubuntu-latest
+            target: x86_64-freebsd-gnu
+            artifact: zigcat-freebsd-x64
+            extension: ''
+            strip: true
+            tls: true
+
+          # OpenBSD x64
+          - name: OpenBSD x64
+            os: ubuntu-latest
+            target: x86_64-openbsd-none
+            artifact: zigcat-openbsd-x64
+            extension: ''
+            strip: true
+            tls: true
+
+          # NetBSD x64
+          - name: NetBSD x64
+            os: ubuntu-latest
+            target: x86_64-netbsd-none
+            artifact: zigcat-netbsd-x64
+            extension: ''
+            strip: true
+            tls: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install OpenSSL (Ubuntu)
+        if: matrix.tls && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install OpenSSL (macOS)
+        if: matrix.tls && runner.os == 'macOS'
+        run: |
+          brew install openssl@3 pkg-config
+
+      - name: Build binary
+        shell: bash
+        run: |
+          # Build with appropriate flags
+          BUILD_ARGS="-Dtarget=${{ matrix.target }}"
+
+          if [ "${{ matrix.strip }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS -Dstrip=true"
+          fi
+
+          if [ "${{ matrix.tls }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS -Dtls=true"
+          else
+            BUILD_ARGS="$BUILD_ARGS -Dtls=false"
+          fi
+
+          if [ "${{ matrix.static }}" = "true" ]; then
+            BUILD_ARGS="$BUILD_ARGS -Dstatic=true"
+          fi
+
+          echo "Building with: zig build $BUILD_ARGS"
+          zig build $BUILD_ARGS
+
+          # Rename binary
+          if [ -n "${{ matrix.extension }}" ]; then
+            mv zig-out/bin/zigcat${{ matrix.extension }} zig-out/bin/${{ matrix.artifact }}${{ matrix.extension }}
+          else
+            mv zig-out/bin/zigcat zig-out/bin/${{ matrix.artifact }}
+          fi
+
+      - name: Verify binary
+        shell: bash
+        run: |
+          BINARY="zig-out/bin/${{ matrix.artifact }}${{ matrix.extension }}"
+
+          if [ ! -f "$BINARY" ]; then
+            echo "Error: Binary not found: $BINARY"
+            exit 1
+          fi
+
+          ls -lh "$BINARY"
+          file "$BINARY" || true
+
+          # Verify static linkage for static builds (Linux only)
+          if [ "${{ matrix.static }}" = "true" ] && [ "${{ runner.os }}" = "Linux" ]; then
+            echo "Verifying static linkage..."
+            if ldd "$BINARY" 2>&1 | grep -q "not a dynamic executable"; then
+              echo "✓ Verified: True static binary"
+            else
+              echo "⚠ Warning: Binary may have dynamic dependencies"
+              ldd "$BINARY" || true
+            fi
+          fi
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          cd zig-out/bin
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            certutil -hashfile "${{ matrix.artifact }}${{ matrix.extension }}" SHA256 | grep -v "SHA256" | grep -v "CertUtil" | tr -d '\r\n ' > "${{ matrix.artifact }}${{ matrix.extension }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.artifact }}${{ matrix.extension }}" | cut -d' ' -f1 > "${{ matrix.artifact }}${{ matrix.extension }}.sha256"
+          fi
+          echo "SHA256 checksum:"
+          cat "${{ matrix.artifact }}${{ matrix.extension }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            zig-out/bin/${{ matrix.artifact }}${{ matrix.extension }}
+            zig-out/bin/${{ matrix.artifact }}${{ matrix.extension }}.sha256
+          retention-days: 7
+
+  create-release:
+    name: Create Release
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release directory
+        run: |
+          mkdir -p release
+          find release-artifacts -type f -exec mv {} release/ \;
+          ls -lh release/
+
+      - name: Generate SHA256SUMS file
+        run: |
+          cd release
+          sha256sum zigcat-* | grep -v ".sha256$" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ github.event.inputs.tag }}"
+          fi
+
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          # Get previous tag
+          PREV_TAG=$(git describe --tags --abbrev=0 $TAG_NAME^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+            echo "Initial release of Zigcat - modern netcat clone written in Zig" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "## Features" >> $GITHUB_OUTPUT
+            echo "- TCP/UDP networking with timeout support" >> $GITHUB_OUTPUT
+            echo "- TLS support via OpenSSL" >> $GITHUB_OUTPUT
+            echo "- Proxy support (HTTP CONNECT, SOCKS4, SOCKS5)" >> $GITHUB_OUTPUT
+            echo "- Unix domain sockets" >> $GITHUB_OUTPUT
+            echo "- Port scanning (zero-I/O mode)" >> $GITHUB_OUTPUT
+            echo "- Exec mode (command execution on connection)" >> $GITHUB_OUTPUT
+            echo "- Multi-platform support (Linux, macOS, Windows, BSD)" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+            echo "## Changes since $PREV_TAG" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            git log --pretty=format:"- %s (%h)" $PREV_TAG..$TAG_NAME >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release notes
+        run: |
+          TAG_NAME="${{ steps.changelog.outputs.TAG_NAME }}"
+
+          cat > release-notes.md <<'NOTES'
+          # Zigcat Release ${{ steps.changelog.outputs.TAG_NAME }}
+
+          Modern netcat clone written in Zig with TLS, proxy support, and timeout-aware I/O.
+
+          ## Downloads
+
+          ### Linux
+          - **x64 (dynamic):** `zigcat-linux-x64`
+          - **x64 (static musl):** `zigcat-linux-x64-static` - Portable, no dependencies, NO TLS
+          - **ARM64 (dynamic):** `zigcat-linux-arm64`
+          - **ARM64 (static musl):** `zigcat-linux-arm64-static` - Portable, no dependencies, NO TLS
+          - **x86 32-bit (dynamic):** `zigcat-linux-x86`
+          - **x86 32-bit (static musl):** `zigcat-linux-x86-static` - Portable, no dependencies, NO TLS
+          - **ARM 32-bit (dynamic):** `zigcat-linux-arm`
+          - **ARM 32-bit (static musl):** `zigcat-linux-arm-static` - Portable, no dependencies, NO TLS
+
+          ### macOS
+          - **Intel (x64):** `zigcat-macos-x64`
+          - **Apple Silicon (ARM64):** `zigcat-macos-arm64`
+
+          ### Windows
+          - **x64:** `zigcat-windows-x64.exe`
+          - **x86 (32-bit):** `zigcat-windows-x86.exe`
+
+          ### BSD
+          - **FreeBSD x64:** `zigcat-freebsd-x64`
+          - **OpenBSD x64:** `zigcat-openbsd-x64`
+          - **NetBSD x64:** `zigcat-netbsd-x64`
+
+          ## Verification
+
+          Verify downloads using SHA256 checksums:
+          ```bash
+          # All checksums in one file
+          sha256sum -c SHA256SUMS
+
+          # Individual file
+          sha256sum zigcat-linux-x64
+          cat zigcat-linux-x64.sha256
+          ```
+
+          ## Notes
+
+          - **Static builds** (musl) have TLS disabled for true portability and zero dependencies
+          - **Dynamic builds** include OpenSSL TLS support
+          - All binaries are stripped for minimal size (~1.8MB on Linux)
+
+          ${{ steps.changelog.outputs.CHANGELOG }}
+          NOTES
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.changelog.outputs.TAG_NAME }}
+          name: Release ${{ steps.changelog.outputs.TAG_NAME }}
+          body_path: release-notes.md
+          files: |
+            release/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          echo "## Release Created: ${{ steps.changelog.outputs.TAG_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts:" >> $GITHUB_STEP_SUMMARY
+          ls -lh release/ | tail -n +2 | awk '{printf "- %s (%s)\n", $9, $5}' >> $GITHUB_STEP_SUMMARY
