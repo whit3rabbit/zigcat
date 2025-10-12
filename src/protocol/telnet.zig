@@ -1,3 +1,10 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+
 //! Core Telnet enums, helpers, and validation utilities shared by the protocol
 //! processor. These definitions mirror RFC 854/855 terminology so the event
 //! loop can reason about commands, options, and legal state transitions.

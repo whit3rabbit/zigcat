@@ -160,6 +160,21 @@ pub fn build(b: *std.Build) void {
     const tls_backend = b.option(TlsBackendOption, "tls-backend", "TLS backend: openssl (default), wolfssl (lightweight)") orelse .openssl;
     const use_wolfssl = (tls_backend == .wolfssl);
 
+    // If wolfSSL is selected, print a GPLv2 license warning.
+    if (use_wolfssl) {
+        std.log.warn("=====================================================================", .{});
+        std.log.warn("                            LICENSE WARNING                            ", .{});
+        std.log.warn("=====================================================================", .{});
+        std.log.warn("You have enabled the wolfSSL backend (-Dtls-backend=wolfssl).", .{});
+        std.log.warn("wolfSSL is licensed under the GNU General Public License v2 (GPLv2).", .{});
+        std.log.warn("Therefore, the resulting `zigcat` binary is also bound by the GPLv2.", .{});
+        std.log.warn("If you distribute this binary, you must comply with the GPLv2 terms,", .{});
+        std.log.warn("which include providing the source code.", .{});
+        std.log.warn("", .{});
+        std.log.warn("For details, see LICENSE-GPLv2 and the main LICENSE file.", .{});
+        std.log.warn("=====================================================================", .{});
+    }
+
     // CRITICAL: Validate that `static` and `tls` with OpenSSL are not enabled simultaneously.
     // Statically linking OpenSSL is complex and platform-dependent.
     // wolfSSL supports static linking, so allow static + wolfssl combination.
