@@ -76,7 +76,12 @@ pub const CompletionResult = struct {
 /// - Queue depth determines max concurrent operations
 /// - Typical queue sizes: 32 (client), 64 (exec mode), 512 (port scanning)
 /// - Each operation consumes one submission queue entry (SQE)
-pub const UringEventLoop = if (builtin.os.tag == .linux) struct {
+///
+/// Architecture note:
+/// - io_uring is only available on Linux x86_64 in Zig 0.15.2
+/// - ARM architectures do not have std.os.linux.IO_Uring
+/// - During cross-compilation, check @hasDecl before referencing IO_Uring
+pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and @hasDecl(std.os.linux, "IO_Uring")) struct {
     ring: std.os.linux.IO_Uring,
     allocator: std.mem.Allocator,
 
@@ -97,7 +102,7 @@ pub const UringEventLoop = if (builtin.os.tag == .linux) struct {
     ///   - error.OutOfMemory: Failed to allocate ring buffers
     ///   - error.SystemResources: Insufficient kernel resources
     pub fn init(allocator: std.mem.Allocator, entries: u32) !UringEventLoop {
-        if (builtin.os.tag != .linux) {
+        if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) {
             return error.IoUringNotSupported;
         }
 

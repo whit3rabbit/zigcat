@@ -147,8 +147,12 @@ pub fn getLinuxKernelVersion() !KernelVersion {
 /// }
 /// ```
 pub fn isIoUringSupported() bool {
-    // Compile-time check: Only available on Linux
+    // Compile-time check: Only available on Linux x86_64
+    // io_uring support in Zig stdlib is architecture-dependent
     if (builtin.os.tag != .linux) {
+        return false;
+    }
+    if (builtin.cpu.arch != .x86_64) {
         return false;
     }
 
@@ -160,6 +164,14 @@ pub fn isIoUringSupported() bool {
 
     // Syscall probe: Try to create an io_uring instance
     // If the syscall succeeds, CONFIG_IO_URING is enabled
+    //
+    // CRITICAL: std.os.linux.IO_Uring only exists when compiling FOR Linux x86_64.
+    // During cross-compilation (macOS → Linux), the type doesn't exist in stdlib.
+    // We must use @hasDecl to check if the type exists before referencing it.
+    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+        return false;
+    }
+
     const IO_Uring = std.os.linux.IO_Uring;
 
     // Try to initialize with minimal 1-entry ring

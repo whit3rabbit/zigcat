@@ -59,7 +59,9 @@ pub const TlsConnection = struct {
 
     // Backend union is compile-time generated based on which backend is enabled
     // This avoids requiring both backend types to be valid even when only one is used
-    pub const Backend = if (use_wolfssl) union(enum) {
+    pub const Backend = if (!enable_tls) union(enum) {
+        disabled: void,
+    } else if (use_wolfssl) union(enum) {
         wolfssl: *WolfSslTls,
         disabled: void,
     } else union(enum) {
@@ -80,7 +82,9 @@ pub const TlsConnection = struct {
     /// @param buffer The buffer to store the decrypted plaintext data.
     /// @return The number of bytes read into `buffer`, or any `TlsError`.
     pub fn read(self: *TlsConnection, buffer: []u8) !usize {
-        if (use_wolfssl) {
+        if (!enable_tls) {
+            return error.TlsNotEnabled;
+        } else if (use_wolfssl) {
             return switch (self.backend) {
                 .wolfssl => |tls| try tls.read(buffer),
                 .disabled => error.TlsNotEnabled,
@@ -106,7 +110,9 @@ pub const TlsConnection = struct {
     /// @param data The plaintext data to encrypt and send.
     /// @return The number of bytes from `data` that were written, or any `TlsError`.
     pub fn write(self: *TlsConnection, data: []const u8) !usize {
-        if (use_wolfssl) {
+        if (!enable_tls) {
+            return error.TlsNotEnabled;
+        } else if (use_wolfssl) {
             return switch (self.backend) {
                 .wolfssl => |tls| try tls.write(data),
                 .disabled => error.TlsNotEnabled,
@@ -133,7 +139,9 @@ pub const TlsConnection = struct {
     ///
     /// @param self The `TlsConnection` instance.
     pub fn close(self: *TlsConnection) void {
-        if (use_wolfssl) {
+        if (!enable_tls) {
+            return;
+        } else if (use_wolfssl) {
             switch (self.backend) {
                 .wolfssl => |tls| tls.close(),
                 .disabled => {},
@@ -163,7 +171,9 @@ pub const TlsConnection = struct {
     /// defer tls_conn.deinit();  // Idiomatic cleanup
     /// ```
     pub fn deinit(self: *TlsConnection) void {
-        if (use_wolfssl) {
+        if (!enable_tls) {
+            return;
+        } else if (use_wolfssl) {
             switch (self.backend) {
                 .wolfssl => |tls| {
                     tls.deinit();
@@ -196,7 +206,9 @@ pub const TlsConnection = struct {
     /// - Do NOT close this socket directly - use `close()` instead
     /// - Do NOT perform I/O on this socket - use `read()`/`write()` instead
     pub fn getSocket(self: *TlsConnection) std.posix.socket_t {
-        if (use_wolfssl) {
+        if (!enable_tls) {
+            unreachable;
+        } else if (use_wolfssl) {
             return switch (self.backend) {
                 .wolfssl => |tls| tls.socket,
                 .disabled => unreachable,
@@ -370,6 +382,7 @@ pub const TlsError = error{
 // TLS backend imports - conditional based on build options
 // Backend is selected at build time via -Dtls-backend flag
 // Only import the backend that's actually enabled to avoid linking unused libraries
-const use_wolfssl = @hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl;
-const OpenSslTls = if (!use_wolfssl) @import("tls_openssl.zig").OpenSslTls else void;
-const WolfSslTls = if (use_wolfssl) @import("tls_wolfssl.zig").WolfSslTls else void;
+const enable_tls = @hasDecl(build_options, "enable_tls") and build_options.enable_tls;
+const use_wolfssl = enable_tls and @hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl;
+const OpenSslTls = if (enable_tls and !use_wolfssl) @import("tls_openssl.zig").OpenSslTls else void;
+const WolfSslTls = if (enable_tls and use_wolfssl) @import("tls_wolfssl.zig").WolfSslTls else void;

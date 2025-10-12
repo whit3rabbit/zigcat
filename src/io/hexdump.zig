@@ -891,7 +891,7 @@ pub const HexDumperAuto = union(enum) {
         if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
             const uring_dumper = HexDumperUring.init(allocator, cfg) catch |err| {
                 // Log fallback reason (only in verbose mode)
-                if (std.os.getenv("ZIGCAT_VERBOSE")) |_| {
+                if (std.posix.getenv("ZIGCAT_VERBOSE")) |_| {
                     std.debug.print("Note: io_uring hex dump I/O unavailable, using blocking I/O ({})\n", .{err});
                 }
                 // Fallback to blocking

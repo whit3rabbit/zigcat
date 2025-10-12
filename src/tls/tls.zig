@@ -31,9 +31,10 @@ const build_options = @import("build_options");
 
 // Conditional backend imports: Only import the backend that's actually enabled
 // This prevents compiling unused TLS backends and their dependencies
-const use_wolfssl = @hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl;
-const OpenSslTls = if (!use_wolfssl) @import("tls_openssl.zig").OpenSslTls else void;
-const WolfSslTls = if (use_wolfssl) @import("tls_wolfssl.zig").WolfSslTls else void;
+const enable_tls = @hasDecl(build_options, "enable_tls") and build_options.enable_tls;
+const use_wolfssl = enable_tls and @hasDecl(build_options, "use_wolfssl") and build_options.use_wolfssl;
+const OpenSslTls = if (enable_tls and !use_wolfssl) @import("tls_openssl.zig").OpenSslTls else void;
+const WolfSslTls = if (enable_tls and use_wolfssl) @import("tls_wolfssl.zig").WolfSslTls else void;
 
 const tls_config = @import("tls_config.zig");
 const posix = std.posix;

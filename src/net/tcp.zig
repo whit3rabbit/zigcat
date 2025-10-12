@@ -170,8 +170,14 @@ fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32, cfg: *const c
 ///
 /// Returns: Connected socket or error (UnknownHost, ConnectionTimeout, ConnectionFailed, IoUringNotSupported)
 fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *const config.Config) !socket.Socket {
-    // Compile-time check: io_uring only available on Linux
-    if (builtin.os.tag != .linux) {
+    // Compile-time check: io_uring only available on Linux x86_64
+    // io_uring support in Zig stdlib is architecture-dependent
+    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) {
+        return error.IoUringNotSupported;
+    }
+
+    // Check if IO_Uring type exists (fails during cross-compilation)
+    if (!@hasDecl(std.os.linux, "IO_Uring")) {
         return error.IoUringNotSupported;
     }
 

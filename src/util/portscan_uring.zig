@@ -40,8 +40,9 @@ const posix = std.posix;
 const net = std.net;
 const logging = @import("logging.zig");
 
-/// Compile-time check: io_uring is only available on Linux
-pub const io_uring_available = builtin.os.tag == .linux;
+/// Compile-time check: io_uring is only available on Linux x86_64
+/// io_uring support in Zig stdlib is architecture-dependent
+pub const io_uring_available = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64;
 
 /// Scan result for port scanning
 pub const ScanResult = struct {
@@ -124,6 +125,11 @@ pub fn scanPortsIoUring(
 
     // Use first resolved address as template
     const template_addr = addr_list.addrs[0];
+
+    // Check if IO_Uring type exists (fails during cross-compilation)
+    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+        return error.IoUringNotSupported;
+    }
 
     // Initialize io_uring with 512-entry queue for high concurrency
     const IO_Uring = std.os.linux.IO_Uring;

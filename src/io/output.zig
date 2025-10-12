@@ -862,7 +862,7 @@ pub const OutputLoggerAuto = union(enum) {
         if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
             const uring_logger = OutputLoggerUring.init(allocator, path, append) catch |err| {
                 // Log fallback reason (only in verbose mode)
-                if (std.os.getenv("ZIGCAT_VERBOSE")) |_| {
+                if (std.posix.getenv("ZIGCAT_VERBOSE")) |_| {
                     std.debug.print("Note: io_uring file I/O unavailable, using blocking I/O ({})\n", .{err});
                 }
                 // Fallback to blocking
