@@ -16,7 +16,7 @@ jobs:
     name: Smoke Tests
     runs-on: ubuntu-latest
     env:
-      ZIG_VERSION: 0.15.1
+      ZIG_VERSION: 0.15.2
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
     steps:
       - uses: actions/checkout@v4
@@ -103,7 +103,7 @@ jobs:
               zig build test-validation
               zig build test-platform
     env:
-      ZIG_VERSION: 0.15.1
+      ZIG_VERSION: 0.15.2
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
     steps:
       - uses: actions/checkout@v4
