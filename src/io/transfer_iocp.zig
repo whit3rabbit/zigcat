@@ -54,19 +54,21 @@ const USER_DATA_WRITE: u64 = 2;
 
 /// Windows IOCP-based bidirectional transfer between stdin/stdout and socket.
 ///
-/// Uses Windows I/O Completion Ports for efficient asynchronous I/O with
-/// minimal CPU overhead and low latency event notification.
+/// This function implements a high-performance I/O event loop using Windows
+/// I/O Completion Ports (IOCP). Similar to `io_uring` on Linux, IOCP allows
+/// submitting asynchronous I/O requests and retrieving their results later
+/// without blocking.
 ///
-/// ## Performance Characteristics
-/// - Submission overhead: ~100ns per operation (vs ~1μs for poll)
-/// - Completion overhead: ~500ns per result (vs ~2μs for poll)
-/// - CPU usage: 5-10% under load (vs 30-50% with poll)
-///
-/// ## Features
-/// - Full feature parity with poll-based transfer
-/// - Telnet processing, CRLF conversion, logging, hex dump
-/// - Timeout support (idle_timeout configuration)
-/// - Automatic fallback to poll on errors
+/// The event loop works as follows:
+/// 1. Initial `ReadFile` requests are submitted for both stdin and the socket.
+/// 2. The loop calls `getStatus` to wait for a completion packet, indicating
+///    that an I/O operation has finished.
+/// 3. When a `ReadFile` operation completes, the received data is processed,
+///    and a `WriteFile` request is submitted to the corresponding destination.
+/// 4. A new `ReadFile` request is immediately submitted for the original source
+///    to continue listening for data.
+/// This cycle of submitting requests and processing completions continues until
+/// both connections are closed, enabling fully asynchronous, non-blocking I/O.
 pub fn bidirectionalTransferIocp(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,

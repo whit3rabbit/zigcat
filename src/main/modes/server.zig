@@ -4,8 +4,10 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! Server/broker entrypoints for zigcat.
+//! This module is the primary orchestrator for all server-side operations,
+//! including TCP, UDP, and dual-stack listeners. It is responsible for parsing
+//! addresses, creating listener sockets, managing the main accept loop, and
+//! dispatching incoming connections to the appropriate handlers.
 
 const std = @import("std");
 const posix = std.posix;

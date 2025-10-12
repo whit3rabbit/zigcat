@@ -55,6 +55,10 @@ pub const UnixServer = struct {
         // Socket file will be created with 0o700 (rwx------) permissions
         // Platform-specific umask handling
         var old_umask: std.posix.mode_t = undefined;
+        // SECURITY: Set a restrictive umask (0o077) before binding. This ensures
+        // the socket file is created with secure permissions (owner-only access)
+        // from the moment of creation, preventing a race condition where it could
+        // be briefly world-accessible.
         if (builtin.os.tag == .linux or builtin.os.tag == .macos or builtin.os.tag == .freebsd or builtin.os.tag == .netbsd or builtin.os.tag == .openbsd) {
             // Use system call directly on Unix-like systems
             old_umask = std.posix.system.umask(0o077);

@@ -147,6 +147,9 @@ fn acceptWithAccessControlPosix(
                     );
                 }
 
+                // SECURITY: Apply exponential backoff to mitigate DoS attacks. A flood of
+                // connections from a denied IP can cause this loop to spin and consume 100%
+                // CPU. This delay forces the attacker to slow down.
                 const delay_ns = delay_ms * @as(u64, std.time.ns_per_ms);
                 std.Thread.sleep(delay_ns);
             }
@@ -326,6 +329,9 @@ pub fn acceptWithAccessControlIoUring(
                     );
                 }
 
+                // SECURITY: Apply exponential backoff to mitigate DoS attacks. A flood of
+                // connections from a denied IP can cause this loop to spin and consume 100%
+                // CPU. This delay forces the attacker to slow down.
                 const delay_ns = delay_ms * @as(u64, std.time.ns_per_ms);
                 std.Thread.sleep(delay_ns);
             }

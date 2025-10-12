@@ -4,8 +4,9 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! Application bootstrap for zigcat.
+//! This file is the main application bootstrap. It is responsible for parsing arguments,
+//! performing initial configuration validation, and dispatching to either client or
+//! server mode.
 
 const std = @import("std");
 
