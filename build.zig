@@ -243,7 +243,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const options = b.addOptions();
-    options.addOption([]const u8, "version", "0.1.0");
+    options.addOption([]const u8, "version", "0.0.1");
     options.addOption([]const u8, "zig_version", @import("builtin").zig_version_string);
     options.addOption(bool, "enable_tls", enable_tls);
     options.addOption(bool, "enable_unixsock", enable_unixsock);
