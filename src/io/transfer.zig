@@ -27,11 +27,16 @@ const BUFFER_SIZE = 8192;
 const stream_mod = @import("stream.zig");
 
 /// Dispatches to the platform-specific transfer loop.
-/// Non-Windows targets prefer the POSIX poll-based implementation, while the
-/// fallback case intentionally reuses the Windows path because the select()
-/// shim works anywhere Zig lacks native poll support (e.g. niche Unix targets).
 ///
-/// On Linux 5.1+, automatically uses io_uring for high-performance async I/O.
+/// This function is the main entry point for bidirectional data transfer. It
+/// uses an event-driven loop to relay data between standard input/output and a
+/// network socket. The core logic involves waiting for I/O readiness on both
+/// the stdin and socket file descriptors using an efficient OS-specific mechanism
+/// (`io_uring`, `IOCP`, or `poll`). When data is ready on one, it's read and
+/// then written to the other in a non-blocking fashion.
+///
+/// On Linux 5.1+, it automatically uses `io_uring` for high-performance async I/O.
+/// On Windows, it uses `IOCP`. On other Unix-like systems, it falls back to `poll`.
 pub fn bidirectionalTransfer(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,
@@ -299,7 +304,16 @@ pub fn bidirectionalTransferWindows(
     }
 }
 
-/// Bidirectional data transfer between stdin/stdout and socket
+/// Bidirectional data transfer between stdin/stdout and socket using `poll`.
+///
+/// This function implements the I/O event loop for Unix-like systems. It uses
+/// the `poll()` system call to wait for I/O readiness on two file descriptors:
+/// one for standard input and one for the network socket. The loop continues
+/// as long as at least one of the connections is active. Inside the loop, it
+/// checks the `revents` field of the `pollfd` structures to see which descriptor
+/// is ready. If stdin has data, it's read and written to the socket. If the
+/// socket has data, it's read and written to stdout. This ensures non-blocking
+/// I/O and efficient data relay.
 pub fn bidirectionalTransferPosix(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,
@@ -529,26 +543,21 @@ pub fn bidirectionalTransferPosix(
 
 /// Bidirectional data transfer using io_uring (Linux 5.1+ only)
 ///
-/// High-performance async I/O implementation with 10-50x lower CPU usage
-/// compared to poll-based transfer. Uses asynchronous reads/writes via
-/// io_uring submission/completion queues.
+/// This function implements a high-performance I/O event loop using Linux's
+/// `io_uring` interface. Unlike `poll`, which requires separate `read` and
+/// `write` syscalls, `io_uring` allows submitting multiple I/O requests to the
+/// kernel at once and retrieving their results later.
 ///
-/// Features:
-/// - Zero-copy kernel I/O with minimal syscall overhead
-/// - Automatic fallback to poll on errors
-/// - Full feature parity with poll-based transfer
-/// - Telnet processing, CRLF conversion, logging, hex dump
-///
-/// Queue architecture:
-/// - 32-entry queue (2 FDs × 16 operations)
-/// - user_data=0: stdin read operations
-/// - user_data=1: socket read operations
-/// - user_data=2: write operations (fire-and-forget)
-///
-/// Performance characteristics:
-/// - Submission overhead: ~100ns per operation (vs ~1μs for poll)
-/// - Completion overhead: ~200ns per result (vs ~2μs for poll)
-/// - CPU usage: 5-10% (vs 40-60% with poll under load)
+/// The event loop works as follows:
+/// 1. Initial `read` requests are submitted for both stdin and the socket.
+/// 2. The loop calls `waitForCompletion` to wait for any I/O operation to finish.
+/// 3. When a `read` completes, the received data is processed, and a `write`
+///    request is submitted to the corresponding destination (e.g., data from
+///    stdin is written to the socket).
+/// 4. A new `read` request is immediately submitted for the original source to
+///    continue listening for data.
+/// This cycle of submitting requests and processing completions continues until
+/// both connections are closed, enabling fully asynchronous, non-blocking I/O.
 pub fn bidirectionalTransferIoUring(
     allocator: std.mem.Allocator,
     stream: stream_mod.Stream,

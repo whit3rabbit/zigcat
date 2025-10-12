@@ -68,6 +68,14 @@ else
 /// 1. Windows: IOCP (10-20% CPU usage)
 /// 2. Linux 5.1+: io_uring (5-10% CPU usage)
 /// 3. Other Unix: poll (30-50% CPU usage)
+///
+/// The `ExecSession` is a `union` to allow for compile-time polymorphism.
+/// This design enables the application to contain code for multiple I/O backends
+/// (like `io_uring`, `IOCP`, and `poll`) while only including the necessary
+/// backend code in the final binary, based on the target OS. For example, the
+/// `iocp` variant is only compiled on Windows. This avoids runtime overhead
+/// and platform-specific compilation errors, reinforcing the project's focus
+/// on performance and portability.
 pub const ExecSession = union(enum) {
     poll: PollSession,
     uring: UringSession,

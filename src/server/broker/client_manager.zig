@@ -209,6 +209,14 @@ pub const ClientInfo = struct {
 ///
 /// Provides concurrent access to client connections with unique IDs,
 /// automatic resource management, and efficient lookup operations.
+///
+/// ## Thread Safety
+/// All public methods of `ClientPool` are protected by a `std.Thread.Mutex`.
+/// This ensures that all operations on the underlying client HashMap (adding,
+/// removing, accessing clients) are atomic and safe to call from multiple
+/// threads simultaneously. This is critical in a server environment where one
+/// thread may be accepting new connections while other threads are handling
+/// I/O for existing clients.
 pub const ClientPool = struct {
     /// Memory allocator for client data structures
     allocator: std.mem.Allocator,

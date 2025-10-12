@@ -4,13 +4,12 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! Telnet option handlers covering RFC 857 (echo), RFC 858 (suppress go-ahead),
-//! RFC 1073 (NAWS), RFC 1091 (terminal type), and RFC 1184 (linemode).
-//! These helpers encapsulate the WILL/WONT/DO/DONT exchange for each option so
-//! the state machine can stay lean. Adding a new option typically means writing
-//! a handler that appends the appropriate negotiation bytes and wiring it into
-//! the registry below.
+//! This file defines handlers for individual Telnet options like ECHO, NAWS,
+//! and Terminal Type. Each handler is a struct that implements the logic for
+//! responding to WILL/WONT/DO/DONT commands for a specific option. This
+//! modular approach keeps the core state machine in `telnet_processor.zig`
+//! clean and focused on parsing, while the option-specific logic is
+//! encapsulated here.
 
 const std = @import("std");
 const telnet = @import("telnet.zig");

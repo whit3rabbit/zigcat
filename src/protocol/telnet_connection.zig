@@ -4,8 +4,12 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! TelnetConnection wrapper providing unified read/write interface with Telnet protocol processing.
+//! This file implements the `TelnetConnection` struct, which acts as a high-level
+//! wrapper around a raw network connection (`Connection`). Its primary role is to
+//! provide a standard `read()` and `write()` interface that transparently handles
+// a Telnet session. It uses `TelnetProcessor` to handle the underlying state
+//! machine, but this struct manages the I/O buffers and orchestrates the
+//! interaction between application data and Telnet commands.
 
 const std = @import("std");
 const Connection = @import("../net/connection.zig").Connection;

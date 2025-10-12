@@ -4,8 +4,8 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! Shared runtime utilities for `main`.
+//! This is a shared utility module for the main package, responsible for global
+//! concerns like signal handling and centralized error message formatting.
 
 const std = @import("std");
 const builtin = @import("builtin");

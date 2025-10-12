@@ -69,16 +69,20 @@ const DnsCache = dns_cache.DnsCache;
 ///
 /// ## Rule Precedence
 /// This function only checks if a single rule matches. The calling logic (e.g.,
-/// in `config/security.zig`) is responsible for enforcing precedence. The
-/// standard behavior is:
-/// 1. Check all **deny** rules first. If any deny rule matches, access is
-///    immediately denied.
-/// 2. If no deny rules match, check all **allow** rules. If any allow rule
-///    matches, access is granted.
-/// 3. If no rules match, the default policy (typically deny) is applied.
+/// in `AccessList.isAllowed`) is responsible for enforcing precedence. The
+/// standard behavior is "deny-first":
 ///
-/// This "deny-first" approach ensures that specific exclusions always override
-/// broader permissions.
+/// 1. **Deny Rules First**: All deny rules are checked first. If the incoming
+///    address matches any deny rule, access is immediately denied, and no
+///    further checks are performed.
+/// 2. **Allow Rules Second**: If and only if no deny rules match, the allow
+///    rules are checked. If the address matches an allow rule, access is
+///    granted.
+/// 3. **Default Policy**: If the address matches neither a deny nor an allow
+///    rule, access is denied by default.
+///
+/// This "deny-first" evaluation order is a critical security detail, as it
+/// ensures that specific exclusions always override broader permissions.
 pub fn matchesRule(dns_cache_ptr: *DnsCache, addr: std.net.Address, rule: IpRule) bool {
     switch (rule) {
         .single_ipv4 => |rule_addr| {

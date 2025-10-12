@@ -4,11 +4,13 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
+//! This file implements the core Telnet command/option state machine. The
+//! `TelnetProcessor` struct is responsible for parsing the incoming byte stream,
+//! identifying Telnet commands (like IAC, WILL, DO), and managing the negotiation
+//! state for each option. It separates raw application data from protocol
+// commands, handing off option-specific logic to the handlers in
+//! `telnet_options.zig`.
 
-//! Telnet protocol state machine that filters IAC sequences and brokers
-//! option negotiation per RFC 854/855. The processor collaborates with
-//! `OptionHandlerRegistry` so each option handler can emit responses while
-//! the core loop focuses on state tracking, buffering, and allocator hygiene.
 const std = @import("std");
 const telnet = @import("telnet.zig");
 const telnet_options = @import("telnet_options.zig");

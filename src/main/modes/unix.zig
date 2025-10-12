@@ -4,8 +4,9 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! Unix domain socket server helpers.
+//! This module contains the server logic specific to Unix Domain Sockets,
+//! including path validation, socket cleanup, and managing the accept loop for
+//! local IPC.
 
 const std = @import("std");
 const posix = std.posix;

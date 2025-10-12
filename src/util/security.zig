@@ -126,24 +126,18 @@ pub fn dropPrivileges(target_user: []const u8) !void {
     // 2. setgid() - Set primary group (requires root)
     // 3. setuid() - Set user ID (irreversible, must be last)
 
-    // SECURITY: Clear all supplementary groups to prevent retaining privileged
-    // groups like "wheel" or "admin" after dropping to an unprivileged user.
-    // Calling setgroups with size 0 and a null list is the standard way to do this.
+    // SECURITY: The order of these operations is critical for a secure privilege drop.
+    // 1. Clear supplementary groups to ensure we don't retain privileged group memberships.
     if (c.setgroups(0, null) != 0) {
         const errno = std.posix.errno(-1);
         std.debug.print("Error: Failed to clear supplementary groups with setgroups(0, null): errno={any}\n", .{errno});
         return SecurityError.SetgroupsFailed;
     }
 
-    // SECURITY FIX (2025-10-10): Use 'try' to propagate errors immediately.
-    // Previous catch blocks could theoretically allow partial privilege drop if setgid
-    // failed but execution continued. Using 'try' ensures the entire privilege drop
-    // operation aborts on any failure, preventing insecure partial drops.
-    //
-    // CRITICAL: If setgid fails, the process retains privileged group membership.
-    // If execution then continued to setuid, we'd have an unprivileged user with
-    // privileged group access - a serious security vulnerability.
+    // 2. Set the Group ID (GID) before the User ID (UID). This operation requires root privileges.
     try std.posix.setgid(pw.gid);
+
+    // 3. Set the User ID (UID). This is an irreversible operation; after this, we are no longer root.
     try std.posix.setuid(pw.uid);
 
     // Verify we can't get root back

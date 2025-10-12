@@ -4,8 +4,8 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
-//! Broker/chat server bootstrap.
+//! This file is the entry point for initializing and running the broker/chat server.
+//! It is responsible for creating the BrokerServer instance and starting its event loop.
 
 const std = @import("std");
 
