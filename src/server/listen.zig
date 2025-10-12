@@ -222,6 +222,11 @@ pub fn acceptWithAccessControlIoUring(
     access_list: *allowlist.AccessList,
     verbose: bool,
 ) !std.net.Server.Connection {
+    // io_uring is Linux-only (kernel 5.1+, x86_64 only)
+    if (builtin.os.tag != .linux) {
+        return error.IoUringNotSupported;
+    }
+
     // Initialize io_uring with 32-entry queue (sufficient for accept operations)
     var ring = UringEventLoop.init(allocator, 32) catch |err| {
         return err;

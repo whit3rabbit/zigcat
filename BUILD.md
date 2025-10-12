@@ -141,3 +141,56 @@ zig build -Dtls=false
 
 - **Static builds (Linux only)** use musl and embed dependencies; binaries are ~6 MB but run on any modern distribution without extra libraries.
 - **Dynamic builds** are smaller but depend on the platform libc (`libSystem`, `glibc`, etc.). Use these for native deployments where dependencies are available.
+
+## Building on BSD Systems
+
+Zigcat supports FreeBSD, OpenBSD, and NetBSD, but **requires native builds** due to Zig 0.15.2 cross-compilation limitations.
+
+Pre-built BSD binaries are **not available** in releases because:
+- Zig lacks cross-compilation libc support for modern BSD versions (FreeBSD 14.x, OpenBSD 7.x, NetBSD 10.x)
+- Cross-compiled binaries would fail with ABI mismatches
+
+### FreeBSD
+
+```bash
+# Install Zig 0.15.2 or later
+pkg install zig
+
+# Build zigcat
+zig build -Dtls=false -Dstrip=true
+
+# Binary location
+./zig-out/bin/zigcat
+```
+
+### OpenBSD
+
+```bash
+# Install Zig 0.15.2 or later
+pkg_add zig
+
+# Build zigcat
+zig build -Dtls=false -Dstrip=true
+
+# Binary location
+./zig-out/bin/zigcat
+```
+
+### NetBSD
+
+```bash
+# Install Zig 0.15.2 or later
+pkgin install zig
+
+# Build zigcat
+zig build -Dtls=false -Dstrip=true
+
+# Binary location
+./zig-out/bin/zigcat
+```
+
+**Notes:**
+- TLS is disabled (`-Dtls=false`) because BSD cross-compilation doesn't support OpenSSL linking
+- Native builds produce ~1.8-2.0 MB stripped binaries
+- All core features (TCP, UDP, Unix sockets, port scanning, exec mode) work normally
+- For TLS support on BSD, you'll need to wait for v0.1.0 which will include wolfSSL static linking

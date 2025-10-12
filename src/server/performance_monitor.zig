@@ -44,13 +44,14 @@ const WindowsCpuMonitor = if (builtin.os.tag == .windows) struct {
     const windows = std.os.windows;
     const FILETIME = windows.FILETIME;
     const BOOL = windows.BOOL;
+    const WINAPI = windows.WINAPI;
 
     // GetSystemTimes extern declaration
     pub extern "kernel32" fn GetSystemTimes(
         lpIdleTime: ?*FILETIME,
         lpKernelTime: ?*FILETIME,
         lpUserTime: ?*FILETIME,
-    ) callconv(windows.WINAPI) BOOL;
+    ) callconv(WINAPI) BOOL;
 
     // Convert FILETIME to u64 (100-nanosecond intervals)
     pub fn fileTimeToU64(ft: FILETIME) u64 {
@@ -478,19 +479,18 @@ pub const PerformanceMonitor = struct {
         // Use Windows API GlobalMemoryStatusEx to get real memory information
         if (builtin.os.tag == .windows) {
             const windows = std.os.windows;
-            const DWORDLONG = windows.DWORDLONG;
 
-            // MEMORYSTATUSEX structure
+            // MEMORYSTATUSEX structure (use u64 for DWORDLONG fields)
             const MEMORYSTATUSEX = extern struct {
                 dwLength: windows.DWORD,
                 dwMemoryLoad: windows.DWORD,
-                ullTotalPhys: DWORDLONG,
-                ullAvailPhys: DWORDLONG,
-                ullTotalPageFile: DWORDLONG,
-                ullAvailPageFile: DWORDLONG,
-                ullTotalVirtual: DWORDLONG,
-                ullAvailVirtual: DWORDLONG,
-                ullAvailExtendedVirtual: DWORDLONG,
+                ullTotalPhys: u64,
+                ullAvailPhys: u64,
+                ullTotalPageFile: u64,
+                ullAvailPageFile: u64,
+                ullTotalVirtual: u64,
+                ullAvailVirtual: u64,
+                ullAvailExtendedVirtual: u64,
             };
 
             var mem_status: MEMORYSTATUSEX = undefined;

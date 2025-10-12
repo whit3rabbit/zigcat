@@ -8,6 +8,7 @@
 //! Shared runtime utilities for `main`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
 
 const config = @import("../config.zig");
@@ -24,6 +25,12 @@ pub fn handleShutdownSignal(sig: c_int) callconv(.c) void {
 
 /// Register signal handlers when running in listen/server mode.
 pub fn registerSignalHandlers(cfg: *const config.Config) void {
+    // Windows uses SetConsoleCtrlHandler instead of POSIX signals
+    if (builtin.os.tag == .windows) {
+        logging.logVerbose(cfg, "Signal handlers not supported on Windows (use Ctrl+C)\n", .{});
+        return;
+    }
+
     // Initialize empty mask (Zig 0.15.x returns by value).
     const empty_mask = posix.sigemptyset();
 

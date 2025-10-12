@@ -101,14 +101,14 @@ jobs:
             tls: false
             static: true
 
-          # macOS x64 (Intel)
+          # macOS x64 (Intel) - NO TLS due to cross-compile limitation (ARM64 host → x86_64 target)
           - name: macOS x64
             os: macos-latest
             target: x86_64-macos-none
             artifact: zigcat-macos-x64
             extension: ''
             strip: true
-            tls: true
+            tls: false
 
           # macOS ARM64 (Apple Silicon)
           - name: macOS ARM64
@@ -137,32 +137,37 @@ jobs:
             strip: true
             tls: false
 
-          # FreeBSD x64
-          - name: FreeBSD x64
-            os: ubuntu-latest
-            target: x86_64-freebsd-gnu
-            artifact: zigcat-freebsd-x64
-            extension: ''
-            strip: true
-            tls: false
+          # BSD targets removed due to cross-compilation limitations
+          # Zig 0.15.2 lacks cross-compilation libc support for modern BSD versions
+          # Users should build natively on their BSD systems
+          # See README.md "Building on BSD Systems" section for native build instructions
 
-          # OpenBSD x64
-          - name: OpenBSD x64
-            os: ubuntu-latest
-            target: x86_64-openbsd-none
-            artifact: zigcat-openbsd-x64
-            extension: ''
-            strip: true
-            tls: true
+          # # FreeBSD x64
+          # - name: FreeBSD x64
+          #   os: ubuntu-latest
+          #   target: x86_64-freebsd-gnu
+          #   artifact: zigcat-freebsd-x64
+          #   extension: ''
+          #   strip: true
+          #   tls: false
 
-          # NetBSD x64
-          - name: NetBSD x64
-            os: ubuntu-latest
-            target: x86_64-netbsd-none
-            artifact: zigcat-netbsd-x64
-            extension: ''
-            strip: true
-            tls: false
+          # # OpenBSD x64
+          # - name: OpenBSD x64
+          #   os: ubuntu-latest
+          #   target: x86_64-openbsd-none
+          #   artifact: zigcat-openbsd-x64
+          #   extension: ''
+          #   strip: true
+          #   tls: true
+
+          # # NetBSD x64
+          # - name: NetBSD x64
+          #   os: ubuntu-latest
+          #   target: x86_64-netbsd-none
+          #   artifact: zigcat-netbsd-x64
+          #   extension: ''
+          #   strip: true
+          #   tls: false
 
     steps:
       - name: Checkout code
@@ -342,18 +347,17 @@ jobs:
           - **ARM 32-bit:** `zigcat-linux-arm` (NO TLS)
           - **ARM 32-bit (static musl):** `zigcat-linux-arm-static` - Portable, NO TLS
 
-          ### macOS (TLS Supported)
-          - **Intel (x64):** `zigcat-macos-x64` ✅ **With TLS**
+          ### macOS
+          - **Intel (x64):** `zigcat-macos-x64` (NO TLS - cross-compile limitation)
           - **Apple Silicon (ARM64):** `zigcat-macos-arm64` ✅ **With TLS**
 
           ### Windows
           - **x64:** `zigcat-windows-x64.exe` (NO TLS)
           - **x86 (32-bit):** `zigcat-windows-x86.exe` (NO TLS)
 
-          ### BSD
-          - **FreeBSD x64:** `zigcat-freebsd-x64` (NO TLS)
-          - **OpenBSD x64:** `zigcat-openbsd-x64` (NO TLS)
-          - **NetBSD x64:** `zigcat-netbsd-x64` (NO TLS)
+          ### BSD (Native Build Required)
+          Pre-built binaries are not available due to cross-compilation limitations in Zig 0.15.2.
+          See README.md "Building on BSD Systems" for native build instructions.
 
           ## Verification
 
@@ -369,9 +373,10 @@ jobs:
 
           ## Notes
 
-          - **TLS support** is only available on macOS (native builds with OpenSSL)
-          - **Cross-compiled builds** (Linux, Windows, BSD) have TLS disabled due to cross-compilation limitations
-          - All binaries are stripped for minimal size (~1.8MB)
+          - **TLS support** is only available for macOS ARM64 (native build with OpenSSL)
+          - **All other builds** have TLS disabled due to cross-compilation limitations
+          - All binaries are stripped for minimal size (~1.8-2.0MB)
+          - **BSD users**: Native builds are required - see README.md for instructions
 
           ${{ steps.changelog.outputs.CHANGELOG }}
           NOTES
