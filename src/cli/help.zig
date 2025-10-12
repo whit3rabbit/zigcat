@@ -94,7 +94,7 @@ pub fn printHelp() void {
         \\  -v, --verbose                 Verbose mode (connection details and stats)
         \\  -vv                           Debug mode (protocol details and hex dumps)
         \\  -vvv                          Trace mode (all internal state tracing)
-        \\  -q, --quiet                   Quiet mode (errors only, suppresses all logging)
+        \\  --quiet                       Quiet mode (errors only, suppresses all logging)
         \\  -o, --output <file>           Write received data to file
         \\  --append                      Append to output file instead of truncating
         \\  -x, --hex-dump [file]         Display data in hex format (optionally to file)
@@ -150,7 +150,7 @@ pub fn printHelp() void {
         \\    zigcat -v host 80             Verbose: show connection details
         \\    zigcat -vv host 80            Debug: show protocol details
         \\    zigcat -vvv host 80           Trace: show all internal state
-        \\    zigcat -q host 80             Quiet: suppress all output except errors
+        \\    zigcat --quiet host 80        Quiet: suppress all output except errors
         \\
         \\  I/O control:
         \\    zigcat --send-only host 80    Only send data to host:80

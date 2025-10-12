@@ -118,7 +118,7 @@ Connect timeout in seconds.
 .BR -i ", " --idle-timeout " <secs>"
 Idle timeout in seconds.
 .TP
-.B --close-on-eof
+.BR -q ", " --close-on-eof
 Close the connection on EOF from stdin.
 .SS "TRANSFER OPTIONS"
 .TP
@@ -233,7 +233,7 @@ Acknowledge and permit potentially dangerous exec operations.
 .BR -v ", " --verbose
 Enable verbose output. Use multiple times for more verbosity.
 .TP
-.BR -q ", " --quiet
+.B --quiet
 Suppress all output except for errors.
 .TP
 .BR -o ", " --output " <file>"
@@ -364,7 +364,7 @@ zigcat -vvv host 80
 Quiet output:
 .RS
 .EX
-zigcat -q host 80
+zigcat --quiet host 80
 .EE
 .RE
 .SS "I/O control"

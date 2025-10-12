@@ -119,7 +119,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
                 // --verbose counts as 1
                 verbose_count += 1;
             }
-        } else if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet")) {
+        } else if (std.mem.eql(u8, arg, "--quiet")) {
             cfg.verbosity = .quiet;
         } else if (std.mem.eql(u8, arg, "-k") or std.mem.eql(u8, arg, "--keep-open")) {
             cfg.keep_listening = true;

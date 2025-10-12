@@ -37,7 +37,7 @@ This command will create two files:
 - `-vv` *(flag)* - enable debug verbosity (level 2). Example: `zigcat -vv example.com 80`
 - `-vvv` *(flag)* - enable trace verbosity (level 3). Example: `zigcat -vvv example.com 80`
 - `-vvvv` *(flag)* - maximize verbosity (level 4). Example: `zigcat -vvvv example.com 80`
-- `-q`, `--quiet` *(flag)* - errors only; suppress other logging. Example: `zigcat -q example.com 80`
+- `--quiet` *(flag)* - errors only; suppress other logging. Example: `zigcat --quiet example.com 80`
 - `-o`, `--output <file>` *(string path)* - write received data to a file. Example: `zigcat -o logs/session.txt example.com 80`
 - `--append` *(flag)* - append to the `--output` file instead of truncating. Example: `zigcat -o logs/session.txt --append example.com 80`
 - `-x`, `--hex-dump [file]` *(flag + optional string path)* - enable hex dump, optionally directing output to a file.  
@@ -69,7 +69,7 @@ This command will create two files:
 - `-w`, `--wait <seconds>` *(u32 seconds)* - set connect timeout (converted to milliseconds). Example: `zigcat --wait 10 example.com 80`
 - `-i`, `--idle-timeout <seconds>` *(u32 seconds)* - drop idle connections after the given timeout. Example: `zigcat -l --idle-timeout 60 9000`
 - `-d`, `--delay <ms>` *(u32 milliseconds)* - pause between reads/writes for traffic shaping. Example: `zigcat --delay 250 example.com 80`
-- `--close-on-eof` *(flag)* - close the socket when stdin reaches EOF. Example: `zigcat --close-on-eof example.com 80`
+- `-q`, `--close-on-eof` *(flag)* - close the socket when stdin reaches EOF. Example: `zigcat -q example.com 80`
 - `--no-shutdown` *(flag)* - keep the write side open after stdin EOF. Example: `zigcat --no-shutdown example.com 80`
 
 ## Transfer Behavior

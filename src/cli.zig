@@ -432,15 +432,6 @@ test "CLI parser - four -v flags (still trace level)" {
     try testing.expectEqual(config.VerbosityLevel.trace, cfg.verbosity);
 }
 
-test "CLI parser - quiet flag short form" {
-    var args = [_][:0]const u8{ "zigcat", "-q", "example.com", "80" };
-
-    var cfg = try parseArgs(testing.allocator, &args);
-    defer cfg.deinit(testing.allocator);
-
-    try testing.expectEqual(config.VerbosityLevel.quiet, cfg.verbosity);
-}
-
 test "CLI parser - quiet flag long form" {
     var args = [_][:0]const u8{ "zigcat", "--quiet", "example.com", "80" };
 
@@ -461,13 +452,13 @@ test "CLI parser - default verbosity level" {
 }
 
 test "CLI parser - quiet overrides verbose flags" {
-    // -q should override any -v flags
-    var args = [_][:0]const u8{ "zigcat", "-v", "-v", "-q", "example.com", "80" };
+    // --quiet should override any -v flags
+    var args = [_][:0]const u8{ "zigcat", "-v", "-v", "--quiet", "example.com", "80" };
 
     var cfg = try parseArgs(testing.allocator, &args);
     defer cfg.deinit(testing.allocator);
 
-    // -q is processed after -v flags, so it stays quiet
+    // --quiet is processed after -v flags, so it stays quiet
     try testing.expectEqual(config.VerbosityLevel.quiet, cfg.verbosity);
 }
 
