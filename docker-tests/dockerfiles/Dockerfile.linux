@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
 RUN dpkg --add-architecture arm64 && \
     apt-get update && apt-get install -y \
         gcc-aarch64-linux-gnu \
+        libssl-dev \
         libssl-dev:arm64 \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -36,21 +37,21 @@ WORKDIR /build
 COPY . .
 
 # Platform-to-Zig target mapping script
-RUN echo '#!/bin/bash\n\
+RUN printf '#!/bin/bash\n\
 case "$1" in\n\
   "linux/amd64") echo "x86_64-linux-gnu" ;;\n\
   "linux/arm64") echo "aarch64-linux-gnu" ;;\n\
   *) echo "x86_64-linux-gnu" ;;\n\
-esac' > /usr/local/bin/platform-to-zig-target.sh \
+esac\n' > /usr/local/bin/platform-to-zig-target.sh \
     && chmod +x /usr/local/bin/platform-to-zig-target.sh
 
 # Build for target platform
-RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
+RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     echo "Building for Zig target: $ZIG_TARGET with TLS enabled" && \
     zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
 
 # Run unit tests
-RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
+RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     echo "Running tests for Zig target: $ZIG_TARGET with TLS enabled" && \
     zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
 

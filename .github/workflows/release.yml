@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  ZIG_VERSION: '0.15.2'
+  ZIG_VERSION: '0.15.1'
 
 jobs:
   build-matrix:
@@ -25,14 +25,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x64 (no TLS - cross-compile limitation)
+          # Linux x64 (with TLS - glibc supports dynamic OpenSSL cross-compilation)
           - name: Linux x64
             os: ubuntu-latest
             target: x86_64-linux-gnu
             artifact: zigcat-linux-x64
             extension: ''
             strip: true
-            tls: false
+            tls: true
 
           # Linux x64 static (musl, NO TLS)
           - name: Linux x64 Static
@@ -44,14 +44,14 @@ jobs:
             tls: false
             static: true
 
-          # Linux ARM64 (dynamic)
+          # Linux ARM64 (with TLS - glibc supports dynamic OpenSSL cross-compilation)
           - name: Linux ARM64
             os: ubuntu-latest
             target: aarch64-linux-gnu
             artifact: zigcat-linux-arm64
             extension: ''
             strip: true
-            tls: false
+            tls: true
 
           # Linux ARM64 static (musl, NO TLS)
           - name: Linux ARM64 Static
@@ -182,7 +182,13 @@ jobs:
         if: matrix.tls && runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+          # Install OpenSSL for native and cross-compilation
+          # libssl-dev: native x86_64 headers and libraries
+          # libssl-dev:arm64: ARM64 headers and libraries for cross-compilation
+          # pkg-config: for library detection
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libssl-dev:arm64 pkg-config gcc-aarch64-linux-gnu
 
       - name: Install OpenSSL (macOS)
         if: matrix.tls && runner.os == 'macOS'
@@ -338,9 +344,9 @@ jobs:
           ## Downloads
 
           ### Linux
-          - **x64:** `zigcat-linux-x64` (NO TLS)
+          - **x64:** `zigcat-linux-x64` ✅ **With TLS** (glibc, dynamic)
           - **x64 (static musl):** `zigcat-linux-x64-static` - Portable, no dependencies, NO TLS
-          - **ARM64:** `zigcat-linux-arm64` (NO TLS)
+          - **ARM64:** `zigcat-linux-arm64` ✅ **With TLS** (glibc, dynamic)
           - **ARM64 (static musl):** `zigcat-linux-arm64-static` - Portable, NO TLS
           - **x86 32-bit:** `zigcat-linux-x86` (NO TLS)
           - **x86 32-bit (static musl):** `zigcat-linux-x86-static` - Portable, NO TLS

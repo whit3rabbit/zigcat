@@ -30,21 +30,21 @@ WORKDIR /build
 COPY . .
 
 # Platform-to-Zig target mapping script for FreeBSD
-RUN echo '#!/bin/bash\n\
+RUN printf '#!/bin/bash\n\
 case "$1" in\n\
   "linux/amd64"|"freebsd/amd64") echo "x86_64-freebsd" ;;\n\
   *) echo "x86_64-freebsd" ;;\n\
-esac' > /usr/local/bin/platform-to-zig-target.sh \
+esac\n' > /usr/local/bin/platform-to-zig-target.sh \
     && chmod +x /usr/local/bin/platform-to-zig-target.sh
 
 # Build for FreeBSD target without TLS (cross-compile limitation)
 # NOTE: Cross-compiling to FreeBSD from Linux with TLS requires FreeBSD sysroot/libraries
-RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
+RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     echo "Building for Zig target: $ZIG_TARGET (TLS disabled - cross-compile limitation)" && \
     zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
 
 # Run unit tests (cross-compiled, TLS disabled)
-RUN ZIG_TARGET=$(platform-to-zig-target.sh $TARGETPLATFORM) && \
+RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     echo "Running tests for Zig target: $ZIG_TARGET (TLS disabled)" && \
     zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
 

@@ -168,8 +168,8 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     var addresses = try std.net.getAddressList(allocator, final_bind_addr_str, port);
     defer addresses.deinit();
     var ipv4_addr: ?std.net.Address = null;
-    for (addresses.items) |addr| {
-        if (addr.isIpv4()) {
+    for (addresses.addrs) |addr| {
+        if (addr.any.family == std.posix.AF.INET) {
             ipv4_addr = addr;
             break;
         }

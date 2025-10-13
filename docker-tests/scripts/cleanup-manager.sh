@@ -710,8 +710,11 @@ standard_cleanup() {
         emergency_cleanup
     else
         # Standard cleanup sequence
-        graceful_container_stop "${ACTIVE_CONTAINERS[@]}"
-        remove_containers "${ACTIVE_CONTAINERS[@]}"
+        # Only call functions with array expansion if array has elements (bash 3.x compatibility with set -u)
+        if [[ ${#ACTIVE_CONTAINERS[@]} -gt 0 ]]; then
+            graceful_container_stop "${ACTIVE_CONTAINERS[@]}"
+            remove_containers "${ACTIVE_CONTAINERS[@]}"
+        fi
         cleanup_compose_resources
         cleanup_networks
         cleanup_volumes
