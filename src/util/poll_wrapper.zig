@@ -44,6 +44,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 
+var select_backend_warning_printed = std.atomic.Value(bool).init(false);
+const select_backend_warning_message =
+    "Warning: Running on an older version of Windows that uses the 'select' backend, which is limited to ~21 concurrent connections. Broker/chat mode may be unstable. Upgrade to Windows 10 (Build 17063) or newer for better performance.\n";
+
 // Export poll constants
 pub const POLL = struct {
     pub const IN: i16 = if (builtin.os.tag == .windows) 0x0001 else posix.POLL.IN;
@@ -71,7 +75,12 @@ pub fn poll(fds: []pollfd, timeout_ms: i32) !usize {
         return pollWindowsWSAPoll(fds, timeout_ms) catch |err| {
             // If WSAPoll fails or is unavailable, try select() backend
             if (err == error.WSAPollNotAvailable or err == error.Unexpected) {
-                return pollWindowsSelect(fds, timeout_ms);
+                return pollWindowsSelect(fds, timeout_ms) catch |select_err| {
+                    if (select_err == error.TooManyFileDescriptors) {
+                        warnSelectBackendLimitOnce();
+                    }
+                    return select_err;
+                };
             }
             return err;
         };
@@ -204,6 +213,13 @@ fn pollWindowsSelect(fds: []pollfd, timeout_ms: i32) !usize {
     return ready_count;
 }
 
+fn warnSelectBackendLimitOnce() void {
+    if (builtin.is_test) return;
+    if (!select_backend_warning_printed.swap(true, .seq_cst)) {
+        std.debug.print(select_backend_warning_message, .{});
+    }
+}
+
 // Windows fd_set helper functions
 fn FD_ZERO(set: *std.os.windows.ws2_32.fd_set) void {
     set.fd_count = 0;
@@ -228,6 +244,26 @@ fn FD_ISSET(fd: posix.socket_t, set: *const std.os.windows.ws2_32.fd_set) bool {
         }
     }
     return false;
+}
+
+pub fn shutdown(socket: posix.socket_t, mode: enum { send, receive, both }) !void {
+    if (builtin.os.tag == .windows) {
+        const how = switch (mode) {
+            .send => std.os.windows.ws2_32.SD_SEND,
+            .receive => std.os.windows.ws2_32.SD_RECEIVE,
+            .both => std.os.windows.ws2_32.SD_BOTH,
+        };
+        if (std.os.windows.ws2_32.shutdown(socket, how) != 0) {
+            return error.ShutdownFailed;
+        }
+    } else {
+        const how = switch (mode) {
+            .send => posix.SHUT.WR,
+            .receive => posix.SHUT.RD,
+            .both => posix.SHUT.RDWR,
+        };
+        try posix.shutdown(socket, how);
+    }
 }
 
 // Unit tests

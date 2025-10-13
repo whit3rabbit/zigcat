@@ -11,6 +11,7 @@ import os
 import sys
 import argparse
 import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import xml.etree.ElementTree as ET
@@ -35,7 +36,7 @@ class TestResultAggregator:
         """Collect all test results and build artifacts."""
         results = {
             "session_id": self.session_id,
-            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.datetime.now(timezone.utc).isoformat(),
             "test_system": "zigcat-docker-tests",
             "build_results": self._collect_build_results(),
             "test_results": self._collect_test_results(),

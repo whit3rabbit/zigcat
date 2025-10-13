@@ -15,6 +15,7 @@ const config = @import("../../config.zig");
 const common = @import("../common.zig");
 const logging = @import("../../util/logging.zig");
 const unixsock = @import("../../net/unixsock.zig");
+const allowlist = @import("../../net/allowlist.zig");
 const security = @import("../../util/security.zig");
 const output = @import("../../io/output.zig");
 const hexdump = @import("../../io/hexdump.zig");
@@ -23,6 +24,8 @@ const client = @import("../../client.zig");
 const transfer = @import("../../io/transfer.zig");
 const Connection = @import("../../net/connection.zig").Connection;
 const TelnetConnection = @import("../../protocol/telnet_connection.zig").TelnetConnection;
+
+const broker_mode = @import("broker.zig");
 
 pub fn runUnixSocketServer(allocator: std.mem.Allocator, cfg: *const config.Config, socket_path: []const u8) !void {
     if (!unixsock.unix_socket_supported) {
@@ -71,11 +74,41 @@ pub fn runUnixSocketServer(allocator: std.mem.Allocator, cfg: *const config.Conf
 
     logging.logNormal(cfg, "Listening on Unix socket: {s}\n", .{socket_path});
 
+    // Broker/Chat mode - use transport-agnostic BrokerServer
     if (cfg.broker_mode or cfg.chat_mode) {
-        logging.logError(error.NotImplemented, "Broker/Chat mode not yet supported with Unix domain sockets");
-        return error.NotImplemented;
+        logging.logNormal(cfg, "Starting {s} server on Unix socket: {s}\n", .{
+            if (cfg.chat_mode) "chat" else "broker",
+            socket_path,
+        });
+
+        // Create access list only if rules are configured (matches TCP pattern)
+        const has_access_control = cfg.allow_list.items.len > 0 or
+            cfg.deny_list.items.len > 0 or
+            cfg.allow_file != null or
+            cfg.deny_file != null;
+
+        var access_list_obj: ?allowlist.AccessList = null;
+        defer if (access_list_obj) |*al| al.deinit();
+
+        if (has_access_control) {
+            const listen = @import("../../server/listen.zig");
+            access_list_obj = try listen.createAccessListFromConfig(allocator, cfg);
+            if (cfg.verbose) {
+                logging.logVerbose(cfg, "Access control enabled for Unix socket:\n", .{});
+                logging.logVerbose(cfg, "  Allow rules: {}\n", .{access_list_obj.?.allow_rules.items.len});
+                logging.logVerbose(cfg, "  Deny rules: {}\n", .{access_list_obj.?.deny_rules.items.len});
+            }
+        }
+
+        // Initialize broker server with optional access list
+        var default_access_list = allowlist.AccessList.init(allocator);
+        defer if (access_list_obj == null) default_access_list.deinit();
+        const access_list_ptr = if (access_list_obj) |*al| al else &default_access_list;
+
+        return try broker_mode.runBrokerServer(allocator, unix_server.getSocket(), cfg, access_list_ptr);
     }
 
+    // Single-connection mode (original behavior)
     var connection_count: u32 = 0;
 
     while (!common.shutdown_requested.load(.seq_cst)) {

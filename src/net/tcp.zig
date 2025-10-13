@@ -92,42 +92,12 @@ fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32, cfg: *const c
             continue;
         }
         attempted_connection = true;
-        // Create a fresh socket for each address attempt
-        const family = if (addr.any.family == posix.AF.INET)
-            socket.AddressFamily.ipv4
-        else
-            socket.AddressFamily.ipv6;
 
-        const sock = socket.createTcpSocket(family) catch |err| {
-            last_error = err;
-            continue;
-        };
-        errdefer socket.closeSocket(sock);
-
-        // Set non-blocking for timeout support
-        socket.setNonBlocking(sock) catch |err| {
-            socket.closeSocket(sock);
-            last_error = err;
-            continue;
-        };
-
-        const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
-
-        if (result) {
-            // Connected immediately
+        // Try connecting to this address using centralized helper
+        if (connectAddressWithTimeout(addr, timeout_ms)) |sock| {
             return sock;
         } else |err| {
-            if (err == error.WouldBlock or err == error.InProgress) {
-                // Wait for connection with timeout
-                if (try waitForConnect(sock, timeout_ms)) {
-                    return sock;
-                }
-                socket.closeSocket(sock);
-                last_error = error.ConnectionTimeout;
-            } else {
-                socket.closeSocket(sock);
-                last_error = err;
-            }
+            last_error = err;
         }
     }
 
@@ -136,6 +106,57 @@ fn openTcpClientPoll(host: []const u8, port: u16, timeout_ms: u32, cfg: *const c
     }
 
     return last_error orelse error.ConnectionFailed;
+}
+
+/// Connect to a single address with timeout.
+///
+/// This is a centralized helper for establishing non-blocking TCP connections
+/// with the critical poll() + SO_ERROR pattern. Used by openTcpClientPoll and
+/// all proxy connection functions.
+///
+/// Implementation:
+/// 1. Create non-blocking socket for address family
+/// 2. Initiate non-blocking connect
+/// 3. Poll with timeout for writability
+/// 4. Check SO_ERROR to verify connection success
+///
+/// Parameters:
+///   addr: Target address (IPv4 or IPv6)
+///   timeout_ms: Connect timeout in milliseconds
+///
+/// Returns: Connected socket or error
+pub fn connectAddressWithTimeout(addr: std.net.Address, timeout_ms: u32) !socket.Socket {
+    // Determine address family
+    const family = if (addr.any.family == posix.AF.INET)
+        socket.AddressFamily.ipv4
+    else
+        socket.AddressFamily.ipv6;
+
+    // Create socket
+    const sock = try socket.createTcpSocket(family);
+    errdefer socket.closeSocket(sock);
+
+    // Set non-blocking for timeout support
+    try socket.setNonBlocking(sock);
+
+    // Initiate connection
+    const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
+
+    if (result) {
+        // Connected immediately
+        return sock;
+    } else |err| {
+        if (err == error.WouldBlock or err == error.InProgress) {
+            // Wait for connection with timeout
+            if (try waitForConnect(sock, timeout_ms)) {
+                return sock;
+            } else {
+                return error.ConnectionTimeout;
+            }
+        } else {
+            return err;
+        }
+    }
 }
 
 /// Open a TCP connection to host:port with timeout using io_uring backend (Linux 5.1+).

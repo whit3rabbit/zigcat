@@ -164,7 +164,24 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
 
     const final_bind_addr_str = if (bind_addr_str) |s| s else if (cfg.ipv6_only) "::" else "0.0.0.0";
 
-    const bind_addr = try std.net.Address.resolveIp(final_bind_addr_str, port);
+    const bind_addr = if (@import("builtin").os.tag == .freebsd) blk: {
+    var addresses = try std.net.getAddressList(allocator, final_bind_addr_str, port);
+    defer addresses.deinit();
+    var ipv4_addr: ?std.net.Address = null;
+    for (addresses.items) |addr| {
+        if (addr.isIpv4()) {
+            ipv4_addr = addr;
+            break;
+        }
+    }
+    if (ipv4_addr) |addr| {
+        break :blk addr;
+    } else {
+        return error.NoIpv4AddressFound;
+    }
+} else blk: {
+    break :blk try std.net.Address.resolveIp(final_bind_addr_str, port);
+};
 
     const should_drop_privileges = cfg.drop_privileges_user != null;
     const is_privileged_port = port < 1024;

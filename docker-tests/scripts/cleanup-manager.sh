@@ -31,10 +31,10 @@ PRESERVE_ARTIFACTS=false
 EMERGENCY_MODE=false
 
 # Process tracking
-CLEANUP_PIDS=""
-ACTIVE_CONTAINERS=""
-STUCK_CONTAINERS=""
-RESOURCE_LEAKS=""
+declare -a CLEANUP_PIDS=()
+declare -a ACTIVE_CONTAINERS=()
+declare -a STUCK_CONTAINERS=()
+declare -a RESOURCE_LEAKS=()
 
 # Logging functions
 log_info() {
@@ -247,23 +247,26 @@ discover_active_containers() {
 # Check for stuck containers that won't respond to normal shutdown
 detect_stuck_containers() {
     log_debug "Detecting stuck containers..."
-    
+
     STUCK_CONTAINERS=()
-    
-    for container_id in "${ACTIVE_CONTAINERS[@]}"; do
-        # Check if container is responsive
-        if ! timeout 5 docker exec "$container_id" echo "health-check" >/dev/null 2>&1; then
-            # Check if container is in a problematic state
-            local state
-            state=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
-            
-            if [[ "$state" == "restarting" || "$state" == "dead" || "$state" == "unknown" ]]; then
-                STUCK_CONTAINERS+=("$container_id")
-                log_debug "Detected stuck container: $container_id (state: $state)"
+
+    # Only iterate if array has elements (bash 3.x compatibility with set -u)
+    if [[ ${#ACTIVE_CONTAINERS[@]} -gt 0 ]]; then
+        for container_id in "${ACTIVE_CONTAINERS[@]}"; do
+            # Check if container is responsive
+            if ! timeout 5 docker exec "$container_id" echo "health-check" >/dev/null 2>&1; then
+                # Check if container is in a problematic state
+                local state
+                state=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "unknown")
+
+                if [[ "$state" == "restarting" || "$state" == "dead" || "$state" == "unknown" ]]; then
+                    STUCK_CONTAINERS+=("$container_id")
+                    log_debug "Detected stuck container: $container_id (state: $state)"
+                fi
             fi
-        fi
-    done
-    
+        done
+    fi
+
     if [[ ${#STUCK_CONTAINERS[@]} -gt 0 ]]; then
         log_warn "Found ${#STUCK_CONTAINERS[@]} stuck containers"
     fi

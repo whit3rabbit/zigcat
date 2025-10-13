@@ -51,6 +51,7 @@
 const std = @import("std");
 const posix = std.posix;
 const socket = @import("../socket.zig");
+const tcp = @import("../tcp.zig");
 const poll_wrapper = @import("../../util/poll_wrapper.zig");
 const logging = @import("../../util/logging.zig");
 const config = @import("../../config.zig");
@@ -158,41 +159,11 @@ fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socke
         }
         attempted_connection = true;
 
-        const family = if (addr.any.family == posix.AF.INET)
-            socket.AddressFamily.ipv4
-        else
-            socket.AddressFamily.ipv6;
-
-        const sock = socket.createTcpSocket(family) catch |err| {
-            last_error = err;
-            continue;
-        };
-        errdefer socket.closeSocket(sock);
-
-        // Set non-blocking for timeout support
-        socket.setNonBlocking(sock) catch |err| {
-            socket.closeSocket(sock);
-            last_error = err;
-            continue;
-        };
-
-        const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
-
-        if (result) {
-            // Connected immediately
+        // Use centralized connection helper from tcp.zig
+        if (tcp.connectAddressWithTimeout(addr, cfg.connect_timeout)) |sock| {
             return sock;
         } else |err| {
-            if (err == error.WouldBlock or err == error.InProgress) {
-                // Wait for connection with timeout
-                if (try waitForConnect(sock, cfg.connect_timeout)) {
-                    return sock;
-                }
-                socket.closeSocket(sock);
-                last_error = error.ConnectionTimeout;
-            } else {
-                socket.closeSocket(sock);
-                last_error = err;
-            }
+            last_error = err;
         }
     }
 
@@ -201,23 +172,6 @@ fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socke
     }
 
     return last_error orelse error.ConnectionFailed;
-}
-
-fn waitForConnect(sock: socket.Socket, timeout_ms: u32) !bool {
-    var pollfds = [_]poll_wrapper.pollfd{.{
-        .fd = sock,
-        .events = poll_wrapper.POLL.OUT,
-        .revents = 0,
-    }};
-
-    const ready = try poll_wrapper.poll(&pollfds, @intCast(timeout_ms));
-    if (ready == 0) return false;
-
-    var err: i32 = undefined;
-    const len: posix.socklen_t = @sizeOf(i32);
-    try posix.getsockopt(sock, posix.SOL.SOCKET, posix.SO.ERROR, std.mem.asBytes(&err)[0..len]);
-
-    return err == 0;
 }
 
 /// Resolve hostname to IPv4 address

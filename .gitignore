@@ -57,3 +57,6 @@ CLAUDE.md
 *.log
 /docker-tests/build
 /docker-tests/artifacts
+docker-tests/artifacts/build-report.json
+/docker-tests/results
+docker-tests/results/test-report.json

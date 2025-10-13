@@ -549,12 +549,24 @@ pub const BrokerServer = struct {
         };
 
         // Convert sockaddr to std.net.Address for access control and logging
-        const client_address = std.net.Address.initPosix(@alignCast(&client_addr));
+        // NOTE: std.net.Address.initPosix() only supports IPv4/IPv6, not Unix sockets.
+        // For Unix sockets (AF.UNIX), we create a dummy localhost address since
+        // access control lists don't apply to local Unix socket connections.
+        const is_unix_socket = client_addr.family == std.posix.AF.UNIX;
+        const client_address = if (is_unix_socket)
+            std.net.Address.initIp4([_]u8{ 127, 0, 0, 1 }, 0) // Dummy localhost for Unix sockets
+        else
+            std.net.Address.initPosix(@alignCast(&client_addr));
 
         // Check access control with enhanced logging
+        // NOTE: For Unix socket clients, IP-based access control is bypassed by using
+        // a dummy localhost address. This ensures IP allow/deny lists don't affect
+        // local Unix socket connections, which is the correct behavior.
         if (!self.access_list.isAllowed(client_address)) {
-            logging.logConnection(client_address, "DENIED");
-            logging.logDebug("Access control denied connection from {any}\n", .{client_address});
+            if (!is_unix_socket) {
+                logging.logConnection(client_address, "DENIED");
+                logging.logDebug("Access control denied connection from {any}\n", .{client_address});
+            }
             std.posix.close(client_socket);
             return BrokerError.AccessDenied;
         }

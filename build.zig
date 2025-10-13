@@ -315,6 +315,24 @@ pub fn build(b: *std.Build) void {
         } else {
             exe.linkSystemLibrary("ssl");
             exe.linkSystemLibrary("crypto");
+
+            // Add library search paths for cross-compilation (Docker builds)
+            // This helps Zig find OpenSSL libraries when cross-compiling for Linux targets
+            if (target.result.os.tag == .linux) {
+                // Standard Ubuntu/Debian library paths for native and cross-compilation
+                const lib_paths = [_][]const u8{
+                    "/usr/lib/x86_64-linux-gnu",   // x86_64 (amd64) libraries
+                    "/usr/lib/aarch64-linux-gnu",  // aarch64 (arm64) libraries
+                    "/usr/lib",                    // Standard library path
+                    "/usr/local/lib",              // User-installed libraries
+                    "/lib/x86_64-linux-gnu",       // Additional x86_64 path
+                    "/lib/aarch64-linux-gnu",      // Additional aarch64 path
+                };
+                for (lib_paths) |lib_path| {
+                    exe.addLibraryPath(.{ .cwd_relative = lib_path });
+                }
+                std.debug.print("[OpenSSL] Added Linux library search paths for cross-compilation\n", .{});
+            }
         }
     }
 

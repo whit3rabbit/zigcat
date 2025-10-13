@@ -119,9 +119,7 @@ fn validateUnixSocketConflicts(cfg: *const Config) UnixSocketError!void {
         return UnixSocketError.ConflictingUnixSocketAndProxy;
     }
 
-    if (cfg.broker_mode or cfg.chat_mode) {
-        return UnixSocketError.ConflictingUnixSocketAndBroker;
-    }
+    // NOTE: Broker/chat mode is now supported with Unix sockets (removed validation check)
 
     if ((cfg.exec_command != null or cfg.shell_command != null) and cfg.listen_mode) {
         try validateUnixSocketExecSecurity(cfg);

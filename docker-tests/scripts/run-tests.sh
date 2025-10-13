@@ -191,6 +191,19 @@ parse_args() {
     done
 }
 
+# Check for TLS build option and set USE_DOCKER flag
+check_for_tls_and_set_docker_flag() {
+    if [[ "$USE_DOCKER" == "true" ]]; then
+        return 0
+    fi
+
+    log_debug "Checking for TLS build option in $CONFIG_FILE"
+    if cat "$CONFIG_FILE" | yq '.platforms[].build_options[] | select(. == "-Dtls=true")' | grep -q -- "-Dtls=true"; then
+        log_info "TLS is enabled in the config, automatically using Docker for builds."
+        USE_DOCKER=true
+    fi
+}
+
 # Validate dependencies and environment
 # This function checks for the presence of all required command-line tools
 # (Docker, Docker Compose, yq, Zig) and validates the test configuration files.
@@ -575,8 +588,8 @@ generate_report() {
         echo "    \"timestamp\": \"$report_start_time\","
         echo "    \"test_system\": \"zigcat-docker-tests\","
         echo "    \"configuration\": {"
-        echo "      \"platforms\": [$(get_test_platforms | sed 's/^/"/;s/$/"/;' | paste -sd, -)],"
-        echo "      \"test_suites\": [$(get_test_suites | sed 's/^/"/;s/$/"/;' | paste -sd, -)],"
+        echo "      \"platforms\": [$(get_test_platforms | paste -sd, -)],"
+        echo "      \"test_suites\": [$(get_test_suites | paste -sd, -)],"
         echo "      \"global_timeout\": $GLOBAL_TIMEOUT,"
         echo "      \"build_timeout\": $BUILD_TIMEOUT,"
         echo "      \"test_timeout\": $TEST_TIMEOUT,"
@@ -767,6 +780,7 @@ main() {
     
     # Parse arguments
     parse_args "$@"
+    check_for_tls_and_set_docker_flag
     
     log_info "ZigCat Docker Test System starting..."
     log_info "Global timeout: ${GLOBAL_TIMEOUT}s"
