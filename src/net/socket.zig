@@ -56,6 +56,36 @@ const logging = @import("../util/logging.zig");
 /// Windows uses SOCKET (usize), Unix uses socket_t (i32).
 pub const Socket = if (builtin.os.tag == .windows) std.os.windows.ws2_32.SOCKET else posix.socket_t;
 
+/// Check if a socket descriptor is valid.
+///
+/// Platform-agnostic validation for socket descriptors.
+///
+/// ## Parameters
+/// - `sock`: Socket descriptor to validate
+///
+/// ## Returns
+/// - `true` if socket is valid
+/// - `false` if socket is invalid
+///
+/// ## Platform Implementation
+/// - **Windows**: Checks `sock != INVALID_SOCKET`
+/// - **Unix/POSIX**: Checks `sock >= 0`
+///
+/// ## Example
+/// ```zig
+/// const sock = try createTcpSocket(.ipv4);
+/// if (isValidSocket(sock)) {
+///     // Use socket
+/// }
+/// ```
+pub fn isValidSocket(sock: Socket) bool {
+    if (builtin.os.tag == .windows) {
+        return sock != std.os.windows.ws2_32.INVALID_SOCKET;
+    } else {
+        return sock >= 0;
+    }
+}
+
 /// Initialize platform-specific networking subsystem.
 ///
 /// **Windows**: Calls `WSAStartup()` to initialize WinSock 2.2 library.

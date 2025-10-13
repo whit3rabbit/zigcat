@@ -19,11 +19,27 @@ const O_NONBLOCK: u32 = switch (builtin.os.tag) {
     else => 0x0004, // Default to BSD-style
 };
 
+/// Set socket to non-blocking mode (cross-platform).
+/// On Windows, uses ioctlsocket(). On Unix, uses fcntl().
+fn setSocketNonBlocking(sock: posix.socket_t) !void {
+    if (builtin.os.tag == .windows) {
+        var mode: c_ulong = 1;
+        const result = std.os.windows.ws2_32.ioctlsocket(sock, std.os.windows.ws2_32.FIONBIO, &mode);
+        if (result != 0) return error.IoctlFailed;
+    } else {
+        const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
+        _ = try posix.fcntl(sock, posix.F.SETFL, flags | O_NONBLOCK);
+    }
+}
+
 // =============================================================================
 // BASIC TIMEOUT MECHANISM TESTS
 // =============================================================================
 
 test "poll timeout - no activity" {
+    // Skip on Windows: posix.pipe() not available, and Windows pipes can't be used with WSAPoll
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
     var timer = helpers.TestTimer.start();
 
     // Create a pipe for testing poll
@@ -46,6 +62,9 @@ test "poll timeout - no activity" {
 }
 
 test "poll timeout - activity within timeout" {
+    // Skip on Windows: posix.pipe() not available, and Windows pipes can't be used with WSAPoll
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
     // Create a pipe
     const pipes = try posix.pipe();
     defer posix.close(pipes[0]);
@@ -152,8 +171,7 @@ test "Mock TCP Server - delayed accept demonstrates timeout mechanism" {
     defer posix.close(sock);
 
     // Set non-blocking
-    const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
-    _ = try posix.fcntl(sock, posix.F.SETFL, flags | O_NONBLOCK);
+    try setSocketNonBlocking(sock);
 
     const addr = try std.net.Address.parseIp4("127.0.0.1", server.getPort());
     const result = posix.connect(sock, &addr.any, addr.getOsSockLen());
@@ -322,6 +340,9 @@ test "TestTimer - assertTimedOut validates timeout" {
 // =============================================================================
 
 test "timeout edge case - zero timeout (immediate)" {
+    // Skip on Windows: posix.pipe() not available, and Windows pipes can't be used with WSAPoll
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
     // Zero timeout should return immediately without waiting
     const pipes = try posix.pipe();
     defer posix.close(pipes[0]);
@@ -345,6 +366,9 @@ test "timeout edge case - zero timeout (immediate)" {
 }
 
 test "timeout edge case - very large timeout" {
+    // Skip on Windows: posix.pipe() not available, and Windows pipes can't be used with WSAPoll
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
     // Test that very large timeout values (> 60s) work correctly
     // We won't wait the full time - just verify poll accepts the value
     const pipes = try posix.pipe();
@@ -374,6 +398,9 @@ test "timeout edge case - very large timeout" {
 }
 
 test "timeout edge case - negative timeout (infinite wait)" {
+    // Skip on Windows: posix.pipe() not available, and Windows pipes can't be used with WSAPoll
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
     // Negative timeout (-1) means infinite wait in poll()
     // We'll write data after a delay to ensure poll actually waits
     const pipes = try posix.pipe();

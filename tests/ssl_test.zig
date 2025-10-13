@@ -30,11 +30,48 @@ const testing = std.testing;
 const posix = std.posix;
 const fs = std.fs;
 const ssl = @import("utils/ssl_fixtures.zig");
+const builtin = @import("builtin");
 
 // Platform-specific constants for macOS portability
 const O_NONBLOCK: u32 = 0x0004;
 const SOL_SOCKET: i32 = 0xffff;
 const SO_ERROR: i32 = 0x1007;
+
+/// Check if a socket descriptor is valid (cross-platform).
+/// On Windows, checks against INVALID_SOCKET. On Unix, checks >= 0.
+fn isValidSocket(sock: posix.socket_t) bool {
+    if (builtin.os.tag == .windows) {
+        return sock != std.os.windows.ws2_32.INVALID_SOCKET;
+    } else {
+        return sock >= 0;
+    }
+}
+
+/// Set socket to non-blocking mode (cross-platform).
+/// On Windows, uses ioctlsocket(). On Unix, uses fcntl().
+fn setSocketNonBlocking(sock: posix.socket_t) !void {
+    if (builtin.os.tag == .windows) {
+        var mode: c_ulong = 1;
+        const result = std.os.windows.ws2_32.ioctlsocket(sock, std.os.windows.ws2_32.FIONBIO, &mode);
+        if (result != 0) return error.IoctlFailed;
+    } else {
+        const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
+        _ = try posix.fcntl(sock, posix.F.SETFL, flags | O_NONBLOCK);
+    }
+}
+
+/// Check if socket is in non-blocking mode (Unix only).
+/// On Windows, this always returns true (assumes ioctlsocket was called).
+fn isSocketNonBlocking(sock: posix.socket_t) !bool {
+    if (builtin.os.tag == .windows) {
+        // Windows doesn't have a way to query non-blocking status
+        // Assume it's set correctly
+        return true;
+    } else {
+        const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
+        return (flags & O_NONBLOCK) != 0;
+    }
+}
 
 // Test timeout constants (milliseconds)
 const SHORT_TIMEOUT: i32 = 100;
@@ -178,7 +215,7 @@ test "SSL: TLS socket creation succeeds" {
     const sock = try posix.socket(posix.AF.INET, posix.SOCK.STREAM, posix.IPPROTO.TCP);
     defer posix.close(sock);
 
-    try testing.expect(sock >= 0);
+    try testing.expect(isValidSocket(sock));
 }
 
 test "SSL: Set socket to non-blocking mode for TLS" {
@@ -186,12 +223,10 @@ test "SSL: Set socket to non-blocking mode for TLS" {
     defer posix.close(sock);
 
     // Set non-blocking
-    const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
-    _ = try posix.fcntl(sock, posix.F.SETFL, flags | O_NONBLOCK);
+    try setSocketNonBlocking(sock);
 
     // Verify non-blocking
-    const new_flags = try posix.fcntl(sock, posix.F.GETFL, 0);
-    try testing.expect((new_flags & O_NONBLOCK) != 0);
+    try testing.expect(try isSocketNonBlocking(sock));
 }
 
 test "SSL: Socket option SO_REUSEADDR for server" {
@@ -239,8 +274,7 @@ test "SSL: Connect timeout with poll" {
     defer posix.close(sock);
 
     // Set non-blocking
-    const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
-    _ = try posix.fcntl(sock, posix.F.SETFL, flags | O_NONBLOCK);
+    try setSocketNonBlocking(sock);
 
     // Try to connect to non-routable address (will timeout)
     var addr = posix.sockaddr.in{
@@ -272,8 +306,8 @@ test "SSL: Check socket error after failed connect" {
     const sock = try posix.socket(posix.AF.INET, posix.SOCK.STREAM, posix.IPPROTO.TCP);
     defer posix.close(sock);
 
-    const flags = try posix.fcntl(sock, posix.F.GETFL, 0);
-    _ = try posix.fcntl(sock, posix.F.SETFL, flags | O_NONBLOCK);
+    // Set non-blocking mode for connect
+    try setSocketNonBlocking(sock);
 
     var addr = posix.sockaddr.in{
         .family = posix.AF.INET,

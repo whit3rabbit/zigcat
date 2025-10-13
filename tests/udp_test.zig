@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const posix = std.posix;
+const socket = @import("../src/net/socket.zig");
 
 // Self-contained UDP test utilities
 fn createUdpSocket(family: posix.sa_family_t) !posix.socket_t {
@@ -20,7 +21,7 @@ test "UDP socket create and bind" {
     try bindUdpSocket(sock, addr);
 
     // Verify socket is valid
-    try testing.expect(sock >= 0);
+    try testing.expect(socket.isValidSocket(sock));
 }
 
 test "UDP receive with timeout" {

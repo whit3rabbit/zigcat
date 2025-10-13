@@ -86,8 +86,30 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
 
     if (target.os.tag == .windows) {
         std.debug.print("[OpenSSL Detection] Trying Windows paths...\n", .{});
+
+        // Try vcpkg first (GitHub Actions has VCPKG_ROOT environment variable)
+        if (std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT")) |vcpkg_root| {
+            defer b.allocator.free(vcpkg_root);
+
+            const vcpkg_lib = std.fmt.allocPrint(b.allocator, "{s}\\installed\\x64-windows\\lib\\libssl.lib", .{vcpkg_root}) catch {
+                std.debug.print("[OpenSSL Detection] Failed to format vcpkg path\n", .{});
+                return false;
+            };
+            defer b.allocator.free(vcpkg_lib);
+
+            std.fs.accessAbsolute(vcpkg_lib, .{}) catch {
+                std.debug.print("[OpenSSL Detection] vcpkg OpenSSL not found at: {s}\n", .{vcpkg_lib});
+                return false;
+            };
+
+            std.debug.print("[OpenSSL Detection] ✓ Found via vcpkg: {s}\n", .{vcpkg_root});
+            return true;
+        } else |_| {
+            std.debug.print("[OpenSSL Detection] VCPKG_ROOT not found, trying other paths...\n", .{});
+        }
+
         const windows_paths = [_][]const u8{
-            // GitHub Actions default installation (check FIRST)
+            // GitHub Actions default installation
             "C:\\Program Files\\OpenSSL\\bin\\libssl-3-x64.dll",
             "C:\\Program Files\\OpenSSL\\bin\\libcrypto-3-x64.dll",
             // Chocolatey third-party installers (fallback)
@@ -406,9 +428,32 @@ pub fn build(b: *std.Build) void {
                 std.debug.print("[OpenSSL] Added Linux include and library search paths for cross-compilation\n", .{});
             }
 
-            // Add Windows-specific OpenSSL paths for GitHub Actions and Chocolatey
+            // Add Windows-specific OpenSSL paths for vcpkg, GitHub Actions, and Chocolatey
             if (target.result.os.tag == .windows) {
-                // GitHub Actions default installation (check FIRST)
+                // Try vcpkg first (GitHub Actions has VCPKG_ROOT environment variable)
+                if (std.process.getEnvVarOwned(b.allocator, "VCPKG_ROOT")) |vcpkg_root| {
+                    defer b.allocator.free(vcpkg_root);
+
+                    const vcpkg_include = std.fmt.allocPrint(b.allocator, "{s}\\installed\\x64-windows\\include", .{vcpkg_root}) catch {
+                        std.debug.print("[OpenSSL] Failed to format vcpkg include path\n", .{});
+                        return;
+                    };
+                    defer b.allocator.free(vcpkg_include);
+
+                    const vcpkg_lib = std.fmt.allocPrint(b.allocator, "{s}\\installed\\x64-windows\\lib", .{vcpkg_root}) catch {
+                        std.debug.print("[OpenSSL] Failed to format vcpkg lib path\n", .{});
+                        return;
+                    };
+                    defer b.allocator.free(vcpkg_lib);
+
+                    exe.addSystemIncludePath(.{ .cwd_relative = vcpkg_include });
+                    exe.addLibraryPath(.{ .cwd_relative = vcpkg_lib });
+                    std.debug.print("[OpenSSL] Added vcpkg paths: {s}\n", .{vcpkg_root});
+                } else |_| {
+                    std.debug.print("[OpenSSL] VCPKG_ROOT not found, using default Windows paths\n", .{});
+                }
+
+                // GitHub Actions default installation (fallback)
                 exe.addLibraryPath(.{ .cwd_relative = "C:\\Program Files\\OpenSSL\\lib" });
                 exe.addSystemIncludePath(.{ .cwd_relative = "C:\\Program Files\\OpenSSL\\include" });
 

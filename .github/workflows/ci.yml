@@ -108,8 +108,8 @@ jobs:
           - os: windows-latest
             label: Windows
             install_deps: |
-              # Windows dependencies handled by Zig
-              echo "No additional dependencies needed"
+              # Install OpenSSL via vcpkg (pre-installed on GitHub Actions)
+              vcpkg install openssl:x64-windows
             commands: |
               zig build test
               zig build test-timeout
