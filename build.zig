@@ -87,6 +87,10 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
     if (target.os.tag == .windows) {
         std.debug.print("[OpenSSL Detection] Trying Windows paths...\n", .{});
         const windows_paths = [_][]const u8{
+            // GitHub Actions default installation (check FIRST)
+            "C:\\Program Files\\OpenSSL\\bin\\libssl-3-x64.dll",
+            "C:\\Program Files\\OpenSSL\\bin\\libcrypto-3-x64.dll",
+            // Chocolatey third-party installers (fallback)
             "C:\\Program Files\\OpenSSL-Win64\\bin\\libssl-3-x64.dll",
             "C:\\Program Files\\OpenSSL-Win64\\bin\\libssl-1_1-x64.dll",
             "C:\\OpenSSL-Win64\\bin\\libssl-3-x64.dll",
@@ -400,6 +404,19 @@ pub fn build(b: *std.Build) void {
                     exe.addLibraryPath(.{ .cwd_relative = lib_path });
                 }
                 std.debug.print("[OpenSSL] Added Linux include and library search paths for cross-compilation\n", .{});
+            }
+
+            // Add Windows-specific OpenSSL paths for GitHub Actions and Chocolatey
+            if (target.result.os.tag == .windows) {
+                // GitHub Actions default installation (check FIRST)
+                exe.addLibraryPath(.{ .cwd_relative = "C:\\Program Files\\OpenSSL\\lib" });
+                exe.addSystemIncludePath(.{ .cwd_relative = "C:\\Program Files\\OpenSSL\\include" });
+
+                // Chocolatey third-party installer paths (fallback)
+                exe.addLibraryPath(.{ .cwd_relative = "C:\\Program Files\\OpenSSL-Win64\\lib" });
+                exe.addSystemIncludePath(.{ .cwd_relative = "C:\\Program Files\\OpenSSL-Win64\\include" });
+
+                std.debug.print("[OpenSSL] Added Windows include and library search paths\n", .{});
             }
         }
     }

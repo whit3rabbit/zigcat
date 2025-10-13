@@ -116,6 +116,7 @@ jobs:
               zig build test-udp
               zig build test-validation
               zig build test-platform
+              zig build test-ssl
     env:
       ZIG_VERSION: 0.15.1
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
@@ -164,6 +165,7 @@ jobs:
       - name: Build artifact (for testing)
         shell: bash
         run: |
+          # Build with TLS enabled on all platforms
           zig build -Dstrip=true
           ls -lh zig-out/bin/
 
