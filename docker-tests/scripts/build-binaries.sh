@@ -254,8 +254,21 @@ build_binary_docker() {
         echo "=== Starting Docker Build ==="
 
         # Build using Docker with the artifacts stage
+        # Use custom seccomp profile to allow faccessat2 syscall (required by Zig 0.15.1)
+        # See docker-tests/DOCKER_BUILD_ERRORS.md for details
+        local seccomp_profile="$PROJECT_ROOT/docker-tests/seccomp/zig-builder.json"
+        local seccomp_opt=""
+        if [[ -f "$seccomp_profile" ]]; then
+            seccomp_opt="--security-opt=seccomp=$seccomp_profile"
+            echo "Using custom seccomp profile: $seccomp_profile"
+        else
+            echo "WARNING: Custom seccomp profile not found, build may fail with errno 38 (ENOSYS)"
+            echo "See docker-tests/DOCKER_BUILD_ERRORS.md for troubleshooting"
+        fi
+
         if timeout "$BUILD_TIMEOUT" docker build \
             --platform="$docker_platform" \
+            $seccomp_opt \
             --file="$dockerfile_path" \
             --target=artifacts \
             --output="$artifact_dir" \

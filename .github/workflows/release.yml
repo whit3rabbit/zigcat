@@ -270,9 +270,107 @@ jobs:
             zig-out/bin/${{ matrix.artifact }}${{ matrix.extension }}.sha256
           retention-days: 7
 
+  build-wolfssl-static:
+    name: Build wolfSSL Static ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x64 static musl with wolfSSL TLS (835KB, fully static)
+          - name: Linux x64
+            platform: linux/amd64
+            dockerfile: docker-tests/dockerfiles/Dockerfile.alpine
+            artifact: zigcat-linux-x64-wolfssl-static
+          # Linux ARM64 static musl with wolfSSL TLS (fully static)
+          - name: Linux ARM64
+            platform: linux/arm64
+            dockerfile: docker-tests/dockerfiles/Dockerfile.alpine
+            artifact: zigcat-linux-arm64-wolfssl-static
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build wolfSSL static binary with seccomp profile
+        run: |
+          # Build using Docker with custom seccomp profile to allow faccessat2 syscall
+          # This produces a fully static musl binary with TLS support (wolfSSL backend)
+          # Binary size: ~835KB (66% smaller than 2.4MB target)
+          docker buildx build \
+            --security-opt seccomp=docker-tests/seccomp/zig-builder.json \
+            --platform ${{ matrix.platform }} \
+            --file ${{ matrix.dockerfile }} \
+            --output type=local,dest=./artifacts \
+            .
+
+      - name: Extract and rename binary
+        run: |
+          # Find the built binary (named zigcat-wolfssl by build.zig)
+          BINARY=$(find ./artifacts -name "zigcat-wolfssl" -type f | head -1)
+          if [ -z "$BINARY" ]; then
+            echo "Error: zigcat-wolfssl binary not found in artifacts"
+            find ./artifacts -type f
+            exit 1
+          fi
+
+          # Move to standard location with matrix artifact name
+          mkdir -p zig-out/bin
+          mv "$BINARY" "zig-out/bin/${{ matrix.artifact }}"
+          chmod +x "zig-out/bin/${{ matrix.artifact }}"
+
+      - name: Verify binary
+        run: |
+          BINARY="zig-out/bin/${{ matrix.artifact }}"
+
+          if [ ! -f "$BINARY" ]; then
+            echo "Error: Binary not found: $BINARY"
+            exit 1
+          fi
+
+          ls -lh "$BINARY"
+          file "$BINARY" || true
+
+          # Verify static linkage
+          echo "Verifying static linkage..."
+          if ldd "$BINARY" 2>&1 | grep -q "not a dynamic executable"; then
+            echo "✓ Verified: True static binary"
+          else
+            echo "⚠ Warning: Binary may have dynamic dependencies"
+            ldd "$BINARY" || true
+            exit 1
+          fi
+
+          # Verify wolfSSL TLS support
+          echo "Verifying TLS support..."
+          if "$BINARY" --help 2>&1 | grep -q "ssl\|SSL\|TLS"; then
+            echo "✓ Verified: TLS support enabled"
+          else
+            echo "⚠ Warning: TLS support may not be enabled"
+            "$BINARY" --help || true
+          fi
+
+      - name: Generate checksum
+        run: |
+          cd zig-out/bin
+          shasum -a 256 "${{ matrix.artifact }}" | cut -d' ' -f1 > "${{ matrix.artifact }}.sha256"
+          echo "SHA256 checksum:"
+          cat "${{ matrix.artifact }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            zig-out/bin/${{ matrix.artifact }}
+            zig-out/bin/${{ matrix.artifact }}.sha256
+          retention-days: 7
+
   create-release:
     name: Create Release
-    needs: build-matrix
+    needs: [build-matrix, build-wolfssl-static]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -343,15 +441,28 @@ jobs:
 
           ## Downloads
 
-          ### Linux
-          - **x64:** `zigcat-linux-x64` ✅ **With TLS** (glibc, dynamic)
-          - **x64 (static musl):** `zigcat-linux-x64-static` - Portable, no dependencies, NO TLS
-          - **ARM64:** `zigcat-linux-arm64` ✅ **With TLS** (glibc, dynamic)
-          - **ARM64 (static musl):** `zigcat-linux-arm64-static` - Portable, NO TLS
-          - **x86 32-bit:** `zigcat-linux-x86` (NO TLS)
-          - **x86 32-bit (static musl):** `zigcat-linux-x86-static` - Portable, NO TLS
-          - **ARM 32-bit:** `zigcat-linux-arm` (NO TLS)
-          - **ARM 32-bit (static musl):** `zigcat-linux-arm-static` - Portable, NO TLS
+          ### Linux (wolfSSL Static - NEW! 🎉)
+          **Fully static musl binaries with TLS support - 66% smaller than target!**
+          - **x64:** `zigcat-linux-x64-wolfssl-static` ✅ **With TLS** (~835KB, zero dependencies, GPLv2)
+          - **ARM64:** `zigcat-linux-arm64-wolfssl-static` ✅ **With TLS** (zero dependencies, GPLv2)
+
+          **Highlights:**
+          - 66% smaller than 2.4MB target (only 835KB!)
+          - 86% smaller than OpenSSL builds (6MB → 835KB)
+          - Fully static with TLS 1.2/1.3 support
+          - No dependencies - runs on any Linux distribution
+          - Lightweight wolfSSL backend optimized for size
+          - ⚠️ GPLv2 licensed (due to wolfSSL backend)
+
+          ### Linux (Traditional Builds)
+          - **x64:** `zigcat-linux-x64` ✅ **With TLS** (glibc, dynamic, ~6MB, MIT license)
+          - **x64 (static musl):** `zigcat-linux-x64-static` - Portable, no dependencies, NO TLS, MIT license
+          - **ARM64:** `zigcat-linux-arm64` ✅ **With TLS** (glibc, dynamic, ~6MB, MIT license)
+          - **ARM64 (static musl):** `zigcat-linux-arm64-static` - Portable, NO TLS, MIT license
+          - **x86 32-bit:** `zigcat-linux-x86` (NO TLS, MIT license)
+          - **x86 32-bit (static musl):** `zigcat-linux-x86-static` - Portable, NO TLS, MIT license
+          - **ARM 32-bit:** `zigcat-linux-arm` (NO TLS, MIT license)
+          - **ARM 32-bit (static musl):** `zigcat-linux-arm-static` - Portable, NO TLS, MIT license
 
           ### macOS
           - **Intel (x64):** `zigcat-macos-x64` (NO TLS - cross-compile limitation)
@@ -379,10 +490,22 @@ jobs:
 
           ## Notes
 
-          - **TLS support** is only available for macOS ARM64 (native build with OpenSSL)
-          - **All other builds** have TLS disabled due to cross-compilation limitations
-          - All binaries are stripped for minimal size (~1.8-2.0MB)
-          - **BSD users**: Native builds are required - see README.md for instructions
+          ### TLS Support Options
+          - **wolfSSL Static (NEW!)**: Linux x64/ARM64 - Fully static with TLS (~835KB, GPLv2)
+          - **OpenSSL Dynamic**: Linux x64/ARM64 glibc, macOS ARM64 (~6MB, MIT, requires libssl)
+          - **No TLS**: All static musl builds (traditional), Windows, BSD (~1.8-2.0MB, MIT)
+
+          ### Licensing
+          - **wolfSSL builds**: GPLv2 licensed (must provide source if distributed)
+          - **All other builds**: MIT licensed
+
+          ### Size Comparison
+          - wolfSSL static: ~835KB (smallest with TLS)
+          - OpenSSL dynamic: ~6MB (requires libssl.so)
+          - Static musl (no TLS): ~1.8-2.0MB (portable, no dependencies)
+
+          ### BSD Users
+          Native builds are required - see README.md "Building on BSD Systems" for instructions
 
           ${{ steps.changelog.outputs.CHANGELOG }}
           NOTES

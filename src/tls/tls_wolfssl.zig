@@ -216,13 +216,25 @@ pub const WolfSslTls = if (use_wolfssl) struct {
             }
         }
 
-        // Perform TLS handshake
-        try self.doHandshake();
+        // Enable hostname verification BEFORE handshake (wolfSSL will verify during handshake)
+        if (config.verify_peer and config.server_name != null) {
+            const server_name = config.server_name.?;
+            var hostname_buf: [256]u8 = undefined;
+            if (server_name.len >= hostname_buf.len) {
+                return TlsError.HandshakeFailed;
+            }
+            @memcpy(hostname_buf[0..server_name.len], server_name);
+            hostname_buf[server_name.len] = 0;
 
-        // Verify hostname if verification enabled
-        if (config.verify_peer) {
-            try self.verifyHostname();
+            // Enable automatic hostname verification during handshake
+            if (c.wolfSSL_check_domain_name(self.ssl, &hostname_buf) != c.WOLFSSL_SUCCESS) {
+                logging.logDebug("Failed to enable hostname verification\n", .{});
+                return TlsError.HandshakeFailed;
+            }
         }
+
+        // Perform TLS handshake (hostname verification happens automatically if enabled above)
+        try self.doHandshake();
 
         self.state = .connected;
         return self;
@@ -524,45 +536,10 @@ pub const WolfSslTls = if (use_wolfssl) struct {
         }
     }
 
-    /// Verify hostname matches certificate (client mode only).
-    fn verifyHostname(self: *WolfSslTls) !void {
-        const ssl = self.ssl orelse return TlsError.InvalidState;
-
-        // Get server name from config
-        const server_name = self.config.server_name orelse {
-            logging.logDebug("No server_name provided for hostname verification\n", .{});
-            return TlsError.HostnameMismatch;
-        };
-
-        // Get peer certificate
-        const cert = c.wolfSSL_get_peer_certificate(ssl);
-        if (cert == null) {
-            logging.logDebug("No peer certificate received\n", .{});
-            return TlsError.CertificateVerificationFailed;
-        }
-        defer c.wolfSSL_X509_free(cert);
-
-        // Verify hostname using wolfSSL's built-in verification
-        var hostname_buf: [256]u8 = undefined;
-        if (server_name.len >= hostname_buf.len) {
-            return TlsError.HostnameMismatch;
-        }
-        @memcpy(hostname_buf[0..server_name.len], server_name);
-        hostname_buf[server_name.len] = 0;
-
-        const verify_result = c.wolfSSL_X509_check_host(
-            cert,
-            &hostname_buf,
-            server_name.len,
-            0,
-            null,
-        );
-
-        if (verify_result != c.WOLFSSL_SUCCESS) {
-            logging.logDebug("Hostname verification failed for: {s}\n", .{server_name});
-            return TlsError.HostnameMismatch;
-        }
-    }
+    // NOTE: Hostname verification is now handled automatically during handshake
+    // via wolfSSL_check_domain_name() called before doHandshake() in initClient().
+    // This approach is more efficient and avoids using wolfSSL_get_peer_certificate()
+    // and wolfSSL_X509_free() which are not available in Alpine's wolfSSL build.
 
     /// Read decrypted data from TLS connection.
     pub fn read(self: *WolfSslTls, buffer: []u8) !usize {

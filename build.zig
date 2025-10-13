@@ -250,8 +250,11 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "allow_legacy_tls", allow_legacy_tls);
     options.addOption(bool, "use_wolfssl", use_wolfssl);
 
+    // Determine binary name: append "-wolfssl" when using wolfSSL backend for clarity
+    const binary_name = if (use_wolfssl and enable_tls) "zigcat-wolfssl" else "zigcat";
+
     const exe = b.addExecutable(.{
-        .name = "zigcat",
+        .name = binary_name,
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -287,11 +290,47 @@ pub fn build(b: *std.Build) void {
 
     if (enable_tls) {
         if (use_wolfssl) {
-            exe.linkSystemLibrary("wolfssl");
+            // For static builds, directly link the .a file to avoid shared library conflicts
+            // For dynamic builds, use linkSystemLibrary as usual
+            if (static) {
+                // Directly link the static library file
+                // Alpine: /usr/lib/libwolfssl.a
+                // Ubuntu: /usr/lib/x86_64-linux-gnu/libwolfssl.a or /usr/lib/aarch64-linux-gnu/libwolfssl.a
+                const static_lib_paths = [_][]const u8{
+                    "/usr/lib/libwolfssl.a",                      // Alpine/musl standard path
+                    "/usr/lib/x86_64-linux-gnu/libwolfssl.a",     // Ubuntu x86_64
+                    "/usr/lib/aarch64-linux-gnu/libwolfssl.a",    // Ubuntu ARM64
+                    "/usr/local/lib/libwolfssl.a",                // User-installed
+                };
 
-            // Add Homebrew paths for wolfSSL on macOS
+                var found_static_lib = false;
+                for (static_lib_paths) |lib_path| {
+                    std.fs.accessAbsolute(lib_path, .{}) catch continue;
+                    exe.addObjectFile(.{ .cwd_relative = lib_path });
+                    std.debug.print("[wolfSSL] Using static library: {s}\n", .{lib_path});
+                    found_static_lib = true;
+                    break;
+                }
+
+                if (!found_static_lib) {
+                    std.log.err("Static wolfSSL library not found. Tried:", .{});
+                    for (static_lib_paths) |lib_path| {
+                        std.log.err("  {s}", .{lib_path});
+                    }
+                    std.log.err("", .{});
+                    std.log.err("Install wolfSSL development libraries:", .{});
+                    std.log.err("  Alpine: apk add wolfssl-dev", .{});
+                    std.log.err("  Ubuntu: apt install libwolfssl-dev", .{});
+                    return;
+                }
+            } else {
+                // Dynamic build: use standard system library linking
+                exe.linkSystemLibrary("wolfssl");
+            }
+
+            // Add platform-specific paths for wolfSSL
             if (target.result.os.tag == .macos) {
-                // Check both Apple Silicon and Intel paths
+                // Check both Apple Silicon and Intel Homebrew paths
                 const homebrew_paths = [_][]const u8{
                     "/opt/homebrew/opt/wolfssl", // Apple Silicon
                     "/usr/local/opt/wolfssl",    // Intel
@@ -311,6 +350,24 @@ pub fn build(b: *std.Build) void {
                     std.debug.print("[wolfSSL] Using Homebrew path: {s}\n", .{base_path});
                     break;
                 }
+            } else if (target.result.os.tag == .linux) {
+                // Add standard Linux/Alpine paths for wolfSSL
+                const include_paths = [_][]const u8{
+                    "/usr/include",        // Alpine standard include path
+                    "/usr/local/include",  // User-installed headers
+                };
+                for (include_paths) |include_path| {
+                    exe.addSystemIncludePath(.{ .cwd_relative = include_path });
+                }
+
+                const lib_paths = [_][]const u8{
+                    "/usr/lib",        // Alpine standard library path
+                    "/usr/local/lib",  // User-installed libraries
+                };
+                for (lib_paths) |lib_path| {
+                    exe.addLibraryPath(.{ .cwd_relative = lib_path });
+                }
+                std.debug.print("[wolfSSL] Added Linux include and library search paths\n", .{});
             }
         } else {
             exe.linkSystemLibrary("ssl");

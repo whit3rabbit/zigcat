@@ -1,19 +1,23 @@
-# Multi-stage Dockerfile for Alpine/musl static builds with wolfSSL
-# IMPORTANT: Use TARGETPLATFORM for native compilation (not cross-compilation)
-# This ensures wolfSSL libraries match the target architecture
-FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
+# Multi-stage Dockerfile for Ubuntu-based musl static builds with wolfSSL
+# Alternative to Alpine for environments where Alpine + Zig 0.15.1 has cache issues
+# Uses Ubuntu 22.04 with musl-tools for musl cross-compilation
+FROM --platform=$TARGETPLATFORM ubuntu:22.04 AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=0.15.1
+ARG DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     wget \
-    xz \
+    xz-utils \
     ca-certificates \
     bash \
-    wolfssl-dev
+    musl-tools \
+    musl-dev \
+    libwolfssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Zig compiler (architecture-aware)
 RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
@@ -73,24 +77,27 @@ COPY --from=builder /build/zig-out/bin/ /bin/
 COPY --from=builder /build/zig-out/ /artifacts/
 
 # Runtime stage for testing with musl
-FROM alpine:3.18 AS runtime
+FROM ubuntu:22.04 AS runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
 
 # Install runtime dependencies for testing
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     curl \
     wget \
+    xz-utils \
     bash \
     bc \
     procps \
     iproute2 \
-    iputils \
-    busybox-extras \
+    iputils-ping \
     socat \
     strace \
     tcpdump \
-    bind-tools \
-    ca-certificates
+    dnsutils \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Zig for test execution (architecture-aware)
 ARG ZIG_VERSION=0.15.1
@@ -103,7 +110,7 @@ RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64"
 ENV PATH="/opt/zig:$PATH"
 
 # Create test user for security tests
-RUN adduser -D -s /bin/bash testuser
+RUN useradd -m -s /bin/bash testuser
 
 # Copy built binaries
 COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
