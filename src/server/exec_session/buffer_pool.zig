@@ -395,7 +395,7 @@ test "FixedBufferPool: stress test" {
     var pool = try FixedBufferPool.init(allocator, 16, 4096, 0);
     defer pool.deinit();
 
-    var acquired = std.ArrayList(u16).init(allocator);
+    var acquired = std.ArrayList(u16){};
     defer acquired.deinit(allocator);
 
     // Acquire all buffers

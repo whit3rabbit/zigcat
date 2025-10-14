@@ -99,7 +99,7 @@ pub fn scanPortsIoUring(
 
     // Apply port randomization if requested (in-place shuffle)
     // Note: We need to work on a mutable copy since we modify the order
-    var ports_copy = std.ArrayList(u16).init(allocator);
+    var ports_copy = std.ArrayList(u16){};
     defer ports_copy.deinit(allocator);
     try ports_copy.appendSlice(allocator, ports);
 
@@ -140,11 +140,11 @@ pub fn scanPortsIoUring(
     defer ring.deinit();
 
     // Allocate result storage and socket tracking
-    var results = std.ArrayList(ScanResult).init(allocator);
+    var results = std.ArrayList(ScanResult){};
     errdefer results.deinit(allocator);
 
     // Socket descriptors for cleanup
-    var sockets = std.ArrayList(std.posix.socket_t).init(allocator);
+    var sockets = std.ArrayList(std.posix.socket_t){};
     defer {
         // Clean up all sockets
         for (sockets.items) |sock| {

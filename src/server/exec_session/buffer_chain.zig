@@ -112,7 +112,7 @@ pub const BufferChain = struct {
     pub fn init(allocator: std.mem.Allocator) !BufferChain {
         return BufferChain{
             .allocator = allocator,
-            .segments = std.ArrayList(Segment).init(allocator),
+            .segments = std.ArrayList(Segment){},
             .total_bytes = 0,
         };
     }

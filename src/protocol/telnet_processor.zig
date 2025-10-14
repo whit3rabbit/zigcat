@@ -548,8 +548,8 @@ pub const TelnetProcessor = struct {
 
     /// Update window size and send NAWS subnegotiation if enabled
     pub fn updateWindowSize(self: *TelnetProcessor, width: u16, height: u16) std.mem.Allocator.Error![]u8 {
-        var response = std.ArrayList(u8).init(self.allocator);
-        defer response.deinit();
+        var response = std.ArrayList(u8){};
+        defer response.deinit(self.allocator);
 
         // Only send if NAWS is enabled
         if (self.option_states.get(.naws) == .yes) {

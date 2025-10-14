@@ -487,13 +487,13 @@ pub fn getAclDiagnostics(
 
     // Enumerate ACEs
     const ace_count = dacl.?.AceCount;
-    var ace_list = std.ArrayList(AceInfo).init(allocator);
+    var ace_list = std.ArrayList(AceInfo){};
     errdefer {
         for (ace_list.items) |ace| {
             allocator.free(ace.sid_string);
             allocator.free(ace.ace_type);
         }
-        ace_list.deinit();
+        ace_list.deinit(allocator);
     }
 
     var is_insecure = false;

@@ -27,8 +27,8 @@ fn sanitizeUtf8(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
         return allocator.dupe(u8, input); // It's valid, just copy it
     }
 
-    var sanitized_list = std.ArrayList(u8).init(allocator);
-    errdefer sanitized_list.deinit();
+    var sanitized_list = std.ArrayList(u8){};
+    errdefer sanitized_list.deinit(allocator);
 
     var it = std.unicode.Utf8Iterator.init(input);
     while (it.next()) |codepoint| {
