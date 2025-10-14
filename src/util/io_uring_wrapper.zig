@@ -52,6 +52,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
+const math = std.math;
 
 const has_modern_io_uring = @hasDecl(std.os.linux, "IoUring");
 const has_legacy_io_uring = @hasDecl(std.os.linux, "IO_Uring");
@@ -129,7 +130,12 @@ pub const UringEventLoop = if (io_uring_supported) struct {
             return error.IoUringNotSupported;
         }
 
-        const ring = IoUringType.init(entries, 0) catch |err| {
+        if (entries == 0 or entries > math.maxInt(u16)) {
+            return error.InvalidQueueDepth;
+        }
+
+        const depth: u16 = @intCast(entries);
+        const ring = IoUringType.init(depth, 0) catch |err| {
             return err;
         };
 
