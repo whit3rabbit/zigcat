@@ -36,13 +36,18 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = std.posix;
 const net = std.net;
+const posix = std.posix;
 const logging = @import("logging.zig");
 
 /// Compile-time check: io_uring is only available on Linux x86_64
 /// io_uring support in Zig stdlib is architecture-dependent
-pub const io_uring_available = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64;
+const has_modern_io_uring = @hasDecl(std.os.linux, "IoUring");
+const has_legacy_io_uring = @hasDecl(std.os.linux, "IO_Uring");
+const io_uring_decl_available = has_modern_io_uring or has_legacy_io_uring;
+const IoUringType = if (has_modern_io_uring) std.os.linux.IoUring else std.os.linux.IO_Uring;
+
+pub const io_uring_available = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and io_uring_decl_available;
 
 /// Scan result for port scanning
 pub const ScanResult = struct {
@@ -126,14 +131,14 @@ pub fn scanPortsIoUring(
     // Use first resolved address as template
     const template_addr = addr_list.addrs[0];
 
-    // Check if IO_Uring type exists (fails during cross-compilation)
-    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+    // Check if io_uring type exists (fails during cross-compilation)
+    if (!io_uring_decl_available) {
         return error.IoUringNotSupported;
     }
 
     // Initialize io_uring with 512-entry queue for high concurrency
-    const IO_Uring = std.os.linux.IO_Uring;
-    var ring = IO_Uring.init(512, 0) catch |err| {
+    const IoUring = IoUringType;
+    var ring = IoUring.init(512, 0) catch |err| {
         std.debug.print( "io_uring scanner: Failed to initialize ring: {any}\n", .{err});
         return error.IoUringNotSupported;
     };
@@ -230,8 +235,8 @@ pub fn scanPortsIoUring(
         // Wait for completions with timeout
         const timeout_ns = safe_timeout * std.time.ns_per_ms;
         const timeout_spec = std.os.linux.kernel_timespec{
-            .tv_sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
-            .tv_nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
+            .sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
         };
 
         var completions_received: usize = 0;

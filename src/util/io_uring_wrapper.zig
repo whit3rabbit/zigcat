@@ -53,6 +53,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 
+const has_modern_io_uring = @hasDecl(std.os.linux, "IoUring");
+const has_legacy_io_uring = @hasDecl(std.os.linux, "IO_Uring");
+const io_uring_decl_available = has_modern_io_uring or has_legacy_io_uring;
+const IoUringType = if (has_modern_io_uring) std.os.linux.IoUring else std.os.linux.IO_Uring;
+const io_uring_supported = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and io_uring_decl_available;
+
 /// Completion result from io_uring kernel
 pub const CompletionResult = struct {
     /// User-supplied data passed to submission (for operation tracking)
@@ -83,7 +89,7 @@ pub const IORING_CQE_BUFFER_SHIFT: u5 = 16;
 
 /// io_uring event loop abstraction
 ///
-/// Wraps std.os.linux.IO_Uring with high-level operations for:
+/// Wraps std.os.linux.IoUring with high-level operations for:
 /// - Asynchronous reads (IORING_OP_READ, IORING_OP_RECV)
 /// - Asynchronous writes (IORING_OP_WRITE, IORING_OP_SEND)
 /// - Asynchronous connects (IORING_OP_CONNECT)
@@ -96,10 +102,10 @@ pub const IORING_CQE_BUFFER_SHIFT: u5 = 16;
 ///
 /// Architecture note:
 /// - io_uring is only available on Linux x86_64 in Zig 0.15.2
-/// - ARM architectures do not have std.os.linux.IO_Uring
-/// - During cross-compilation, check @hasDecl before referencing IO_Uring
-pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and @hasDecl(std.os.linux, "IO_Uring")) struct {
-    ring: std.os.linux.IO_Uring,
+/// - ARM architectures do not have std.os.linux.IoUring
+/// - During cross-compilation, check @hasDecl before referencing IoUring
+pub const UringEventLoop = if (io_uring_supported) struct {
+    ring: IoUringType,
     allocator: std.mem.Allocator,
 
     /// Initialize io_uring with specified queue depth.
@@ -123,8 +129,7 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
             return error.IoUringNotSupported;
         }
 
-        const IO_Uring = std.os.linux.IO_Uring;
-        const ring = IO_Uring.init(entries, 0) catch |err| {
+        const ring = IoUringType.init(entries, 0) catch |err| {
             return err;
         };
 
@@ -491,7 +496,7 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         const sqe = try self.ring.get_sqe();
 
         // Manually prepare PROVIDE_BUFFERS operation
-        // Zig's std.os.linux.IO_Uring doesn't expose prep_provide_buffers,
+        // Zig's std.os.linux.IoUring doesn't expose prep_provide_buffers,
         // so we set the SQE fields directly.
         //
         // SQE structure for PROVIDE_BUFFERS:

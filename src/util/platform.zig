@@ -18,6 +18,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 
+const has_modern_io_uring = @hasDecl(std.os.linux, "IoUring");
+const has_legacy_io_uring = @hasDecl(std.os.linux, "IO_Uring");
+const io_uring_decl_available = has_modern_io_uring or has_legacy_io_uring;
+const IoUringType = if (has_modern_io_uring) std.os.linux.IoUring else std.os.linux.IO_Uring;
+
 /// Linux kernel version structure
 pub const KernelVersion = struct {
     major: u32,
@@ -165,17 +170,15 @@ pub fn isIoUringSupported() bool {
     // Syscall probe: Try to create an io_uring instance
     // If the syscall succeeds, CONFIG_IO_URING is enabled
     //
-    // CRITICAL: std.os.linux.IO_Uring only exists when compiling FOR Linux x86_64.
+    // CRITICAL: std.os.linux.IoUring only exists when compiling FOR Linux x86_64.
     // During cross-compilation (macOS → Linux), the type doesn't exist in stdlib.
     // We must use @hasDecl to check if the type exists before referencing it.
-    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+    if (!io_uring_decl_available) {
         return false;
     }
 
-    const IO_Uring = std.os.linux.IO_Uring;
-
     // Try to initialize with minimal 1-entry ring
-    var ring = IO_Uring.init(1, 0) catch {
+    var ring = IoUringType.init(1, 0) catch {
         // io_uring syscall failed (CONFIG_IO_URING=n or permission denied)
         return false;
     };
@@ -234,15 +237,13 @@ pub fn isIoUringProvidedBuffersSupported() bool {
 
     // Verify basic io_uring support is available
     // (Provided buffers require io_uring, so check both)
-    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+    if (!io_uring_decl_available) {
         return false;
     }
 
-    const IO_Uring = std.os.linux.IO_Uring;
-
     // Try to initialize with minimal 1-entry ring
     // If this succeeds on 5.7+, provided buffers will work
-    var ring = IO_Uring.init(1, 0) catch {
+    var ring = IoUringType.init(1, 0) catch {
         return false;
     };
     defer ring.deinit();

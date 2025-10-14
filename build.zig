@@ -426,6 +426,7 @@ pub fn build(b: *std.Build) void {
                     "/usr/local/include", // User-installed headers
                 };
                 for (include_paths) |include_path| {
+                    std.fs.accessAbsolute(include_path, .{}) catch continue;
                     exe.addSystemIncludePath(.{ .cwd_relative = include_path });
                 }
 
@@ -439,6 +440,7 @@ pub fn build(b: *std.Build) void {
                     "/lib/aarch64-linux-gnu", // Additional aarch64 path
                 };
                 for (lib_paths) |lib_path| {
+                    std.fs.accessAbsolute(lib_path, .{}) catch continue;
                     exe.addLibraryPath(.{ .cwd_relative = lib_path });
                 }
                 std.debug.print("[OpenSSL] Added Linux include and library search paths for cross-compilation\n", .{});

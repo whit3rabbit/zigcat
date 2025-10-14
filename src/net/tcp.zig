@@ -43,6 +43,11 @@ const config = @import("../config.zig");
 const logging = @import("../util/logging.zig");
 const platform = @import("../util/platform.zig");
 
+const has_modern_io_uring = @hasDecl(std.os.linux, "IoUring");
+const has_legacy_io_uring = @hasDecl(std.os.linux, "IO_Uring");
+const io_uring_decl_available = has_modern_io_uring or has_legacy_io_uring;
+const IoUringType = if (has_modern_io_uring) std.os.linux.IoUring else std.os.linux.IO_Uring;
+const io_uring_supported = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64 and io_uring_decl_available;
 /// Open a TCP connection to host:port with timeout using poll() backend.
 ///
 /// Implements robust connection logic:
@@ -193,12 +198,7 @@ pub fn connectAddressWithTimeout(addr: std.net.Address, timeout_ms: u32) !socket
 fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *const config.Config) !socket.Socket {
     // Compile-time check: io_uring only available on Linux x86_64
     // io_uring support in Zig stdlib is architecture-dependent
-    if (builtin.os.tag != .linux or builtin.cpu.arch != .x86_64) {
-        return error.IoUringNotSupported;
-    }
-
-    // Check if IO_Uring type exists (fails during cross-compilation)
-    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+    if (!io_uring_supported) {
         return error.IoUringNotSupported;
     }
 
@@ -247,8 +247,7 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *cons
         };
 
         // Initialize temporary io_uring with 2-entry queue (connect + optional timeout)
-        const IO_Uring = std.os.linux.IO_Uring;
-        var ring = IO_Uring.init(2, 0) catch |err| {
+        var ring = IoUringType.init(2, 0) catch |err| {
             // io_uring init failed, fall back to poll
             socket.closeSocket(sock);
             std.debug.print( "io_uring init failed: {any}, falling back to poll\n", .{err});
@@ -281,8 +280,8 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *cons
         // Convert timeout to kernel_timespec (same pattern as portscan_uring.zig:218-222)
         const timeout_ns = safe_timeout * std.time.ns_per_ms;
         const timeout_spec = std.os.linux.kernel_timespec{
-            .tv_sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
-            .tv_nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
+            .sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
         };
 
         // Wait for completion with timeout

@@ -15,8 +15,8 @@ test "io_uring compile-time availability on Linux" {
     // On Linux, io_uring should be available at compile time
     if (builtin.os.tag == .linux) {
         // IO_Uring type should be available
-        const IO_Uring = std.os.linux.IO_Uring;
-        _ = IO_Uring;
+        const IoUring = std.os.linux.IoUring;
+        _ = IoUring;
         try testing.expect(true);
     } else {
         // On non-Linux, skip test
@@ -42,8 +42,8 @@ test "io_uring initialization attempt" {
     }
 
     // Try to initialize IO_Uring with small queue
-    const IO_Uring = std.os.linux.IO_Uring;
-    var ring = IO_Uring.init(1, 0) catch |err| {
+    const IoUring = std.os.linux.IoUring;
+    var ring = IoUring.init(1, 0) catch |err| {
         // Failure is okay - kernel might not support io_uring
         std.debug.print("io_uring init failed (expected on kernels < 5.1 or CONFIG_IO_URING disabled): {any}\n", .{err});
         return error.SkipZigTest;
@@ -60,11 +60,11 @@ test "io_uring SQE operations exist" {
     }
 
     // Verify that IO_Uring SQE type and prep methods exist at compile time
-    const IO_Uring = std.os.linux.IO_Uring;
+    const IoUring = std.os.linux.IoUring;
     const SubmissionQueueEntry = std.os.linux.io_uring_sqe;
 
     // These should compile without error
-    _ = IO_Uring;
+    _ = IoUring;
     _ = SubmissionQueueEntry;
 
     try testing.expect(true);
@@ -111,10 +111,10 @@ test "kernel timespec for io_uring timeout" {
     const kernel_timespec = std.os.linux.kernel_timespec;
 
     const timeout = kernel_timespec{
-        .tv_sec = 1,
-        .tv_nsec = 0,
+        .sec = 1,
+        .nsec = 0,
     };
 
-    try testing.expectEqual(@as(i64, 1), timeout.tv_sec);
-    try testing.expectEqual(@as(i64, 0), timeout.tv_nsec);
+    try testing.expectEqual(@as(i64, 1), timeout.sec);
+    try testing.expectEqual(@as(i64, 0), timeout.nsec);
 }

@@ -306,8 +306,8 @@ pub const ExecSession = struct {
             const timeout_spec = if (timeout_ms >= 0) blk: {
                 const timeout_ns = @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms;
                 break :blk std.os.linux.kernel_timespec{
-                    .tv_sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
-                    .tv_nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
+                    .sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
+                    .nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
                 };
             } else null;
 
@@ -915,8 +915,8 @@ pub const ExecSession = struct {
 
             // Wait for write completion with short timeout
             const timeout_spec = std.os.linux.kernel_timespec{
-                .tv_sec = 0,
-                .tv_nsec = 100 * std.time.ns_per_ms, // 100ms timeout
+                .sec = 0,
+                .nsec = 100 * std.time.ns_per_ms, // 100ms timeout
             };
 
             const cqe = ring.waitForCompletion(&timeout_spec) catch break;
