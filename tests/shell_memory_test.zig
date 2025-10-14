@@ -5,7 +5,7 @@
 //! **BUG 2.2**: Heap allocation not freed in shell command execution
 //! - Location: src/server/exec.zig + src/main.zig
 //! - Issue: buildShellCommand() allocates args array, but call sites never freed it
-//! - Fix: Add defer allocator.free(shell_cmd.args) at call sites
+//! - Fix: Return ShellCommand struct with deinit() that frees args array
 //!
 //! **Test Coverage**:
 //! - TC-SHELL-1: Args array allocation
@@ -24,21 +24,33 @@ const builtin = @import("builtin");
 ///
 /// COPIED FROM: src/server/exec.zig
 ///
-/// CRITICAL MEMORY: Returns HEAP-ALLOCATED args array that MUST be freed by caller!
-/// Use: defer allocator.free(result.args);
+/// CRITICAL MEMORY: Returns HEAP-ALLOCATED args array, but ownership is managed
+/// by ShellCommand.deinit() to keep the contract explicit.
 ///
 /// Platform-specific behavior:
 /// - Windows: Uses cmd.exe /c "command"
 /// - Unix/Linux/macOS: Uses /bin/sh -c "command"
 ///
 /// Returns:
-/// - Anonymous struct with:
+/// - ShellCommand struct with:
 ///   - program: Shell path (static string: "cmd.exe" or "/bin/sh")
 ///   - args: Heap-allocated array [shell_flag, command_string]
+
+const ShellCommand = struct {
+    program: []const u8,
+    args: []const []const u8,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *ShellCommand) void {
+        self.allocator.free(self.args);
+        self.args = &.{};
+    }
+};
+
 fn buildShellCommand(
     allocator: std.mem.Allocator,
     command_string: []const u8,
-) !struct { program: []const u8, args: []const []const u8 } {
+) !ShellCommand {
     // Use platform-appropriate shell
     const shell_path = if (builtin.os.tag == .windows)
         "cmd.exe"
@@ -58,6 +70,7 @@ fn buildShellCommand(
     return .{
         .program = shell_path,
         .args = args_arr,
+        .allocator = allocator,
     };
 }
 
@@ -75,8 +88,8 @@ fn buildShellCommand(
 test "Shell memory: buildShellCommand allocates args array" {
     const allocator = testing.allocator;
 
-    const result = try buildShellCommand(allocator, "echo hello");
-    defer allocator.free(result.args);
+    var result = try buildShellCommand(allocator, "echo hello");
+    defer result.deinit();
 
     // Verify array is allocated
     try testing.expectEqual(@as(usize, 2), result.args.len);
@@ -107,8 +120,8 @@ test "Shell memory: multiple commands no leak" {
         const cmd = try std.fmt.allocPrint(allocator, "echo test{d}", .{i});
         defer allocator.free(cmd);
 
-        const result = try buildShellCommand(allocator, cmd);
-        defer allocator.free(result.args);
+        var result = try buildShellCommand(allocator, cmd);
+        defer result.deinit();
 
         // Verify each allocation
         try testing.expectEqual(@as(usize, 2), result.args.len);
@@ -127,8 +140,8 @@ test "Shell memory: complex command with pipes" {
     const allocator = testing.allocator;
 
     const complex_cmd = "echo 'hello world' | grep hello | wc -l";
-    const result = try buildShellCommand(allocator, complex_cmd);
-    defer allocator.free(result.args);
+    var result = try buildShellCommand(allocator, complex_cmd);
+    defer result.deinit();
 
     // Verify complex command stored correctly
     try testing.expectEqual(@as(usize, 2), result.args.len);
@@ -144,8 +157,8 @@ test "Shell memory: complex command with pipes" {
 test "Shell memory: empty command string" {
     const allocator = testing.allocator;
 
-    const result = try buildShellCommand(allocator, "");
-    defer allocator.free(result.args);
+    var result = try buildShellCommand(allocator, "");
+    defer result.deinit();
 
     // Verify array allocated even for empty command
     try testing.expectEqual(@as(usize, 2), result.args.len);
@@ -172,8 +185,8 @@ test "Shell memory: very long command string" {
     }
     try cmd_list.appendSlice(allocator, "'");
 
-    const result = try buildShellCommand(allocator, cmd_list.items);
-    defer allocator.free(result.args);
+    var result = try buildShellCommand(allocator, cmd_list.items);
+    defer result.deinit();
 
     // Verify long command handled correctly
     try testing.expectEqual(@as(usize, 2), result.args.len);

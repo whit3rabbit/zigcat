@@ -20,7 +20,7 @@ const Config = config_struct.Config;
 pub const UnixSocketSupport = struct {
     pub const available = switch (builtin.os.tag) {
         .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true,
-        .windows => false,
+        .windows => builtin.os.version_range.windows.isAtLeast(.win10_rs4) orelse false,
         else => false,
     };
 
@@ -186,7 +186,7 @@ test "UnixSocketSupport reports platform availability" {
 
     const expected = switch (builtin.os.tag) {
         .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true,
-        .windows => false,
+        .windows => builtin.os.version_range.windows.isAtLeast(.win10_rs4) orelse false,
         else => false,
     };
 

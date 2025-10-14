@@ -38,9 +38,7 @@ pub fn validate(cfg: *const Config) !void {
 
         security.displayExecWarning(exec_prog, cfg.allow_list.items.len);
 
-        const is_unix_socket = cfg.unix_socket_path != null;
-
-        if (cfg.listen_mode and cfg.require_allow_with_exec and !is_unix_socket) {
+        if (cfg.listen_mode and cfg.require_allow_with_exec) {
             try security.validateExecSecurity(
                 exec_prog,
                 cfg.allow_list.items.len,
@@ -48,7 +46,7 @@ pub fn validate(cfg: *const Config) !void {
             );
         }
 
-        if (cfg.listen_mode and !cfg.allow_dangerous and !is_unix_socket) {
+        if (cfg.listen_mode and !cfg.allow_dangerous) {
             std.debug.print("Warning: -e/-c with -l is dangerous. Use --allow to permit.\n", .{});
             return error.DangerousOperation;
         }

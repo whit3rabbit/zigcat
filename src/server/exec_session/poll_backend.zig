@@ -164,7 +164,12 @@ pub const PollSession = struct {
     }
 
     pub fn run(self: *PollSession) !void {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+
         while (self.shouldContinue()) {
+            defer _ = arena_state.reset(.retain_capacity);
+
             try self.checkTimeouts();
             self.updatePollInterests();
 
@@ -343,9 +348,8 @@ pub const PollSession = struct {
             .socket_write_closed = &self.socket_write_closed,
         };
 
-        try socket_io.flushBufferToSocket(&self.stdout_buffer, &ctx);
-        try self.updateFlow();
-        try socket_io.flushBufferToSocket(&self.stderr_buffer, &ctx);
+        var buffers = [_]*IoRingBuffer{ &self.stdout_buffer, &self.stderr_buffer };
+        _ = try socket_io.pipeBuffersToSocket(buffers[0..], &ctx);
         try self.updateFlow();
         self.maybeShutdownSocketWrite();
     }

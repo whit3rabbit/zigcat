@@ -14,6 +14,7 @@
 const std = @import("std");
 const telnet = @import("telnet.zig");
 const telnet_options = @import("telnet_options.zig");
+const tty_state = @import("terminal").tty_state;
 
 const TelnetState = telnet.TelnetState;
 const TelnetCommand = telnet.TelnetCommand;
@@ -74,7 +75,13 @@ pub const TelnetProcessor = struct {
     const MAX_PARTIAL_BUFFER_SIZE = 16; // Long enough for "IAC SB <option> ... IAC" fragments per RFC 854/1143.
 
     /// Initialize a new Telnet processor with all options disabled
-    pub fn init(allocator: std.mem.Allocator, terminal_type: []const u8, window_width: u16, window_height: u16) TelnetProcessor {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        terminal_type: []const u8,
+        window_width: u16,
+        window_height: u16,
+        local_tty: ?*tty_state.TtyState,
+    ) TelnetProcessor {
         var option_states = std.EnumMap(TelnetOption, OptionState){};
         var negotiation_count = std.EnumMap(TelnetOption, u32){};
 
@@ -92,7 +99,7 @@ pub const TelnetProcessor = struct {
             .allocator = allocator,
             .negotiation_count = negotiation_count,
             .partial_buffer = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable,
-            .option_handlers = OptionHandlerRegistry.init(terminal_type, window_width, window_height),
+            .option_handlers = OptionHandlerRegistry.init(terminal_type, window_width, window_height, local_tty),
         };
     }
 
@@ -366,16 +373,16 @@ pub const TelnetProcessor = struct {
         if (self.isOptionSupported(option)) {
             try self.option_handlers.handleNegotiation(self.outputAllocator(), command, option, response);
 
-            // Update our internal state based on the negotiation
+            // Update our internal state based on the negotiation (no response generation)
             switch (command) {
-                .will => try self.handleWill(option, current_state, response),
-                .wont => try self.handleWont(option, current_state, response),
-                .do => try self.handleDo(option, current_state, response),
-                .dont => try self.handleDont(option, current_state, response),
+                .will => self.updateStateForWill(option, current_state),
+                .wont => self.updateStateForWont(option, current_state),
+                .do => self.updateStateForDo(option, current_state),
+                .dont => self.updateStateForDont(option, current_state),
                 else => return TelnetError.InvalidCommand,
             }
         } else {
-            // For unsupported options, use default handling
+            // For unsupported options, use default handling (generates refusal responses)
             switch (command) {
                 .will => try self.handleWill(option, current_state, response),
                 .wont => try self.handleWont(option, current_state, response),
@@ -385,6 +392,44 @@ pub const TelnetProcessor = struct {
             }
         }
     }
+    // State-only update functions (no response generation - used for supported options)
+    fn updateStateForWill(self: *TelnetProcessor, option: TelnetOption, current_state: OptionState) void {
+        switch (current_state) {
+            .no, .wantno, .wantyes => {
+                self.option_states.put(option, .yes);
+            },
+            .yes => {},
+        }
+    }
+
+    fn updateStateForWont(self: *TelnetProcessor, option: TelnetOption, current_state: OptionState) void {
+        switch (current_state) {
+            .yes, .wantno, .wantyes => {
+                self.option_states.put(option, .no);
+            },
+            .no => {},
+        }
+    }
+
+    fn updateStateForDo(self: *TelnetProcessor, option: TelnetOption, current_state: OptionState) void {
+        switch (current_state) {
+            .no, .wantno, .wantyes => {
+                self.option_states.put(option, .yes);
+            },
+            .yes => {},
+        }
+    }
+
+    fn updateStateForDont(self: *TelnetProcessor, option: TelnetOption, current_state: OptionState) void {
+        switch (current_state) {
+            .yes, .wantno, .wantyes => {
+                self.option_states.put(option, .no);
+            },
+            .no => {},
+        }
+    }
+
+    // Full handlers with response generation (used for unsupported options)
     fn handleWill(self: *TelnetProcessor, option: TelnetOption, current_state: OptionState, response: *std.ArrayList(u8)) (TelnetError || std.mem.Allocator.Error)!void {
         switch (current_state) {
             .no => {

@@ -178,10 +178,15 @@ pub const UringSession = struct {
     }
 
     pub fn run(self: *UringSession) !void {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+
         // Submit initial read operations for all open FDs
         try self.submitUringReads();
 
         while (self.shouldContinue()) {
+            defer _ = arena_state.reset(.retain_capacity);
+
             try self.checkTimeouts();
 
             // Compute timeout for io_uring wait

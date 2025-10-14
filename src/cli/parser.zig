@@ -46,6 +46,8 @@ pub const CliError = error{
     ShowHelp,
     /// User requested version (--version)
     ShowVersion,
+    /// Timeout flag value exceeds supported range
+    TimeoutTooLarge,
 };
 
 /// Parse command-line arguments into a Config structure.
@@ -153,6 +155,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             cfg.keep_source_port = true;
         } else if (std.mem.eql(u8, arg, "--allow")) {
             cfg.allow_dangerous = true;
+            cfg.require_allow_with_exec = false; // ncat compatibility: --allow alone is sufficient
         } else if (std.mem.eql(u8, arg, "--sctp")) {
             cfg.sctp_mode = true;
         } else if (std.mem.eql(u8, arg, "--no-stdin")) {
@@ -182,11 +185,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
         } else if (std.mem.eql(u8, arg, "-w") or std.mem.eql(u8, arg, "--wait")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
-            cfg.wait_time = try std.fmt.parseInt(u32, args[i], 10) * 1000;
+            const seconds = try std.fmt.parseInt(u64, args[i], 10);
+            if (seconds > std.math.maxInt(u32) / 1000) {
+                return CliError.TimeoutTooLarge;
+            }
+            cfg.wait_time = @intCast(seconds * 1000);
         } else if (std.mem.eql(u8, arg, "-i") or std.mem.eql(u8, arg, "--idle-timeout")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
-            cfg.idle_timeout = try std.fmt.parseInt(u32, args[i], 10) * 1000;
+            const seconds = try std.fmt.parseInt(u64, args[i], 10);
+            if (seconds > std.math.maxInt(u32) / 1000) {
+                return CliError.TimeoutTooLarge;
+            }
+            cfg.idle_timeout = @intCast(seconds * 1000);
         } else if (std.mem.eql(u8, arg, "-o") or std.mem.eql(u8, arg, "--output")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;

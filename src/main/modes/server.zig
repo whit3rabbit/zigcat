@@ -364,8 +364,8 @@ fn handleClient(
                 .redirect_stderr = cfg.exec_redirect_stderr,
             };
         } else blk: {
-            const shell_cmd = try exec.buildShellCommand(allocator, cfg.shell_command.?);
-            defer allocator.free(shell_cmd.args);
+            var shell_cmd = try exec.buildShellCommand(allocator, cfg.shell_command.?);
+            defer shell_cmd.deinit();
 
             break :blk exec.ExecConfig{
                 .mode = .shell,
@@ -381,7 +381,7 @@ fn handleClient(
 
         if (cfg.telnet) {
             const connection = Connection.fromSocket(stream.handle);
-            var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null);
+            var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
             defer telnet_conn.deinit();
 
             if (cfg.verbose) {
@@ -448,7 +448,7 @@ fn handleClient(
 
             if (cfg.telnet) {
                 const telnet_connection = Connection.fromTls(tls_conn);
-                var telnet_conn = try TelnetConnection.init(telnet_connection, allocator, null, null, null);
+                var telnet_conn = try TelnetConnection.init(telnet_connection, allocator, null, null, null, null);
                 defer telnet_conn.deinit();
 
                 try telnet_conn.performServerNegotiation();
@@ -467,7 +467,7 @@ fn handleClient(
 
     if (cfg.telnet) {
         const connection = Connection.fromSocket(stream.handle);
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
         defer telnet_conn.deinit();
 
         try telnet_conn.performServerNegotiation();

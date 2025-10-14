@@ -62,7 +62,24 @@ pub const CompletionResult = struct {
     /// - >= 0: Number of bytes read/written, or success for connect
     /// - < 0: Negative errno (e.g., -EAGAIN, -ECONNREFUSED)
     res: i32,
+
+    /// CQE flags from kernel (contains buffer ID for provided buffers)
+    flags: u32 = 0,
 };
+
+// CQE flag constants for provided buffers (kernel 5.7+)
+
+/// Flag bit indicating a buffer was provided by the kernel.
+///
+/// When this bit is set in CQE flags, the buffer ID can be extracted
+/// from bits 16-31 of the flags field.
+pub const IORING_CQE_F_BUFFER: u32 = 1 << 0;
+
+/// Bit shift to extract buffer ID from CQE flags.
+///
+/// The buffer ID occupies bits 16-31 of the flags field.
+/// Usage: `buffer_id = (cqe.flags >> IORING_CQE_BUFFER_SHIFT) & 0xFFFF`
+pub const IORING_CQE_BUFFER_SHIFT: u5 = 16;
 
 /// io_uring event loop abstraction
 ///
@@ -145,6 +162,61 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         sqe.user_data = user_data;
     }
 
+    /// Submit an asynchronous read operation with provided buffers (kernel 5.7+).
+    ///
+    /// This variant uses a buffer that was previously registered with submitProvideBuffers().
+    /// The kernel will automatically select an available buffer from the specified group
+    /// and return its ID in the completion flags.
+    ///
+    /// **How it works:**
+    /// 1. Application registers buffers: submitProvideBuffers(..., bgid)
+    /// 2. Application submits read: submitReadProvided(fd, user_data, bgid)
+    /// 3. Kernel picks buffer from group and fills it
+    /// 4. Completion arrives with buffer ID in CQE flags: (flags >> 16) & 0xFFFF
+    ///
+    /// Parameters:
+    ///   fd: File descriptor to read from
+    ///   user_data: User-supplied identifier for this operation
+    ///   bgid: Buffer Group ID to select from
+    ///
+    /// Returns: Error if submission queue is full
+    ///
+    /// Example:
+    /// ```zig
+    /// // Register buffers
+    /// try ring.submitProvideBuffers(buffer_pool, 8192, 16, 0, 0);
+    /// _ = try ring.submit();
+    ///
+    /// // Submit read with provided buffer from group 0
+    /// try ring.submitReadProvided(fd, USER_DATA_READ, 0);
+    /// const cqe = try ring.waitForCompletion(null);
+    ///
+    /// // Extract buffer ID from flags
+    /// const buffer_id: u16 = @intCast((cqe.flags >> IORING_CQE_BUFFER_SHIFT) & 0xFFFF);
+    /// const buffer_start = buffer_id * 8192;
+    /// const data = buffer_pool[buffer_start..buffer_start + @as(usize, @intCast(cqe.res))];
+    /// ```
+    pub fn submitReadProvided(self: *UringEventLoop, fd: posix.fd_t, user_data: u64, bgid: u16) !void {
+        const sqe = try self.ring.get_sqe();
+
+        // Manually prepare RECV with buffer selection
+        // opcode = RECV (13), flags = IOSQE_BUFFER_SELECT (1 << 4)
+        sqe.opcode = @enumFromInt(13); // IORING_OP_RECV
+        sqe.fd = fd;
+        sqe.addr = 0; // No buffer address (kernel selects)
+        sqe.len = 0; // No buffer length (kernel knows from registration)
+        sqe.buf_index = bgid; // Buffer group to select from
+        sqe.user_data = user_data;
+        sqe.flags = 1 << 4; // IOSQE_BUFFER_SELECT
+    }
+
+    /// Submit an asynchronous recv operation with provided buffers (kernel 5.7+).
+    ///
+    /// Alias for submitReadProvided() - semantically clearer for socket operations.
+    pub fn submitRecv(self: *UringEventLoop, fd: posix.fd_t, user_data: u64, bgid: u16) !void {
+        return self.submitReadProvided(fd, user_data, bgid);
+    }
+
     /// Submit an asynchronous write operation for sockets.
     ///
     /// Prepares IORING_OP_SEND for socket writes. Use submitWriteFile()
@@ -162,6 +234,13 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         const sqe = try self.ring.get_sqe();
         sqe.prep_send(fd, .{ .buffer = buffer }, 0);
         sqe.user_data = user_data;
+    }
+
+    /// Submit an asynchronous send operation for sockets.
+    ///
+    /// Alias for submitWrite() - semantically clearer for socket operations.
+    pub fn submitSend(self: *UringEventLoop, fd: posix.fd_t, buffer: []const u8, user_data: u64) !void {
+        return self.submitWrite(fd, buffer, user_data);
     }
 
     /// Submit an asynchronous file write operation.
@@ -349,6 +428,101 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         sqe.user_data = user_data;
     }
 
+    /// Submit a buffer registration operation for provided buffers (kernel 5.7+).
+    ///
+    /// Registers a pool of buffers with the kernel, allowing it to automatically
+    /// select a buffer when a read operation completes. This is the "provided buffers"
+    /// mechanism that improves performance by eliminating per-operation buffer mapping.
+    ///
+    /// **How Provided Buffers Work:**
+    ///
+    /// 1. Application calls `submitProvideBuffers()` to register buffer pool
+    /// 2. Application submits reads with IOSQE_BUFFER_SELECT flag (implicit in later reads)
+    /// 3. Kernel picks an available buffer from the group and fills it
+    /// 4. Completion arrives with buffer ID in CQE flags (bits 16-31)
+    /// 5. Application processes data and returns buffer via another `submitProvideBuffers()`
+    ///
+    /// **Parameters:**
+    /// - `buffers`: Contiguous memory region containing all buffers
+    /// - `buffer_len`: Size of each individual buffer (e.g., 8192)
+    /// - `nr_buffers`: Number of buffers in this batch
+    /// - `bgid`: Buffer Group ID (0-65535) - groups buffers by purpose (stdin/stdout/stderr)
+    /// - `bid_start`: Starting buffer ID for this batch (typically 0)
+    ///
+    /// **Returns:**
+    /// Error if submission queue is full.
+    ///
+    /// **Important Notes:**
+    /// - Requires Linux kernel 5.7+
+    /// - The buffer memory must remain valid for the lifetime of the ring
+    /// - Buffer IDs are scoped to the buffer group (bgid)
+    /// - You can call this multiple times to replenish consumed buffers
+    ///
+    /// **Example:**
+    /// ```zig
+    /// // Allocate buffer pool: 16 buffers × 8KB each
+    /// const pool_size = 16 * 8192;
+    /// const buffer_pool = try allocator.alloc(u8, pool_size);
+    ///
+    /// // Register with kernel (BGID=0 for stdin)
+    /// try ring.submitProvideBuffers(buffer_pool, 8192, 16, 0, 0);
+    /// _ = try ring.submit();
+    ///
+    /// // Later, when a read completes:
+    /// const cqe = try ring.waitForCompletion(null);
+    /// if (cqe.flags & IORING_CQE_F_BUFFER != 0) {
+    ///     const buffer_id: u16 = @intCast((cqe.flags >> IORING_CQE_BUFFER_SHIFT) & 0xFFFF);
+    ///     const buffer_start = buffer_id * 8192;
+    ///     const data = buffer_pool[buffer_start..buffer_start + @as(usize, @intCast(cqe.res))];
+    ///     // Process data...
+    ///
+    ///     // Return buffer to kernel for reuse
+    ///     try ring.submitProvideBuffers(buffer_pool[buffer_start..buffer_start + 8192], 8192, 1, 0, buffer_id);
+    /// }
+    /// ```
+    pub fn submitProvideBuffers(
+        self: *UringEventLoop,
+        buffers: []u8,
+        buffer_len: u32,
+        nr_buffers: u16,
+        bgid: u16,
+        bid_start: u16,
+    ) !void {
+        const sqe = try self.ring.get_sqe();
+
+        // Manually prepare PROVIDE_BUFFERS operation
+        // Zig's std.os.linux.IO_Uring doesn't expose prep_provide_buffers,
+        // so we set the SQE fields directly.
+        //
+        // SQE structure for PROVIDE_BUFFERS:
+        // - opcode: PROVIDE_BUFFERS (31)
+        // - fd: -1 (not used)
+        // - addr: pointer to buffer pool
+        // - len: size of each buffer
+        // - off: starting buffer ID
+        // - buf_index: buffer group ID
+        sqe.opcode = @enumFromInt(31); // IORING_OP.PROVIDE_BUFFERS = 31
+        sqe.fd = -1;
+        sqe.addr = @intFromPtr(buffers.ptr);
+        sqe.len = buffer_len;
+        sqe.off = bid_start;
+        // Store both bgid (u16) and nr_buffers (u16) in buf_index (u16)
+        // Since we need to pass nr_buffers via flags, we use buf_index for bgid
+        // and encode nr_buffers in the upper 16 bits of the off field
+        sqe.buf_index = bgid;
+        // Actually, let me check the kernel API more carefully...
+        // According to kernel docs:
+        // - buf_index (u16): buffer group ID
+        // - len (u32): size of each buffer
+        // - off (u64): starting buffer ID (bid)
+        // - addr (u64): pointer to buffer pool
+        // But we also need to tell kernel how many buffers we're providing...
+        // This is done via the fd field: fd = nr_buffers (not -1!)
+        sqe.fd = @intCast(nr_buffers);
+        sqe.user_data = 0; // No user data for PROVIDE_BUFFERS
+        sqe.flags = 0;
+    }
+
     /// Submit all pending operations and wait for a single completion.
     ///
     /// This is a blocking call that:
@@ -384,6 +558,7 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         return CompletionResult{
             .user_data = cqe.user_data,
             .res = cqe.res,
+            .flags = cqe.flags,
         };
     }
 
@@ -415,6 +590,7 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         return CompletionResult{
             .user_data = cqe.user_data,
             .res = cqe.res,
+            .flags = cqe.flags,
         };
     }
 } else struct {
@@ -431,7 +607,19 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
         return error.IoUringNotSupported;
     }
 
+    pub fn submitReadProvided(_: *UringEventLoop, _: posix.fd_t, _: u64, _: u16) !void {
+        return error.IoUringNotSupported;
+    }
+
+    pub fn submitRecv(_: *UringEventLoop, _: posix.fd_t, _: u64, _: u16) !void {
+        return error.IoUringNotSupported;
+    }
+
     pub fn submitWrite(_: *UringEventLoop, _: posix.fd_t, _: []const u8, _: u64) !void {
+        return error.IoUringNotSupported;
+    }
+
+    pub fn submitSend(_: *UringEventLoop, _: posix.fd_t, _: []const u8, _: u64) !void {
         return error.IoUringNotSupported;
     }
 
@@ -452,6 +640,10 @@ pub const UringEventLoop = if (builtin.os.tag == .linux and builtin.cpu.arch == 
     }
 
     pub fn submitAccept(_: *UringEventLoop, _: posix.fd_t, _: *posix.sockaddr, _: *posix.socklen_t, _: u64) !void {
+        return error.IoUringNotSupported;
+    }
+
+    pub fn submitProvideBuffers(_: *UringEventLoop, _: []u8, _: u32, _: u16, _: u16, _: u16) !void {
         return error.IoUringNotSupported;
     }
 

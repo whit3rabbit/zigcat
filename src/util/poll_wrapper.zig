@@ -48,6 +48,19 @@ var select_backend_warning_printed = std.atomic.Value(bool).init(false);
 const select_backend_warning_message =
     "Warning: Running on an older version of Windows that uses the 'select' backend, which is limited to ~21 concurrent connections. Broker/chat mode may be unstable. Upgrade to Windows 10 (Build 17063) or newer for better performance.\n";
 
+pub const WindowsBackend = enum {
+    wsapoll,
+    select,
+};
+
+const WindowsBackendState = enum {
+    unknown,
+    wsapoll,
+    select,
+};
+
+var windows_backend_state = std.atomic.Value(WindowsBackendState).init(.unknown);
+
 // Export poll constants
 pub const POLL = struct {
     pub const IN: i16 = if (builtin.os.tag == .windows) 0x0001 else posix.POLL.IN;
@@ -72,9 +85,10 @@ pub fn poll(fds: []pollfd, timeout_ms: i32) !usize {
     if (builtin.os.tag == .windows) {
         // Use WSAPoll on Windows Vista+ for better scalability
         // Falls back to select() if WSAPoll is not available
-        return pollWindowsWSAPoll(fds, timeout_ms) catch |err| {
+        const result = pollWindowsWSAPoll(fds, timeout_ms) catch |err| {
             // If WSAPoll fails or is unavailable, try select() backend
             if (err == error.WSAPollNotAvailable or err == error.Unexpected) {
+                markWindowsBackend(.select);
                 return pollWindowsSelect(fds, timeout_ms) catch |select_err| {
                     if (select_err == error.TooManyFileDescriptors) {
                         warnSelectBackendLimitOnce();
@@ -84,6 +98,9 @@ pub fn poll(fds: []pollfd, timeout_ms: i32) !usize {
             }
             return err;
         };
+
+        markWindowsBackend(.wsapoll);
+        return result;
     } else {
         return posix.poll(fds, timeout_ms);
     }
@@ -108,6 +125,7 @@ fn pollWindowsWSAPoll(fds: []pollfd, timeout_ms: i32) !usize {
         return switch (wsa_error) {
             .WSAENETDOWN => error.NetworkDown,
             .WSAEFAULT => error.BadAddress,
+            .WSAEOPNOTSUPP => error.WSAPollNotAvailable,
             .WSAEINVAL => error.InvalidArgument,
             .WSAENOBUFS => error.NoBufferSpace,
             .WSAEINTR => error.Interrupted,
@@ -116,6 +134,19 @@ fn pollWindowsWSAPoll(fds: []pollfd, timeout_ms: i32) !usize {
     }
 
     return @intCast(result);
+}
+
+pub fn windowsPollBackend() WindowsBackend {
+    if (builtin.os.tag != .windows) return .wsapoll;
+
+    const cached = windows_backend_state.load(.seq_cst);
+    if (cached != .unknown) {
+        return toWindowsBackend(cached);
+    }
+
+    const detected = probeWindowsBackend();
+    windows_backend_state.store(detected, .seq_cst);
+    return toWindowsBackend(detected);
 }
 
 // Windows-specific poll() implementation using select() (legacy fallback)
@@ -218,6 +249,52 @@ fn warnSelectBackendLimitOnce() void {
     if (!select_backend_warning_printed.swap(true, .seq_cst)) {
         std.debug.print(select_backend_warning_message, .{});
     }
+}
+
+fn markWindowsBackend(backend: WindowsBackend) void {
+    if (builtin.os.tag != .windows) return;
+
+    const state: WindowsBackendState = switch (backend) {
+        .wsapoll => .wsapoll,
+        .select => .select,
+    };
+    windows_backend_state.store(state, .seq_cst);
+}
+
+fn toWindowsBackend(state: WindowsBackendState) WindowsBackend {
+    return switch (state) {
+        .wsapoll => .wsapoll,
+        .select => .select,
+        .unknown => unreachable,
+    };
+}
+
+fn probeWindowsBackend() WindowsBackendState {
+    if (builtin.os.tag != .windows) return .wsapoll;
+
+    const ws2_32 = std.os.windows.ws2_32;
+    const result = ws2_32.WSAPoll(null, 0, 0);
+    if (result == ws2_32.SOCKET_ERROR) {
+        const wsa_error = ws2_32.WSAGetLastError();
+        return switch (wsa_error) {
+            .WSAEOPNOTSUPP, .WSAEINVAL => .select,
+            else => .wsapoll,
+        };
+    }
+
+    return .wsapoll;
+}
+
+pub fn testingOverrideWindowsBackend(backend: ?WindowsBackend) void {
+    if (!builtin.is_test) @compileError("testingOverrideWindowsBackend is test-only");
+    if (builtin.os.tag != .windows) return;
+
+    const state: WindowsBackendState = if (backend) |value| switch (value) {
+        .wsapoll => .wsapoll,
+        .select => .select,
+    } else .unknown;
+
+    windows_backend_state.store(state, .seq_cst);
 }
 
 // Windows fd_set helper functions

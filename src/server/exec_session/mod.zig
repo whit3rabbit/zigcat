@@ -9,7 +9,8 @@
 //! This module provides a single ExecSession type that automatically selects
 //! the best available I/O backend:
 //! - IOCP: Windows (preferred, 10-20% CPU usage)
-//! - io_uring: Linux 5.1+ (preferred, 5-10% CPU usage)
+//! - io_uring (provided buffers): Linux 5.7+ x86_64 (highest performance, 3-7% CPU usage)
+//! - io_uring (standard): Linux 5.1+ (high performance, 5-10% CPU usage)
 //! - poll: All Unix-like systems (fallback, 30-50% CPU usage)
 //!
 //! ## Usage
@@ -34,6 +35,7 @@ const platform = @import("../../util/platform.zig");
 
 const PollSession = @import("./poll_backend.zig").PollSession;
 const UringSession = @import("./uring_backend.zig").UringSession;
+const UringProvidedSession = @import("./uring_provided_backend.zig").UringProvidedSession;
 
 // Conditionally import IOCP backend (Windows only)
 const IocpSession = if (builtin.os.tag == .windows)
@@ -61,32 +63,38 @@ else
 
 /// Unified exec session with automatic backend selection.
 ///
-/// This is a tagged union that dispatches to PollSession, UringSession, or IocpSession
-/// based on platform capabilities and initialization method.
+/// This is a tagged union that dispatches to the best available backend based
+/// on platform capabilities and kernel version.
 ///
 /// Backend selection priority:
 /// 1. Windows: IOCP (10-20% CPU usage)
-/// 2. Linux 5.1+: io_uring (5-10% CPU usage)
-/// 3. Other Unix: poll (30-50% CPU usage)
+/// 2. Linux 5.7+ x86_64: io_uring with provided buffers (3-7% CPU usage, highest performance)
+/// 3. Linux 5.1+: io_uring with standard buffers (5-10% CPU usage, high performance)
+/// 4. Other Unix: poll (30-50% CPU usage, fallback)
 ///
 /// The `ExecSession` is a `union` to allow for compile-time polymorphism.
 /// This design enables the application to contain code for multiple I/O backends
-/// (like `io_uring`, `IOCP`, and `poll`) while only including the necessary
-/// backend code in the final binary, based on the target OS. For example, the
-/// `iocp` variant is only compiled on Windows. This avoids runtime overhead
-/// and platform-specific compilation errors, reinforcing the project's focus
-/// on performance and portability.
+/// while only including the necessary backend code in the final binary, based on
+/// the target OS. For example, the `iocp` variant is only compiled on Windows,
+/// and `uring_provided` is only instantiated on Linux 5.7+ x86_64. This avoids
+/// runtime overhead and platform-specific compilation errors, reinforcing the
+/// project's focus on performance and portability.
 pub const ExecSession = union(enum) {
     poll: PollSession,
     uring: UringSession,
+    uring_provided: UringProvidedSession,
     iocp: IocpSession,
 
     /// Initialize exec session with automatic backend selection.
     ///
-    /// Platform-specific backend selection:
-    /// - Windows: IOCP (high performance, 10-20% CPU usage)
-    /// - Linux 5.1+: io_uring (highest performance, 5-10% CPU usage)
-    /// - Other Unix: poll (fallback, 30-50% CPU usage)
+    /// Platform-specific backend selection (in priority order):
+    /// 1. Windows: IOCP (high performance, 10-20% CPU usage)
+    /// 2. Linux 5.7+ x86_64: io_uring with provided buffers (highest performance, 3-7% CPU)
+    /// 3. Linux 5.1+: io_uring with standard buffers (high performance, 5-10% CPU)
+    /// 4. Other Unix: poll (fallback, 30-50% CPU usage)
+    ///
+    /// The selection is transparent to the caller - the best available backend
+    /// is automatically chosen based on kernel version and architecture.
     pub fn init(
         allocator: std.mem.Allocator,
         telnet_conn: *TelnetConnection,
@@ -102,7 +110,16 @@ pub const ExecSession = union(enum) {
             }
         }
 
-        // Linux: Try io_uring on 5.1+ first
+        // Linux 5.7+ x86_64: Try io_uring with provided buffers (highest performance)
+        if (builtin.os.tag == .linux and platform.isIoUringProvidedBuffersSupported()) {
+            if (UringProvidedSession.init(allocator, telnet_conn, child, cfg)) |provided_session| {
+                return ExecSession{ .uring_provided = provided_session };
+            } else |_| {
+                // Fall through to standard io_uring on error
+            }
+        }
+
+        // Linux 5.1+: Try standard io_uring (high performance)
         if (builtin.os.tag == .linux and platform.isIoUringSupported()) {
             if (UringSession.init(allocator, telnet_conn, child, cfg)) |uring_session| {
                 return ExecSession{ .uring = uring_session };
@@ -135,6 +152,7 @@ pub const ExecSession = union(enum) {
         switch (self.*) {
             .poll => |*poll_session| poll_session.deinit(),
             .uring => |*uring_session| uring_session.deinit(),
+            .uring_provided => |*provided_session| provided_session.deinit(),
             .iocp => |*iocp_session| iocp_session.deinit(),
         }
     }
@@ -151,6 +169,7 @@ pub const ExecSession = union(enum) {
         switch (self.*) {
             .poll => |*poll_session| try poll_session.run(),
             .uring => |*uring_session| try uring_session.run(),
+            .uring_provided => |*provided_session| try provided_session.run(),
             .iocp => |*iocp_session| try iocp_session.run(),
         }
     }
@@ -187,5 +206,6 @@ test "ExecSession backends available" {
     const T = ExecSession;
     try testing.expect(@hasField(T, "poll"));
     try testing.expect(@hasField(T, "uring"));
+    try testing.expect(@hasField(T, "uring_provided"));
     try testing.expect(@hasField(T, "iocp"));
 }

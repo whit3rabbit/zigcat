@@ -13,6 +13,9 @@
 
 const std = @import("std");
 const telnet = @import("telnet.zig");
+const terminal = @import("terminal");
+const tty_state = terminal.tty_state;
+const tty_control = terminal.tty_control;
 
 const TelnetCommand = telnet.TelnetCommand;
 const TelnetOption = telnet.TelnetOption;
@@ -20,8 +23,23 @@ const TelnetError = telnet.TelnetError;
 
 /// Echo option handler implementing RFC 857 echo negotiation
 pub const EchoHandler = struct {
+    tty: ?*tty_state.TtyState = null,
+
+    pub fn init(tty: ?*tty_state.TtyState) EchoHandler {
+        return EchoHandler{
+            .tty = tty,
+        };
+    }
+
+    fn setLocalEcho(self: *EchoHandler, enable: bool) void {
+        if (self.tty) |state| {
+            tty_control.setLocalEcho(state, enable) catch {};
+        }
+    }
+
     /// Handle WILL echo from remote side - server will echo, client should disable local echo
-    pub fn handleWill(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleWill(self: *EchoHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        self.setLocalEcho(false);
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.do),
@@ -30,7 +48,8 @@ pub const EchoHandler = struct {
     }
 
     /// Handle DO echo request from remote side - client should enable local echo
-    pub fn handleDo(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleDo(self: *EchoHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        self.setLocalEcho(true);
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.will),
@@ -39,7 +58,8 @@ pub const EchoHandler = struct {
     }
 
     /// Handle WONT echo from remote side - we should handle echo locally
-    pub fn handleWont(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleWont(self: *EchoHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        self.setLocalEcho(true);
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.dont),
@@ -48,7 +68,8 @@ pub const EchoHandler = struct {
     }
 
     /// Handle DONT echo from remote side - remote doesn't want us to echo
-    pub fn handleDont(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleDont(self: *EchoHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        self.setLocalEcho(false);
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.wont),
@@ -108,7 +129,7 @@ pub const TerminalTypeHandler = struct {
     }
 
     /// Handle terminal type subnegotiation - responds to SEND requests with configured terminal type
-    /// 
+    ///
     /// Parameters:
     /// - data: Subnegotiation data received from remote
     /// - response: Buffer to append response commands
@@ -397,14 +418,14 @@ pub const OptionHandlerRegistry = struct {
     linemode_handler: LinemodeHandler,
 
     /// Initialize option handler registry with terminal configuration
-    /// 
+    ///
     /// Parameters:
     /// - terminal_type: Terminal type string (e.g., "xterm", "vt100")
     /// - window_width: Initial terminal width in characters
     /// - window_height: Initial terminal height in characters
-    pub fn init(terminal_type: []const u8, window_width: u16, window_height: u16) OptionHandlerRegistry {
+    pub fn init(terminal_type: []const u8, window_width: u16, window_height: u16, local_tty: ?*tty_state.TtyState) OptionHandlerRegistry {
         return OptionHandlerRegistry{
-            .echo_handler = EchoHandler{},
+            .echo_handler = EchoHandler.init(local_tty),
             .terminal_type_handler = TerminalTypeHandler.init(terminal_type),
             .naws_handler = NAWSHandler.init(window_width, window_height),
             .suppress_ga_handler = SuppressGoAheadHandler{},
@@ -417,10 +438,10 @@ pub const OptionHandlerRegistry = struct {
     pub fn handleNegotiation(self: *OptionHandlerRegistry, allocator: std.mem.Allocator, command: TelnetCommand, option: TelnetOption, response: *std.ArrayList(u8)) !void {
         switch (option) {
             .echo => switch (command) {
-                .will => try EchoHandler.handleWill(allocator, response),
-                .wont => try EchoHandler.handleWont(allocator, response),
-                .do => try EchoHandler.handleDo(allocator, response),
-                .dont => try EchoHandler.handleDont(allocator, response),
+                .will => try self.echo_handler.handleWill(allocator, response),
+                .wont => try self.echo_handler.handleWont(allocator, response),
+                .do => try self.echo_handler.handleDo(allocator, response),
+                .dont => try self.echo_handler.handleDont(allocator, response),
                 else => {},
             },
             .terminal_type => switch (command) {

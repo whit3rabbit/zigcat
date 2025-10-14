@@ -289,6 +289,22 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const terminal_module = b.createModule(.{
+        .root_source_file = b.path("src/terminal/package.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const protocol_module = b.createModule(.{
+        .root_source_file = b.path("src/protocol/package.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    protocol_module.addImport("terminal", terminal_module);
+
+    exe.root_module.addImport("terminal", terminal_module);
+    exe.root_module.addImport("protocol", protocol_module);
+
     exe.root_module.addOptions("build_options", options);
     exe.linkLibC();
 
@@ -323,10 +339,10 @@ pub fn build(b: *std.Build) void {
                 // Alpine: /usr/lib/libwolfssl.a
                 // Ubuntu: /usr/lib/x86_64-linux-gnu/libwolfssl.a or /usr/lib/aarch64-linux-gnu/libwolfssl.a
                 const static_lib_paths = [_][]const u8{
-                    "/usr/lib/libwolfssl.a",                      // Alpine/musl standard path
-                    "/usr/lib/x86_64-linux-gnu/libwolfssl.a",     // Ubuntu x86_64
-                    "/usr/lib/aarch64-linux-gnu/libwolfssl.a",    // Ubuntu ARM64
-                    "/usr/local/lib/libwolfssl.a",                // User-installed
+                    "/usr/lib/libwolfssl.a", // Alpine/musl standard path
+                    "/usr/lib/x86_64-linux-gnu/libwolfssl.a", // Ubuntu x86_64
+                    "/usr/lib/aarch64-linux-gnu/libwolfssl.a", // Ubuntu ARM64
+                    "/usr/local/lib/libwolfssl.a", // User-installed
                 };
 
                 var found_static_lib = false;
@@ -359,7 +375,7 @@ pub fn build(b: *std.Build) void {
                 // Check both Apple Silicon and Intel Homebrew paths
                 const homebrew_paths = [_][]const u8{
                     "/opt/homebrew/opt/wolfssl", // Apple Silicon
-                    "/usr/local/opt/wolfssl",    // Intel
+                    "/usr/local/opt/wolfssl", // Intel
                 };
 
                 for (homebrew_paths) |base_path| {
@@ -379,16 +395,16 @@ pub fn build(b: *std.Build) void {
             } else if (target.result.os.tag == .linux) {
                 // Add standard Linux/Alpine paths for wolfSSL
                 const include_paths = [_][]const u8{
-                    "/usr/include",        // Alpine standard include path
-                    "/usr/local/include",  // User-installed headers
+                    "/usr/include", // Alpine standard include path
+                    "/usr/local/include", // User-installed headers
                 };
                 for (include_paths) |include_path| {
                     exe.addSystemIncludePath(.{ .cwd_relative = include_path });
                 }
 
                 const lib_paths = [_][]const u8{
-                    "/usr/lib",        // Alpine standard library path
-                    "/usr/local/lib",  // User-installed libraries
+                    "/usr/lib", // Alpine standard library path
+                    "/usr/local/lib", // User-installed libraries
                 };
                 for (lib_paths) |lib_path| {
                     exe.addLibraryPath(.{ .cwd_relative = lib_path });
@@ -404,10 +420,10 @@ pub fn build(b: *std.Build) void {
             if (target.result.os.tag == .linux) {
                 // Standard Ubuntu/Debian include paths for native and cross-compilation
                 const include_paths = [_][]const u8{
-                    "/usr/include/x86_64-linux-gnu",   // x86_64 (amd64) headers
-                    "/usr/include/aarch64-linux-gnu",  // aarch64 (arm64) headers
-                    "/usr/include",                    // Standard include path
-                    "/usr/local/include",              // User-installed headers
+                    "/usr/include/x86_64-linux-gnu", // x86_64 (amd64) headers
+                    "/usr/include/aarch64-linux-gnu", // aarch64 (arm64) headers
+                    "/usr/include", // Standard include path
+                    "/usr/local/include", // User-installed headers
                 };
                 for (include_paths) |include_path| {
                     exe.addSystemIncludePath(.{ .cwd_relative = include_path });
@@ -415,12 +431,12 @@ pub fn build(b: *std.Build) void {
 
                 // Standard Ubuntu/Debian library paths for native and cross-compilation
                 const lib_paths = [_][]const u8{
-                    "/usr/lib/x86_64-linux-gnu",   // x86_64 (amd64) libraries
-                    "/usr/lib/aarch64-linux-gnu",  // aarch64 (arm64) libraries
-                    "/usr/lib",                    // Standard library path
-                    "/usr/local/lib",              // User-installed libraries
-                    "/lib/x86_64-linux-gnu",       // Additional x86_64 path
-                    "/lib/aarch64-linux-gnu",      // Additional aarch64 path
+                    "/usr/lib/x86_64-linux-gnu", // x86_64 (amd64) libraries
+                    "/usr/lib/aarch64-linux-gnu", // aarch64 (arm64) libraries
+                    "/usr/lib", // Standard library path
+                    "/usr/local/lib", // User-installed libraries
+                    "/lib/x86_64-linux-gnu", // Additional x86_64 path
+                    "/lib/aarch64-linux-gnu", // Additional aarch64 path
                 };
                 for (lib_paths) |lib_path| {
                     exe.addLibraryPath(.{ .cwd_relative = lib_path });
@@ -524,6 +540,38 @@ pub fn build(b: *std.Build) void {
     const run_timeout_tests = b.addRunArtifact(timeout_tests);
     const timeout_test_step = b.step("test-timeout", "Run timeout-specific tests");
     timeout_test_step.dependOn(&run_timeout_tests.step);
+
+    var run_terminal_control_tests: ?*std.Build.Step.Run = null;
+    var run_echo_integration_tests: ?*std.Build.Step.Run = null;
+
+    if (target.result.os.tag != .windows) {
+        //--- Terminal Control Tests ---
+        // Ensures local terminal handling utilities toggle raw mode correctly and
+        // restore the original configuration across repeated transitions.
+        const terminal_control_test_module = b.createModule(.{
+            .root_source_file = b.path("tests/terminal_control_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        terminal_control_test_module.addImport("terminal", terminal_module);
+        const terminal_control_tests = b.addTest(.{ .root_module = terminal_control_test_module });
+        const run_terminal_control_tests_local = b.addRunArtifact(terminal_control_tests);
+        run_terminal_control_tests = run_terminal_control_tests_local;
+        const terminal_control_test_step = b.step("test-terminal-control", "Run terminal control tests");
+        terminal_control_test_step.dependOn(&run_terminal_control_tests_local.step);
+
+        const echo_integration_test_module = b.createModule(.{
+            .root_source_file = b.path("tests/echo_integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        echo_integration_test_module.addImport("protocol", protocol_module);
+        const echo_integration_tests = b.addTest(.{ .root_module = echo_integration_test_module });
+        const run_echo_integration_tests_local = b.addRunArtifact(echo_integration_tests);
+        run_echo_integration_tests = run_echo_integration_tests_local;
+        const echo_integration_test_step = b.step("test-echo-integration", "Run Telnet echo integration tests");
+        echo_integration_test_step.dependOn(&run_echo_integration_tests_local.step);
+    }
 
     //--- Exec Thread Lifecycle Tests ---
     // Verifies the correct creation, execution, and cleanup of threads used in
@@ -699,6 +747,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    telnet_test_module.addImport("protocol", protocol_module);
     const telnet_tests = b.addTest(.{ .root_module = telnet_test_module });
     telnet_tests.linkLibC();
     const run_telnet_tests = b.addRunArtifact(telnet_tests);
@@ -787,6 +836,14 @@ pub fn build(b: *std.Build) void {
     feature_test_step.dependOn(&run_broker_perf_validation_tests.step);
     feature_test_step.dependOn(&run_poll_wrapper_tests.step);
     feature_test_step.dependOn(&run_ssl_tests.step);
+    if (target.result.os.tag != .windows) {
+        if (run_terminal_control_tests) |run| {
+            feature_test_step.dependOn(&run.step);
+        }
+        if (run_echo_integration_tests) |run| {
+            feature_test_step.dependOn(&run.step);
+        }
+    }
 
     const docker_test_cmd = b.addSystemCommand(&[_][]const u8{
         "bash",

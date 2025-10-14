@@ -10,7 +10,7 @@
 //! This module provides a unified interface for Unix socket operations by
 //! re-exporting specialized client, server, and utility modules.
 //!
-//! Platform support: Linux, macOS, BSD variants (not Windows)
+//! Platform support: Linux, macOS, BSD variants, and Windows 10 RS4+ (older Windows automatically falls back to Named Pipes)
 //!
 //! ## Module Organization
 //!

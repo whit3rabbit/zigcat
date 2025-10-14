@@ -10,9 +10,41 @@ const broker = @import("../broker.zig");
 const ClientPool = @import("client_manager.zig").ClientPool;
 const logging = @import("../../util/logging.zig");
 
+/// Sanitizes a byte slice, replacing invalid UTF-8 sequences with the
+/// Unicode replacement character (U+FFFD). If the input is already valid UTF-8,
+/// it returns a copy. Otherwise, it iterates through the input and reconstructs
+/// a valid UTF-8 string.
+///
+/// Parameters:
+///   - allocator: The memory allocator to use for the sanitized string.
+///   - input: The byte slice to sanitize.
+///
+/// Returns:
+///   A new, allocated byte slice containing the sanitized, valid UTF-8 string.
+///   Returns an error if memory allocation fails.
+fn sanitizeUtf8(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+    if (std.unicode.utf8ValidateSlice(input)) {
+        return allocator.dupe(u8, input); // It's valid, just copy it
+    }
+
+    var sanitized_list = std.ArrayList(u8).init(allocator);
+    errdefer sanitized_list.deinit();
+
+    var it = std.unicode.Utf8Iterator.init(input);
+    while (it.next()) |codepoint| {
+        try sanitized_list.writer().writeCodepoint(codepoint);
+    }
+
+    return sanitized_list.toOwnedSlice();
+}
+
 /// Handle incoming data from a client connection
 /// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
-pub fn handleClientData(self: *broker.BrokerServer, client_id: u64) !void {
+pub fn handleClientData(
+    self: *broker.BrokerServer,
+    client_id: u64,
+    scratch: std.mem.Allocator,
+) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     if (client.read_buffer_len >= client.read_buffer.len) {
@@ -72,14 +104,18 @@ pub fn handleClientData(self: *broker.BrokerServer, client_id: u64) !void {
         },
         .chat => {
             logging.logTrace("Chat mode: processing {} bytes from client {}\n", .{ bytes_read, client_id });
-            try processChatData(self, client_id);
+            try processChatData(self, client_id, scratch);
         },
     }
 }
 
 /// Process chat mode data buffered for a client
 /// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
-pub fn processChatData(self: *broker.BrokerServer, client_id: u64) !void {
+pub fn processChatData(
+    self: *broker.BrokerServer,
+    client_id: u64,
+    scratch: std.mem.Allocator,
+) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     var start: usize = 0;
@@ -105,7 +141,7 @@ pub fn processChatData(self: *broker.BrokerServer, client_id: u64) !void {
             line = line[0 .. line.len - 1];
         }
 
-        try processChatLine(self, client_id, line);
+        try processChatLine(self, client_id, line, scratch);
 
         start = end + 1;
 
@@ -130,13 +166,31 @@ pub fn processChatData(self: *broker.BrokerServer, client_id: u64) !void {
 
 /// Process a single chat line from a client
 /// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
-pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const u8) !void {
+pub fn processChatLine(
+    self: *broker.BrokerServer,
+    client_id: u64,
+    line: []const u8,
+    scratch: std.mem.Allocator,
+) !void {
     const client = self.clients.getClient(client_id) orelse return broker.BrokerError.ClientNotFound;
 
     if (client.nickname == null) {
         const trimmed_nick = std.mem.trim(u8, line, " \t");
 
         logging.logTrace("Client {} attempting to set nickname: '{s}'\n", .{ client_id, trimmed_nick });
+
+        if (!std.unicode.utf8ValidateSlice(trimmed_nick)) {
+            client.nickname_attempts += 1;
+            if (client.nickname_attempts > 5) {
+                const error_msg = "*** Too many failed nickname attempts. Disconnecting.\r\n";
+                _ = client.connection.write(error_msg) catch {};
+                logging.logWarning("Client {}: Disconnected after too many failed nickname attempts (invalid UTF-8 nickname)\n", .{client_id});
+                return broker.BrokerError.TooManyFailedAttempts;
+            }
+            const error_msg = "*** Nickname contains invalid UTF-8 characters. Please try again.\r\n";
+            _ = client.connection.write(error_msg) catch {};
+            return;
+        }
 
         if (trimmed_nick.len == 0) {
             client.nickname_attempts += 1;
@@ -166,8 +220,7 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const
                 return broker.BrokerError.TooManyFailedAttempts;
             }
 
-            const error_msg = try std.fmt.allocPrint(self.allocator, "*** Nickname too long (max {} characters), please try again\n", .{self.config.chat_max_nickname_len});
-            defer self.allocator.free(error_msg);
+            const error_msg = try std.fmt.allocPrint(scratch, "*** Nickname too long (max {} characters), please try again\n", .{self.config.chat_max_nickname_len});
 
             const bytes_sent = client.connection.write(error_msg) catch |err| {
                 logging.logError(err, "nickname length error");
@@ -223,8 +276,7 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const
         // Reset nickname attempt counter on success
         client.nickname_attempts = 0;
 
-        const confirm_msg = try std.fmt.allocPrint(self.allocator, "*** You are now known as {s}\n", .{trimmed_nick});
-        defer self.allocator.free(confirm_msg);
+        const confirm_msg = try std.fmt.allocPrint(scratch, "*** You are now known as {s}\n", .{trimmed_nick});
 
         const bytes_sent = client.connection.write(confirm_msg) catch |err| {
             logging.logError(err, "nickname confirmation");
@@ -232,8 +284,7 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const
         };
         client.bytes_sent += bytes_sent;
 
-        const join_msg = try std.fmt.allocPrint(self.allocator, "*** {s} joined the chat\n", .{trimmed_nick});
-        defer self.allocator.free(join_msg);
+        const join_msg = try std.fmt.allocPrint(scratch, "*** {s} joined the chat\n", .{trimmed_nick});
 
         try self.relayToClients(join_msg, client_id);
 
@@ -247,8 +298,7 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const
         }
 
         if (line.len > self.config.chat_max_message_len) {
-            const error_msg = try std.fmt.allocPrint(self.allocator, "*** Message too long (max {} characters)\n", .{self.config.chat_max_message_len});
-            defer self.allocator.free(error_msg);
+            const error_msg = try std.fmt.allocPrint(scratch, "*** Message too long (max {} characters)\n", .{self.config.chat_max_message_len});
 
             const bytes_sent = client.connection.write(error_msg) catch |err| {
                 logging.logError(err, "message length error");
@@ -260,11 +310,10 @@ pub fn processChatLine(self: *broker.BrokerServer, client_id: u64, line: []const
         }
 
         const formatted_msg = try std.fmt.allocPrint(
-            self.allocator,
+            scratch,
             "[{s}] {s}\n",
             .{ client.nickname.?, line },
         );
-        defer self.allocator.free(formatted_msg);
 
         try self.relayToClients(formatted_msg, client_id);
 

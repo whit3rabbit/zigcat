@@ -1,7 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const telnet = @import("../src/protocol/telnet.zig");
-const TelnetProcessor = @import("../src/protocol/telnet_processor.zig").TelnetProcessor;
+const protocol = @import("protocol");
+const telnet = protocol.telnet;
+const TelnetProcessor = protocol.telnet_processor.TelnetProcessor;
 
 const TelnetState = telnet.TelnetState;
 const TelnetCommand = telnet.TelnetCommand;
@@ -54,7 +55,7 @@ test "command requires option" {
     try testing.expect(!telnet.commandRequiresOption(.ga));
 }
 test "telnet processor basic functionality" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Test normal data processing
@@ -68,7 +69,7 @@ test "telnet processor basic functionality" {
 }
 
 test "telnet processor IAC escape" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Test escaped IAC (IAC IAC -> single IAC in output)
@@ -83,7 +84,7 @@ test "telnet processor IAC escape" {
 }
 
 test "telnet processor option negotiation" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Test WILL ECHO negotiation
@@ -103,7 +104,7 @@ test "telnet processor option negotiation" {
 }
 
 test "telnet processor mixed data and commands" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Test mixed data: "Hello" + IAC WILL ECHO + "World"
@@ -120,7 +121,7 @@ test "telnet processor mixed data and commands" {
 }
 
 test "telnet processor buffer overflow protection" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Create oversized subnegotiation

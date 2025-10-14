@@ -267,8 +267,8 @@ fn handleUnixSocketClient(
                 .session_config = config.buildExecSessionConfig(cfg),
             };
         } else blk: {
-            const shell_cmd = try exec.buildShellCommand(allocator, cfg.shell_command.?);
-            defer allocator.free(shell_cmd.args);
+            var shell_cmd = try exec.buildShellCommand(allocator, cfg.shell_command.?);
+            defer shell_cmd.deinit();
 
             break :blk exec.ExecConfig{
                 .mode = .shell,
@@ -301,7 +301,7 @@ fn handleUnixSocketClient(
 
     if (cfg.telnet) {
         const connection = Connection.fromSocket(stream.handle);
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
         defer telnet_conn.deinit();
 
         try telnet_conn.performServerNegotiation();

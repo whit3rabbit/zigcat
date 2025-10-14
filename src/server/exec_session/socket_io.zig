@@ -96,7 +96,8 @@ pub fn readSocketToBuffer(ctx: *SocketReadContext) !usize {
 /// Write from buffer to socket with non-blocking I/O.
 ///
 /// Writes as much data as possible from the buffer to the socket without blocking.
-/// Handles partial writes by consuming only the successfully written bytes.
+/// Handles partial writes by consuming only the successfully written bytes and
+/// returns the total number of bytes flushed.
 ///
 /// ## Error Handling
 /// - WouldBlock: Returns immediately after consuming written bytes
@@ -105,22 +106,24 @@ pub fn readSocketToBuffer(ctx: *SocketReadContext) !usize {
 pub fn flushBufferToSocket(
     buffer: *IoRingBuffer,
     ctx: *SocketWriteContext,
-) !void {
+) !usize {
+    var total_written: usize = 0;
+
     while (!ctx.socket_write_closed.* and buffer.availableRead() > 0) {
         const chunk = buffer.readableSlice();
         if (chunk.len == 0) break;
 
         const written = ctx.telnet_conn.write(chunk) catch |err| {
             switch (err) {
-                error.WouldBlock => return,
+                error.WouldBlock => return total_written,
                 error.ConnectionResetByPeer, error.BrokenPipe => {
                     ctx.socket_write_closed.* = true;
-                    return;
+                    return total_written;
                 },
                 else => {
                     // Log but don't fail - socket may already be closed
                     ctx.socket_write_closed.* = true;
-                    return;
+                    return total_written;
                 },
             }
         };
@@ -129,10 +132,32 @@ pub fn flushBufferToSocket(
 
         buffer.consume(written);
         ctx.tracker.markActivity();
+        total_written += written;
 
         // Partial write - socket would block on next write
         if (written < chunk.len) break;
     }
+
+    return total_written;
+}
+
+/// Flush a set of buffers to the socket in order.
+///
+/// Attempts to write each buffer in `buffers` to the socket using the provided
+/// context. Stops early if the socket becomes closed. Returns the total number
+/// of bytes written across all buffers.
+pub fn pipeBuffersToSocket(
+    buffers: []const *IoRingBuffer,
+    ctx: *SocketWriteContext,
+) !usize {
+    var total_written: usize = 0;
+
+    for (buffers) |buffer| {
+        total_written += try flushBufferToSocket(buffer, ctx);
+        if (ctx.socket_write_closed.*) break;
+    }
+
+    return total_written;
 }
 
 // ========================================================================

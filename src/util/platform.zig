@@ -185,6 +185,71 @@ pub fn isIoUringSupported() bool {
     return true;
 }
 
+/// Check if io_uring provided buffers are supported on the current system.
+///
+/// Provided buffers (IORING_OP_PROVIDE_BUFFERS) allow the kernel to automatically
+/// select buffers from a pre-registered pool, improving performance by eliminating
+/// per-operation buffer mapping overhead.
+///
+/// Requirements for provided buffer support:
+/// 1. Linux platform (compile-time check)
+/// 2. x86_64 architecture (compile-time check)
+/// 3. Kernel version >= 5.7 (runtime check)
+/// 4. Basic io_uring support (5.1+)
+///
+/// This function builds on isIoUringSupported() by adding the 5.7+ version check.
+/// No additional syscall probe is needed - if io_uring works on 5.7+, provided
+/// buffers will work.
+///
+/// Returns: true if provided buffers are supported, false otherwise
+///
+/// Performance Note:
+/// - Uses cached kernel version from getLinuxKernelVersion()
+/// - No syscall overhead beyond basic io_uring probe
+///
+/// Example:
+/// ```zig
+/// if (isIoUringProvidedBuffersSupported()) {
+///     std.debug.print("Using io_uring with provided buffers (kernel 5.7+)\n", .{});
+/// } else if (isIoUringSupported()) {
+///     std.debug.print("Using io_uring with standard buffers (kernel 5.1+)\n", .{});
+/// } else {
+///     std.debug.print("Using poll-based I/O\n", .{});
+/// }
+/// ```
+pub fn isIoUringProvidedBuffersSupported() bool {
+    // Compile-time check: Only available on Linux x86_64
+    if (builtin.os.tag != .linux) {
+        return false;
+    }
+    if (builtin.cpu.arch != .x86_64) {
+        return false;
+    }
+
+    // Runtime check: Kernel version >= 5.7
+    const version = getLinuxKernelVersion() catch return false;
+    if (!version.isAtLeast(5, 7)) {
+        return false;
+    }
+
+    // Verify basic io_uring support is available
+    // (Provided buffers require io_uring, so check both)
+    if (!@hasDecl(std.os.linux, "IO_Uring")) {
+        return false;
+    }
+
+    const IO_Uring = std.os.linux.IO_Uring;
+
+    // Try to initialize with minimal 1-entry ring
+    // If this succeeds on 5.7+, provided buffers will work
+    var ring = IO_Uring.init(1, 0) catch {
+        return false;
+    };
+    defer ring.deinit();
+
+    return true;
+}
+
 /// Get a human-readable platform description.
 ///
 /// Returns a string describing the current platform, kernel version,

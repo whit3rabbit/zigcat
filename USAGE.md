@@ -76,16 +76,201 @@ This command will create two files:
 - `--send-only` *(flag)* - disable reading from the socket. Example: `zigcat --send-only example.com 80`
 - `--recv-only` *(flag)* - disable writing to the socket. Example: `zigcat --recv-only example.com 80`
 - `-C`, `--crlf` *(flag)* - translate LF to CRLF on transmit. Example: `zigcat --crlf mail.example.com 25`
-- `-t`, `--telnet` *(flag)* - process Telnet IAC sequences. Example: `zigcat --telnet bbs.example.com 23`
+- `-t`, `--telnet` *(flag)* - process Telnet IAC sequences for connecting to BBSes, MUDs, and legacy systems. See [Telnet Protocol Support](#telnet-protocol-support) below for details. Example: `zigcat --telnet bbs.example.com 23`
 - `--no-stdin` *(flag)* - do not pipe stdin into the exec child. Example: `zigcat -l 9000 -e /usr/bin/logger --no-stdin`
 - `--no-stdout` *(flag)* - discard exec stdout. Example: `zigcat -l 9000 -e /usr/bin/logger --no-stdout`
 - `--no-stderr` *(flag)* - discard exec stderr. Example: `zigcat -l 9000 -e /usr/bin/logger --no-stderr`
 
+## Telnet Protocol Support
+
+The `--telnet` flag enables RFC 854 Telnet protocol processing, allowing zigcat to connect to legacy systems that require proper IAC (Interpret As Command) sequence handling and option negotiation.
+
+### What Telnet Mode Does
+
+- **Filters IAC Sequences**: Removes Telnet command bytes (0xFF IAC) from data stream
+- **Option Negotiation**: Automatically responds to WILL/WONT/DO/DONT commands
+- **Escapes Binary Data**: Properly handles 0xFF bytes in application data (IAC IAC → 0xFF)
+- **Terminal Support**: Negotiates terminal type, window size (NAWS), and echo settings
+
+### Supported Options (RFC Compliance)
+
+- **ECHO (RFC 857)**: Server echo control
+- **SUPPRESS-GO-AHEAD (RFC 858)**: Suppress go-ahead signal
+- **TERMINAL-TYPE (RFC 1091)**: Terminal type negotiation
+- **NAWS (RFC 1073)**: Window size negotiation
+- **LINEMODE (RFC 1184)**: Line-oriented terminal mode
+
+### Connecting to Legacy Systems
+
+**Bulletin Board Systems (BBSes):**
+```bash
+# Connect to a BBS
+zigcat --telnet bbs.example.com 23
+
+# Connect with verbose logging to see negotiation
+zigcat --telnet -v bbs.example.com 23
+```
+
+**MUD Servers (Multi-User Dungeons):**
+```bash
+# Connect to a MUD
+zigcat --telnet mud.example.com 4000
+
+# Connect with connection timeout
+zigcat --telnet -w 10 mud.example.com 4000
+```
+
+**Network Equipment:**
+```bash
+# Connect to router/switch management
+zigcat --telnet router.local 23
+
+# Connect with specific source address
+zigcat --telnet --source 192.168.1.10 router.local 23
+```
+
+### Telnet Server Mode
+
+**Basic Telnet Server:**
+```bash
+# Listen for Telnet connections
+zigcat -l --telnet 2323
+
+# Keep listening after each client disconnects
+zigcat -l --telnet -k 2323
+```
+
+**Telnet Server with Command Execution:**
+```bash
+# REQUIRES --allow flag in listen mode
+zigcat -l --telnet 2323 -e /bin/bash --allow --allow-ip 127.0.0.1
+```
+
+### Combining Telnet with Other Features
+
+**Telnet over TLS:**
+```bash
+# Secure Telnet connection
+zigcat --telnet --ssl telnet-tls.example.com 992
+
+# Telnet server with TLS
+zigcat -l --telnet --ssl --ssl-cert cert.pem --ssl-key key.pem 992
+```
+
+**Telnet over Unix Domain Sockets:**
+```bash
+# Server on Unix socket
+zigcat -l --telnet -U /tmp/telnet.sock
+
+# Client via Unix socket
+zigcat --telnet -U /tmp/telnet.sock
+```
+
+**Telnet through Proxy:**
+```bash
+# Connect through SOCKS5 proxy
+zigcat --telnet --proxy socks5://localhost:1080 bbs.example.com 23
+
+# Connect through HTTP CONNECT proxy
+zigcat --telnet --proxy http://proxy.local:8080 telnet.example.com 23
+```
+
+### Debugging Telnet Protocol
+
+**View Protocol Negotiation:**
+```bash
+# Use -v/-vv/-vvv for increasing verbosity
+zigcat --telnet -vv server.example.com 23
+```
+
+**Capture Protocol Exchange:**
+```bash
+# Hex dump to file for analysis
+zigcat --telnet -x telnet-debug.hex server.example.com 23
+
+# View IAC sequences in hex dump
+hexdump -C telnet-debug.hex | grep "ff"
+```
+
+**Common IAC Sequences:**
+- `ff fb 01` = IAC WILL ECHO
+- `ff fd 01` = IAC DO ECHO
+- `ff fc 01` = IAC WONT ECHO
+- `ff fe 01` = IAC DONT ECHO
+- `ff fa 18 01 ff f0` = IAC SB TERMINAL-TYPE SEND IAC SE
+
+### When NOT to Use Telnet Mode
+
+**Plain TCP Services:**
+If the server doesn't use Telnet protocol (most modern services), omit `--telnet`:
+```bash
+# HTTP - plain TCP
+zigcat example.com 80
+
+# SSH - NOT Telnet
+zigcat example.com 22
+```
+
+**Binary Data Transfer:**
+For binary data, avoid `--telnet` unless the protocol specifically requires it. Telnet escaping (IAC IAC) adds overhead:
+```bash
+# Binary file transfer - plain TCP
+zigcat example.com 9000 < binary_file.dat
+```
+
+### Troubleshooting
+
+**Problem:** Seeing `�WILL�ECHO` or garbled IAC sequences in output
+
+**Solution:** Server is using Telnet protocol but you forgot `--telnet` flag
+```bash
+zigcat --telnet server.example.com 23
+```
+
+**Problem:** Connection closes immediately
+
+**Solution:** Server may require specific option negotiation. Enable verbose logging:
+```bash
+zigcat --telnet -vv server.example.com 23
+```
+
+**Problem:** Terminal behaves oddly (no echo, strange line breaks)
+
+**Solution:** Check which options were negotiated with verbose mode:
+```bash
+zigcat --telnet -v server.example.com 23
+```
+
+For comprehensive Telnet documentation including RFC references, architecture details, and advanced usage, see **[TELNET.md](TELNET.md)**.
+
 ## Execution Integration
-- `-e`, `--exec <cmd> [args...]` *(string command + optional args)* - run a program per connection; arguments continue until the next flag or end-of-options marker. Example: `zigcat -l 9000 -e /usr/bin/cat`
-- `-c`, `--sh-exec <command>` *(string)* - run command through the system shell. Example: `zigcat -l 9000 -c "/usr/bin/logger -t zigcat"`
-- `--allow` *(flag)* - acknowledge dangerous exec operations (required for some hardened setups). Example: `zigcat -l 9000 --allow -e /usr/bin/cat`
-- `--drop-user <name>` *(string)* - drop privileges to the named user after binding. Example: `zigcat -l 9000 --drop-user nobody`
+
+**⚠️ Security Note**: zigcat requires explicit security acknowledgment for exec mode in listen mode to prevent accidental remote code execution vulnerabilities.
+
+- `-e`, `--exec <cmd> [args...]` *(string command + optional args)* - run a program per connection; arguments continue until the next flag or end-of-options marker.
+  **Required flags**: `--allow` when in listen mode (`-l`). Optionally add `--allow-ip` for IP restrictions.
+  Example (ncat-compatible): `zigcat -l 9000 -e /usr/bin/cat --allow`
+  Example (with IP restrictions): `zigcat -l 9000 -e /usr/bin/cat --allow --allow-ip 127.0.0.1`
+
+- `-c`, `--sh-exec <command>` *(string)* - run command through the system shell.
+  **Required flags**: `--allow` when in listen mode (`-l`). Optionally add `--allow-ip` for IP restrictions.
+  Example (ncat-compatible): `zigcat -l 9000 -c "/usr/bin/logger -t zigcat" --allow`
+  Example (with IP restrictions): `zigcat -l 9000 -c "/usr/bin/logger -t zigcat" --allow --allow-ip 192.168.1.0/24`
+
+- `--allow` *(flag)* - acknowledge dangerous exec operations (REQUIRED for `-e`/`-c` in listen mode). When used alone, works like ncat (accepts all connections). Add `--allow-ip` for defense-in-depth IP restrictions.
+  Example: `zigcat -l 9000 --allow -e /usr/bin/cat`
+
+- `--allow-ip <list>` *(comma-separated strings)* - optional inline allowlist of CIDRs or addresses for defense-in-depth. When specified, only connections from these addresses can use exec mode.
+  Example: `zigcat -l 9000 --allow --allow-ip 192.168.1.0/24,10.0.0.5 -e /usr/bin/cat`
+
+- `--drop-user <name>` *(string)* - drop privileges to the named user after binding.
+  Example: `zigcat -l 9000 --drop-user nobody --allow -e /usr/bin/cat`
+
+**ncat Compatibility**:
+- ncat: `ncat -l 9000 -e /bin/sh` ✅ works without flags (permissive by default)
+- zigcat: `zigcat -l 9000 -e /bin/sh --allow` ✅ works with `--allow` flag (ncat-compatible)
+- zigcat: `zigcat -l 9000 -e /bin/sh --allow --allow-ip 127.0.0.1` ✅ defense-in-depth with IP restrictions
+- This behavior is consistent across ALL transports: TCP, UDP, Unix sockets, SCTP
 
 ## File Transfers
 
@@ -115,11 +300,16 @@ zigcat --ssl localhost 1234 < original_file.txt
 
 ## Remote Shell
 
-You can get a remote shell using `zigcat`.
+You can get a remote shell using `zigcat`. Note that exec mode in listen mode requires the `--allow` flag.
 
-**Listener:**
+**Listener (ncat-compatible):**
 ```bash
-zigcat -l 1234 -e /bin/sh
+zigcat -l 1234 -e /bin/sh --allow
+```
+
+**Listener (with IP restrictions for defense-in-depth):**
+```bash
+zigcat -l 1234 -e /bin/sh --allow --allow-ip 127.0.0.1
 ```
 
 **Connector:**
@@ -129,9 +319,14 @@ zigcat localhost 1234
 
 For an encrypted remote shell, use the `--ssl` flag.
 
-**Listener (with SSL):**
+**Listener (with SSL, ncat-compatible):**
 ```bash
-zigcat -l --ssl --ssl-cert cert.pem --ssl-key key.pem 1234 -e /bin/sh
+zigcat -l --ssl --ssl-cert cert.pem --ssl-key key.pem 1234 -e /bin/sh --allow
+```
+
+**Listener (with SSL and IP restrictions):**
+```bash
+zigcat -l --ssl --ssl-cert cert.pem --ssl-key key.pem 1234 -e /bin/sh --allow --allow-ip 127.0.0.1
 ```
 
 **Connector (with SSL):**

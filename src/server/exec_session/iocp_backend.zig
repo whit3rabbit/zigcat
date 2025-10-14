@@ -253,10 +253,15 @@ pub const IocpSession = struct {
     /// - Timeout management (execution, idle, connection timeouts)
     /// - Graceful shutdown when all streams are closed
     pub fn run(self: *IocpSession) !void {
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+
         // Submit initial read operations for all open handles
         try self.submitIocpReads();
 
         while (self.shouldContinue()) {
+            defer _ = arena_state.reset(.retain_capacity);
+
             try self.checkTimeouts();
 
             const timeout_ms = self.computeIocpTimeout();

@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Cross-platform I/O pipeline that mirrors ncat's interactive behavior.
 //! This module owns the stdin/stdout ↔ socket event loop used by both client
 //! and server paths, layering Telnet processing, logging, throttling, and
@@ -104,7 +103,7 @@ pub fn bidirectionalTransferWindows(
 
     // Initialize Telnet processor if enabled
     var telnet_processor: ?telnet.TelnetProcessor = if (cfg.telnet)
-        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24)
+        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24, null)
     else
         null;
     defer if (telnet_processor) |*proc| proc.deinit();
@@ -236,24 +235,24 @@ pub fn bidirectionalTransferWindows(
                                 config.IOControlError.DiskFull => {
                                     logging.logNormal(cfg, "Error: Disk full - stopping hex dump file logging\n", .{});
                                     // Continue with stdout hex dump only
-                                    printHexDump(data);
+                                    hexdump.dumpToStdout(data);
                                 },
                                 config.IOControlError.InsufficientPermissions => {
                                     logging.logNormal(cfg, "Error: Permission denied - stopping hex dump file logging\n", .{});
                                     // Continue with stdout hex dump only
-                                    printHexDump(data);
+                                    hexdump.dumpToStdout(data);
                                 },
                                 else => {
                                     logging.logVerbose(cfg, "Warning: Hex dump file logging failed: {any}\n", .{err});
                                     // Keep user-visible output even when the logging path fails.
                                     // Fallback to stdout hex dump
-                                    printHexDump(data);
+                                    hexdump.dumpToStdout(data);
                                 },
                             }
                         };
                     } else {
                         // Fallback to inline hex dump if dumper not provided
-                        printHexDump(data);
+                        hexdump.dumpToStdout(data);
                     }
                 }
 
@@ -341,7 +340,7 @@ pub fn bidirectionalTransferPosix(
 
     // Initialize Telnet processor if enabled
     var telnet_processor: ?telnet.TelnetProcessor = if (cfg.telnet)
-        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24)
+        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24, null)
     else
         null;
     defer if (telnet_processor) |*proc| proc.deinit();
@@ -473,24 +472,24 @@ pub fn bidirectionalTransferPosix(
                                 config.IOControlError.DiskFull => {
                                     logging.logNormal(cfg, "Error: Disk full - stopping hex dump file logging\n", .{});
                                     // Continue with stdout hex dump only
-                                    printHexDump(data);
+                                    hexdump.dumpToStdout(data);
                                 },
                                 config.IOControlError.InsufficientPermissions => {
                                     logging.logNormal(cfg, "Error: Permission denied - stopping hex dump file logging\n", .{});
                                     // Continue with stdout hex dump only
-                                    printHexDump(data);
+                                    hexdump.dumpToStdout(data);
                                 },
                                 else => {
                                     logging.logVerbose(cfg, "Warning: Hex dump file logging failed: {any}\n", .{err});
                                     // Ensure the operator still sees the bytes even if the file path fails.
                                     // Fallback to stdout hex dump
-                                    printHexDump(data);
+                                    hexdump.dumpToStdout(data);
                                 },
                             }
                         };
                     } else {
                         // Fallback to inline hex dump if dumper not provided
-                        printHexDump(data);
+                        hexdump.dumpToStdout(data);
                     }
                 }
 
@@ -569,6 +568,11 @@ pub fn bidirectionalTransferIoUring(
     var ring = try UringEventLoop.init(allocator, 32);
     defer ring.deinit();
 
+    // Operation identifiers used in completion callbacks
+    const user_data_stdin_poll: u64 = 0;
+    const user_data_socket_read: u64 = 1;
+    const user_data_write: u64 = 2;
+
     // Two separate buffers for concurrent reads
     var buffer_stdin: [BUFFER_SIZE]u8 = undefined;
     var buffer_socket: [BUFFER_SIZE]u8 = undefined;
@@ -584,12 +588,11 @@ pub fn bidirectionalTransferIoUring(
     var socket_closed = false;
 
     // Track which operations are pending to avoid double-submitting
-    var stdin_read_pending = false;
     var socket_read_pending = false;
 
     // Initialize Telnet processor if enabled
     var telnet_processor: ?telnet.TelnetProcessor = if (cfg.telnet)
-        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24)
+        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24, null)
     else
         null;
     defer if (telnet_processor) |*proc| proc.deinit();
@@ -606,18 +609,19 @@ pub fn bidirectionalTransferIoUring(
         };
     } else null;
 
-    // Submit initial read operations for both FDs
+    const poll_in_mask: u32 = @as(u32, @intCast(poll_wrapper.POLL.IN | poll_wrapper.POLL.ERR | poll_wrapper.POLL.HUP));
+
+    // Submit initial operations for both FDs
     if (!stdin_closed and can_send) {
-        try ring.submitRead(stdin.handle, &buffer_stdin, 0); // user_data=0 for stdin
-        stdin_read_pending = true;
+        try ring.submitPoll(stdin.handle, poll_in_mask, user_data_stdin_poll);
     }
     if (!socket_closed and can_recv) {
-        try ring.submitRead(stream.handle(), &buffer_socket, 1); // user_data=1 for socket
+        try ring.submitRead(stream.handle(), &buffer_socket, user_data_socket_read);
         socket_read_pending = true;
     }
 
     // Main event loop: process completions until both FDs closed
-    while (!stdin_closed or !socket_closed) {
+    main_loop: while (!stdin_closed or !socket_closed) {
         // Wait for completion with timeout
         const cqe = if (timeout_spec) |ts|
             ring.waitForCompletion(&ts) catch |err| {
@@ -632,61 +636,75 @@ pub fn bidirectionalTransferIoUring(
 
         // Process completion based on user_data
         switch (cqe.user_data) {
-            // stdin read completion
-            0 => {
-                stdin_read_pending = false;
-
+            // stdin readiness via io_uring poll
+            user_data_stdin_poll => {
                 if (cqe.res < 0) {
-                    // Read error (negative errno)
-                    logging.logError(error.ReadError, "stdin read error");
+                    logging.logError(error.ReadError, "stdin poll error");
                     stdin_closed = true;
-                } else if (cqe.res == 0) {
-                    // EOF on stdin
-                    stdin_closed = true;
-
-                    // Handle half-close: shutdown write-half but keep reading
-                    if (!cfg.no_shutdown) {
-                        posix.shutdown(stream.handle(), .send) catch |err| {
-                            logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
-                        };
-                    }
-
-                    if (cfg.close_on_eof) {
-                        break;
-                    }
                 } else {
-                    // Data read from stdin
-                    const n: usize = @intCast(cqe.res);
-                    const input_slice = buffer_stdin[0..n];
+                    const events = @as(u32, @intCast(cqe.res));
+                    const mask_err = @as(u32, @intCast(poll_wrapper.POLL.ERR));
+                    const mask_nval = @as(u32, @intCast(poll_wrapper.POLL.NVAL));
 
-                    // Apply CRLF conversion if enabled
-                    const data = if (cfg.crlf)
-                        try linecodec.convertLfToCrlf(allocator, input_slice)
-                    else
-                        input_slice;
-                    defer if (data.ptr != input_slice.ptr) allocator.free(data);
+                    if (events & mask_nval != 0) {
+                        logging.logError(error.ReadError, "stdin descriptor became invalid");
+                        stdin_closed = true;
+                    } else {
+                        if (events & mask_err != 0) {
+                            logging.logVerbose(cfg, "stdin poll reported error events: 0x{x}\n", .{events});
+                        }
 
-                    // Submit write to socket (user_data=2 for writes)
-                    try ring.submitWrite(stream.handle(), data, 2);
+                        const n = stdin.read(&buffer_stdin) catch |err| {
+                            logging.logError(err, "stdin read error");
+                            stdin_closed = true;
+                            continue :main_loop;
+                        };
 
-                    // Apply traffic shaping delay after send
-                    if (cfg.delay_ms > 0) {
-                        const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
-                        std.Thread.sleep(delay_ns);
+                        if (n == 0) {
+                            stdin_closed = true;
+
+                            // Handle half-close: shutdown write-half but keep reading
+                            if (!cfg.no_shutdown) {
+                                posix.shutdown(stream.handle(), .send) catch |err| {
+                                    logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
+                                };
+                            }
+
+                            if (cfg.close_on_eof) {
+                                break;
+                            }
+                        } else {
+                            const input_slice = buffer_stdin[0..n];
+
+                            // Apply CRLF conversion if enabled
+                            const data = if (cfg.crlf)
+                                try linecodec.convertLfToCrlf(allocator, input_slice)
+                            else
+                                input_slice;
+                            defer if (data.ptr != input_slice.ptr) allocator.free(data);
+
+                            // Submit write to socket (user_data=2 for writes)
+                            try ring.submitWrite(stream.handle(), data, user_data_write);
+
+                            // Apply traffic shaping delay after send
+                            if (cfg.delay_ms > 0) {
+                                const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
+                                std.Thread.sleep(delay_ns);
+                            }
+
+                            logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
+                        }
                     }
 
-                    logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
-
-                    // Resubmit stdin read (io_uring is one-shot)
+                    // Resubmit stdin poll (io_uring poll entries are one-shot)
                     if (!stdin_closed and can_send) {
-                        try ring.submitRead(stdin.handle, &buffer_stdin, 0);
-                        stdin_read_pending = true;
+                        try ring.submitPoll(stdin.handle, poll_in_mask, user_data_stdin_poll);
                     }
                 }
             },
 
             // socket read completion
-            1 => {
+            user_data_socket_read => {
                 socket_read_pending = false;
 
                 if (cqe.res < 0) {
@@ -754,20 +772,20 @@ pub fn bidirectionalTransferIoUring(
                                 switch (err) {
                                     config.IOControlError.DiskFull => {
                                         logging.logNormal(cfg, "Error: Disk full - stopping hex dump file logging\n", .{});
-                                        printHexDump(data);
+                                        hexdump.dumpToStdout(data);
                                     },
                                     config.IOControlError.InsufficientPermissions => {
                                         logging.logNormal(cfg, "Error: Permission denied - stopping hex dump file logging\n", .{});
-                                        printHexDump(data);
+                                        hexdump.dumpToStdout(data);
                                     },
                                     else => {
                                         logging.logVerbose(cfg, "Warning: Hex dump file logging failed: {any}\n", .{err});
-                                        printHexDump(data);
+                                        hexdump.dumpToStdout(data);
                                     },
                                 }
                             };
                         } else {
-                            printHexDump(data);
+                            hexdump.dumpToStdout(data);
                         }
                     }
 
@@ -775,14 +793,14 @@ pub fn bidirectionalTransferIoUring(
 
                     // Resubmit socket read (io_uring is one-shot)
                     if (!socket_closed and can_recv) {
-                        try ring.submitRead(stream.handle(), &buffer_socket, 1);
+                        try ring.submitRead(stream.handle(), &buffer_socket, user_data_socket_read);
                         socket_read_pending = true;
                     }
                 }
             },
 
-            // Write completion (user_data=2)
-            2 => {
+            // Write completion
+            user_data_write => {
                 // Write operations are fire-and-forget, just check for errors
                 if (cqe.res < 0) {
                     logging.logError(error.WriteError, "Write failed");
@@ -827,37 +845,5 @@ pub fn bidirectionalTransferIoUring(
                 },
             }
         };
-    }
-}
-
-fn printHexDump(data: []const u8) void {
-    var i: usize = 0;
-    while (i < data.len) : (i += 16) {
-        std.debug.print("{x:0>8}: ", .{i});
-
-        // Hex bytes
-        var j: usize = 0;
-        while (j < 16) : (j += 1) {
-            if (i + j < data.len) {
-                std.debug.print("{x:0>2} ", .{data[i + j]});
-            } else {
-                std.debug.print("   ", .{});
-            }
-        }
-
-        std.debug.print(" |", .{});
-
-        // ASCII representation
-        j = 0;
-        while (j < 16 and i + j < data.len) : (j += 1) {
-            const c = data[i + j];
-            if (c >= 32 and c <= 126) {
-                std.debug.print("{c}", .{c});
-            } else {
-                std.debug.print(".", .{});
-            }
-        }
-
-        std.debug.print("|\n", .{});
     }
 }

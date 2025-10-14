@@ -114,7 +114,7 @@ pub fn bidirectionalTransferIocp(
 
     // Initialize Telnet processor if enabled
     var telnet_processor: ?telnet.TelnetProcessor = if (cfg.telnet)
-        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24)
+        telnet.TelnetProcessor.init(allocator, "UNKNOWN", 80, 24, null)
     else
         null;
     defer if (telnet_processor) |*proc| proc.deinit();
@@ -300,20 +300,20 @@ pub fn bidirectionalTransferIocp(
                                 switch (err) {
                                     config.IOControlError.DiskFull => {
                                         logging.logNormal(cfg, "Error: Disk full - stopping hex dump file logging\n", .{});
-                                        printHexDump(data);
+                                        hexdump.dumpToStdout(data);
                                     },
                                     config.IOControlError.InsufficientPermissions => {
                                         logging.logNormal(cfg, "Error: Permission denied - stopping hex dump file logging\n", .{});
-                                        printHexDump(data);
+                                        hexdump.dumpToStdout(data);
                                     },
                                     else => {
                                         logging.logVerbose(cfg, "Warning: Hex dump file logging failed: {any}\n", .{err});
-                                        printHexDump(data);
+                                        hexdump.dumpToStdout(data);
                                     },
                                 }
                             };
                         } else {
-                            printHexDump(data);
+                            hexdump.dumpToStdout(data);
                         }
                     }
 
@@ -379,37 +379,5 @@ pub fn bidirectionalTransferIocp(
                 },
             }
         };
-    }
-}
-
-fn printHexDump(data: []const u8) void {
-    var i: usize = 0;
-    while (i < data.len) : (i += 16) {
-        std.debug.print("{x:0>8}: ", .{i});
-
-        // Hex bytes
-        var j: usize = 0;
-        while (j < 16) : (j += 1) {
-            if (i + j < data.len) {
-                std.debug.print("{x:0>2} ", .{data[i + j]});
-            } else {
-                std.debug.print("   ", .{});
-            }
-        }
-
-        std.debug.print(" |", .{});
-
-        // ASCII representation
-        j = 0;
-        while (j < 16 and i + j < data.len) : (j += 1) {
-            const c = data[i + j];
-            if (c >= 32 and c <= 126) {
-                std.debug.print("{c}", .{c});
-            } else {
-                std.debug.print(".", .{});
-            }
-        }
-
-        std.debug.print("|\n", .{});
     }
 }

@@ -27,6 +27,17 @@ pub const ExecSessionConfig = types.ExecSessionConfig;
 pub const ExecConfig = types.ExecConfig;
 pub const ExecError = types.ExecError;
 
+pub const ShellCommand = struct {
+    program: []const u8,
+    args: []const []const u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *ShellCommand) void {
+        self.allocator.free(self.args);
+        self.args = &.{};
+    }
+};
+
 pub const ExecSession = session.ExecSession;
 const executeWithTelnetConnectionThreaded = threaded.executeWithTelnetConnectionThreaded;
 
@@ -186,7 +197,7 @@ fn logChildTermination(term: std.process.Child.Term) void {
 pub fn buildShellCommand(
     allocator: std.mem.Allocator,
     command_string: []const u8,
-) !struct { program: []const u8, args: []const []const u8 } {
+) !ShellCommand {
     const shell_path = if (builtin.os.tag == .windows) "cmd.exe" else "/bin/sh";
     const shell_arg = if (builtin.os.tag == .windows) "/c" else "-c";
 
@@ -197,14 +208,15 @@ pub fn buildShellCommand(
     return .{
         .program = shell_path,
         .args = args_arr,
+        .allocator = allocator,
     };
 }
 
 test "buildShellCommand Unix" {
     const allocator = std.testing.allocator;
 
-    const result = try buildShellCommand(allocator, "echo hello");
-    defer allocator.free(result.args);
+    var result = try buildShellCommand(allocator, "echo hello");
+    defer result.deinit();
 
     if (builtin.os.tag != .windows) {
         try std.testing.expectEqualStrings("/bin/sh", result.program);

@@ -85,6 +85,27 @@ pub const formatHexLine = format.formatLine;
 pub const HexDumpConfig = hex_config.HexDumpConfig;
 pub const parseHexDumpConfig = hex_config.parse;
 
+/// Convenience helper to emit a hex dump directly to stdout.
+///
+/// This function provides a lightweight way for callers that do not manage
+/// a long-lived `HexDumper` instance to still leverage the centralized
+/// formatting logic. It constructs a temporary stdout-only dumper so each
+/// invocation starts at offset 0, mirroring the legacy helper semantics.
+/// Any output errors are silently ignored because stdout failures are
+/// considered non-recoverable in these diagnostic code paths.
+pub fn dumpToStdout(data: []const u8) void {
+    if (data.len == 0) return;
+
+    var dumper = HexDumper{
+        .file = null,
+        .allocator = std.heap.page_allocator,
+        .cfg = HexDumpConfig{},
+        .offset = 0,
+    };
+
+    dumper.dump(data) catch {};
+}
+
 /// HexDumper handles formatting binary data in hexadecimal format with ASCII sidebar
 /// and optional file output support.
 ///

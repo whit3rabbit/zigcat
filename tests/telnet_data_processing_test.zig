@@ -1,7 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const telnet = @import("../src/protocol/telnet.zig");
-const TelnetProcessor = @import("../src/protocol/telnet_processor.zig").TelnetProcessor;
+const protocol = @import("protocol");
+const telnet = protocol.telnet;
+const TelnetProcessor = protocol.telnet_processor.TelnetProcessor;
 
 const TelnetCommand = telnet.TelnetCommand;
 const TelnetOption = telnet.TelnetOption;
@@ -9,7 +10,7 @@ const TelnetOption = telnet.TelnetOption;
 // Test data processing and filtering functionality (Task 3)
 
 test "input processing separates telnet commands from application data" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Input: "Hello" + IAC WILL ECHO + "World" + IAC NOP + "!"
@@ -35,7 +36,7 @@ test "input processing separates telnet commands from application data" {
 }
 
 test "output processing escapes IAC bytes in application data" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Application data containing 0xFF byte
@@ -50,7 +51,7 @@ test "output processing escapes IAC bytes in application data" {
 }
 
 test "output processing injects telnet commands" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     const app_data = "Hello";
@@ -69,7 +70,7 @@ test "output processing injects telnet commands" {
 }
 
 test "partial IAC sequence handling across input chunks" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // First chunk: "Hello" + IAC (incomplete)
@@ -97,7 +98,7 @@ test "partial IAC sequence handling across input chunks" {
 }
 
 test "partial subnegotiation handling" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // First chunk: IAC SB TERMINAL_TYPE (incomplete)
@@ -125,7 +126,7 @@ test "partial subnegotiation handling" {
 }
 
 test "buffer overflow protection for partial sequences" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Create oversized partial sequence
@@ -144,7 +145,7 @@ test "buffer overflow protection for partial sequences" {
 }
 
 test "subnegotiation buffer management" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Create subnegotiation that exceeds maximum length
@@ -168,7 +169,7 @@ test "subnegotiation buffer management" {
 }
 
 test "create command sequences" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Test simple command
@@ -193,7 +194,7 @@ test "create command sequences" {
 }
 
 test "mixed IAC escape and commands" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Input: IAC IAC (escaped) + IAC WILL ECHO + IAC IAC (escaped)
@@ -217,7 +218,7 @@ test "mixed IAC escape and commands" {
 }
 
 test "error recovery with buffer clearing" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // Put processor in subnegotiation state
@@ -246,7 +247,7 @@ test "error recovery with buffer clearing" {
 }
 
 test "state preservation across multiple input calls" {
-    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24);
+    var processor = TelnetProcessor.init(testing.allocator, "xterm", 80, 24, null);
     defer processor.deinit();
 
     // First call: normal data

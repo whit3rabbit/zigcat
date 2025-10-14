@@ -108,8 +108,9 @@ jobs:
           - os: windows-latest
             label: Windows
             install_deps: |
-              # Install OpenSSL via vcpkg (pre-installed on GitHub Actions)
-              vcpkg install openssl:x64-windows
+              # Install OpenSSL via Chocolatey (faster than vcpkg)
+              choco install openssl -y --no-progress
+              # vcpkg install openssl:x64-windows  # Commented out: hangs in CI
             commands: |
               zig build test
               zig build test-timeout

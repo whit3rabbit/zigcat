@@ -12,6 +12,7 @@ const builtin = @import("builtin");
 
 const config_struct = @import("config_struct.zig");
 const Config = config_struct.Config;
+const poll_wrapper = @import("../util/poll_wrapper.zig");
 
 /// Errors related to broker/chat mode configuration validation.
 pub const BrokerChatError = error{
@@ -63,14 +64,14 @@ pub fn validateBrokerChat(cfg: *const Config) BrokerChatError!void {
     // The WSAPoll backend (Windows Vista+) has no such limitation
     if (builtin.os.tag == .windows) {
         // Conservative safe limit for select() backend
-        // This will be relaxed when WSAPoll backend is the default
+        // Enforced only when runtime detection indicates select() fallback
         const windows_select_safe_limit = 20;
 
-        if (cfg.max_clients > windows_select_safe_limit) {
+        if (cfg.max_clients > windows_select_safe_limit and poll_wrapper.windowsPollBackend() == .select) {
             std.debug.print(
                 "\n" ++
                 "┌────────────────────────────────────────────────────────────────┐\n" ++
-                "│ WARNING: Windows Connection Limit Exceeded                     │\n" ++
+                "│ ERROR: Windows Connection Limit Exceeded                       │\n" ++
                 "├────────────────────────────────────────────────────────────────┤\n" ++
                 "│ Configured max_clients: {d: >3}                                   │\n" ++
                 "│ Safe limit (select):    {d: >3}                                   │\n" ++
@@ -84,14 +85,13 @@ pub fn validateBrokerChat(cfg: *const Config) BrokerChatError!void {
                 "│ Recommendations:                                               │\n" ++
                 "│   1. Use --max-clients {d} or less                              │\n" ++
                 "│   2. Wait for WSAPoll backend (removes limitation)             │\n" ++
+                "│   Server start aborted to avoid instability.                   │\n" ++
                 "└────────────────────────────────────────────────────────────────┘\n" ++
                 "\n",
                 .{cfg.max_clients, windows_select_safe_limit, windows_select_safe_limit}
             );
 
-            // For now, we issue a warning but don't fail
-            // In a future version, we should enforce this limit or auto-switch to WSAPoll
-            // Uncomment to enforce: return BrokerChatError.InvalidMaxClients;
+            return BrokerChatError.InvalidMaxClients;
         }
     }
 
@@ -116,6 +116,24 @@ test "validateBrokerChat enforces listen mode requirement" {
     cfg.listen_mode = false;
 
     try testing.expectError(BrokerChatError.RequiresListenMode, validateBrokerChat(&cfg));
+}
+
+test "validateBrokerChat rejects unsafe select backend configuration" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var cfg = Config.init(testing.allocator);
+    defer cfg.deinit(testing.allocator);
+
+    cfg.broker_mode = true;
+    cfg.listen_mode = true;
+    cfg.max_clients = 50;
+
+    poll_wrapper.testingOverrideWindowsBackend(.select);
+    defer poll_wrapper.testingOverrideWindowsBackend(null);
+
+    try testing.expectError(BrokerChatError.InvalidMaxClients, validateBrokerChat(&cfg));
 }
 
 test "validateBrokerChat passes valid chat configuration" {

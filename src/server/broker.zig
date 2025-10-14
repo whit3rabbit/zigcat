@@ -70,6 +70,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Connection = @import("../net/connection.zig").Connection;
 const ClientPool = @import("broker/client_manager.zig").ClientPool;
+const ClientInfo = @import("broker/client_manager.zig").ClientInfo;
 const BufferPool = @import("buffer_pool.zig").BufferPool;
 const BufferPoolConfig = @import("buffer_pool.zig").BufferPoolConfig;
 const FlowControlManager = @import("flow_control.zig").FlowControlManager;
@@ -375,7 +376,13 @@ pub const BrokerServer = struct {
             self.config.idle_timeout,
         });
 
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+
         while (self.running and !main_common.shutdown_requested.load(.seq_cst)) {
+            defer _ = arena_state.reset(.retain_capacity);
+            const scratch = arena_state.allocator();
+
             // Update performance monitoring
             self.performance_monitor.update();
 
@@ -410,7 +417,7 @@ pub const BrokerServer = struct {
             if (events == 0) {
                 // Timeout - perform maintenance tasks
                 logging.logTrace("Poll timeout, performing maintenance (flow level: {})\n", .{flow_level});
-                self.performMaintenance();
+                self.performMaintenance(scratch);
                 continue;
             }
 
@@ -419,7 +426,7 @@ pub const BrokerServer = struct {
             // Check for new client connections
             if (self.poll_context.listen_fd.revents & std.posix.POLL.IN != 0) {
                 logging.logTrace("New client connection available\n", .{});
-                self.acceptNewClient() catch |err| {
+                self.acceptNewClient(scratch) catch |err| {
                     logging.logError(err, "accept");
                     logging.logDebug("Accept error: {}\n", .{err});
                 };
@@ -430,11 +437,11 @@ pub const BrokerServer = struct {
                 if (client_fd.revents & std.posix.POLL.IN != 0) {
                     if (self.poll_context.getClientId(client_fd.fd)) |client_id| {
                         logging.logTrace("Data available from client {}\n", .{client_id});
-                        message_handler.handleClientData(self, client_id) catch |err| {
+                        message_handler.handleClientData(self, client_id, scratch) catch |err| {
                             logging.logError(err, "client data handling");
                             logging.logDebug("Client {} data error: {}\n", .{ client_id, err });
                             // Remove problematic client
-                            self.removeClient(client_id);
+                            self.removeClient(client_id, scratch);
                         };
                     }
                 }
@@ -458,7 +465,7 @@ pub const BrokerServer = struct {
                             client_fd.revents & std.posix.POLL.NVAL != 0,
                         });
 
-                        self.removeClient(client_id);
+                        self.removeClient(client_id, scratch);
                     }
                 }
 
@@ -470,7 +477,7 @@ pub const BrokerServer = struct {
                             logging.logError(err, "write buffer flush");
                             logging.logDebug("Client {} flush error: {}\n", .{ client_id, err });
                             // Remove problematic client
-                            self.removeClient(client_id);
+                            self.removeClient(client_id, scratch);
                         };
                     }
                 }
@@ -504,7 +511,7 @@ pub const BrokerServer = struct {
     }
 
     /// Accept a new client connection with access control, TLS support, and comprehensive logging
-    fn acceptNewClient(self: *BrokerServer) !void {
+    fn acceptNewClient(self: *BrokerServer, scratch: std.mem.Allocator) !void {
         // Check client limit before accepting
         const current_clients = self.clients.getClientCount();
         if (current_clients >= self.max_clients) {
@@ -657,7 +664,7 @@ pub const BrokerServer = struct {
                 protocols.initializeChatClient(self, client_id) catch |err| {
                     logging.logError(err, "chat initialization");
                     logging.logDebug("Chat initialization failed for client {}: {}\n", .{ client_id, err });
-                    self.removeClient(client_id);
+                    self.removeClient(client_id, scratch);
                     return err;
                 };
             },
@@ -665,7 +672,7 @@ pub const BrokerServer = struct {
     }
 
     /// Remove a client from the server with comprehensive cleanup and enhanced logging
-    fn removeClient(self: *BrokerServer, client_id: u64) void {
+    fn removeClient(self: *BrokerServer, client_id: u64, scratch: std.mem.Allocator) void {
         // Get client info before removal for chat mode cleanup and statistics
         var client_nickname: ?[]const u8 = null;
         var client_stats: ?struct {
@@ -679,7 +686,7 @@ pub const BrokerServer = struct {
         if (self.clients.getClient(client_id)) |client| {
             // Save nickname for chat mode announcement
             if (client.nickname) |nick| {
-                client_nickname = self.allocator.dupe(u8, nick) catch null;
+                client_nickname = scratch.dupe(u8, nick) catch null;
             }
 
             if (self.mode == .chat) {
@@ -714,19 +721,13 @@ pub const BrokerServer = struct {
         // Handle chat mode leave announcement
         if (self.mode == .chat and client_nickname != null) {
             const leave_msg = std.fmt.allocPrint(
-                self.allocator,
+                scratch,
                 "*** {s} left the chat\n",
                 .{client_nickname.?},
             ) catch {
-                // If we can't allocate for the message, just clean up and continue
-                if (client_nickname) |nick| {
-                    self.allocator.free(nick);
-                }
                 logging.logError(error.OutOfMemory, "chat leave message");
                 return;
             };
-            defer self.allocator.free(leave_msg);
-            defer if (client_nickname) |nick| self.allocator.free(nick);
 
             // Relay leave message (no sender to exclude)
             self.relayToClients(leave_msg, 0) catch |err| {
@@ -764,16 +765,16 @@ pub const BrokerServer = struct {
     }
 
     /// Log detailed client statistics for debugging
-    fn logClientStatistics(self: *BrokerServer) void {
-        const stats = self.clients.getClientStatistics(self.allocator) catch {
+    fn logClientStatistics(self: *BrokerServer, scratch: std.mem.Allocator) void {
+        const stats = self.clients.getClientStatistics(scratch) catch {
             logging.logError(error.OutOfMemory, "client statistics");
             return;
         };
         defer {
             for (stats) |*stat| {
-                stat.deinit(self.allocator);
+                stat.deinit(scratch);
             }
-            self.allocator.free(stats);
+            scratch.free(stats);
         }
 
         logging.logTrace("=== Client Statistics ===\n", .{});
@@ -793,7 +794,7 @@ pub const BrokerServer = struct {
     }
 
     /// Perform periodic maintenance tasks with enhanced logging
-    fn performMaintenance(self: *BrokerServer) void {
+    fn performMaintenance(self: *BrokerServer, scratch: std.mem.Allocator) void {
         logging.logTrace("Performing maintenance tasks\n", .{});
 
         // Remove idle clients if timeout is configured
@@ -806,7 +807,7 @@ pub const BrokerServer = struct {
         }
 
         // Perform connection health checks
-        self.performConnectionHealthCheck();
+        self.performConnectionHealthCheck(scratch);
 
         // Log client statistics periodically
         const client_count = self.clients.getClientCount();
@@ -815,7 +816,7 @@ pub const BrokerServer = struct {
 
             // Log detailed client statistics if very verbose
             if (logging.isVerbosityEnabled(self.config, .trace)) {
-                self.logClientStatistics();
+                self.logClientStatistics(scratch);
             }
         }
     }
@@ -837,22 +838,34 @@ pub const BrokerServer = struct {
     }
 
     /// Perform connection health checks on all clients with enhanced logging
-    fn performConnectionHealthCheck(self: *BrokerServer) void {
-        const client_ids = self.clients.getAllClientIds(self.allocator) catch {
-            logging.logError(error.OutOfMemory, "health check client list");
-            return;
-        };
-        defer self.allocator.free(client_ids);
-
-        if (client_ids.len == 0) return;
-
-        logging.logTrace("Performing health check on {} clients\n", .{client_ids.len});
-
+    ///
+    /// ## Performance
+    /// Uses callback pattern to eliminate client ID list allocation, reducing allocation overhead
+    /// during periodic maintenance checks.
+    fn performConnectionHealthCheck(self: *BrokerServer, scratch: std.mem.Allocator) void {
         var failed_clients = std.ArrayList(u64){};
-        defer failed_clients.deinit(self.allocator);
+        defer failed_clients.deinit(scratch);
 
-        for (client_ids) |client_id| {
-            if (self.clients.getClient(client_id)) |client| {
+        // Context for health check callback (stack-allocated)
+        const HealthCheckContext = struct {
+            server: *BrokerServer,
+            failed_clients: *std.ArrayList(u64),
+            client_count: usize,
+            allocator: std.mem.Allocator,
+        };
+
+        var context = HealthCheckContext{
+            .server = self,
+            .failed_clients = &failed_clients,
+            .client_count = 0,
+            .allocator = scratch,
+        };
+
+        // Use callback pattern to iterate clients without allocating client ID list
+        self.clients.forEachClient(&context, struct {
+            fn healthCheckCallback(ctx: *HealthCheckContext, client_id: u64, client: *ClientInfo) void {
+                ctx.client_count += 1;
+
                 // Check if connection is still valid by attempting to get socket status
                 const socket = client.connection.getSocket();
 
@@ -868,12 +881,16 @@ pub const BrokerServer = struct {
 
                 if (error_code != 0) {
                     logging.logDebug("Client {} failed health check (socket error: {})\n", .{ client_id, error_code });
-                    failed_clients.append(self.allocator, client_id) catch {};
+                    ctx.failed_clients.append(ctx.allocator, client_id) catch {};
                 } else {
                     logging.logTrace("Client {} health check passed\n", .{client_id});
                 }
             }
-        }
+        }.healthCheckCallback);
+
+        if (context.client_count == 0) return;
+
+        logging.logTrace("Performing health check on {} clients\n", .{context.client_count});
 
         // Remove failed clients
         const removed_count = self.clients.removeFailedClients(failed_clients.items);
@@ -915,67 +932,80 @@ pub const BrokerServer = struct {
     ///
     /// ## Returns
     /// Error if relay fails critically (individual client failures are logged but don't stop relay)
+    ///
+    /// ## Performance
+    /// Uses zero-allocation callback pattern instead of allocating client ID list on every relay.
+    /// This eliminates heap allocation churn in high-traffic scenarios.
     pub fn relayToClients(self: *BrokerServer, data: []const u8, exclude_client_id: u64) !void {
         if (data.len == 0) {
             logging.logTrace("Relay called with empty data, skipping\n", .{});
             return;
         }
 
-        const client_ids = self.clients.getAllClientIds(self.allocator) catch {
-            logging.logError(error.OutOfMemory, "relay client list");
-            return error.OutOfMemory;
+        // Context for relay callback (stack-allocated, no heap allocation)
+        const RelayContext = struct {
+            data: []const u8,
+            exclude_client_id: u64,
+            server: *BrokerServer,
+            successful_relays: usize,
+            failed_relays: usize,
         };
-        defer self.allocator.free(client_ids);
 
-        var successful_relays: usize = 0;
-        var failed_relays: usize = 0;
+        var context = RelayContext{
+            .data = data,
+            .exclude_client_id = exclude_client_id,
+            .server = self,
+            .successful_relays = 0,
+            .failed_relays = 0,
+        };
 
-        for (client_ids) |client_id| {
-            // Skip the sender
-            if (client_id == exclude_client_id) {
-                continue;
-            }
+        // Use callback pattern to iterate clients without heap allocation
+        self.clients.forEachClient(&context, struct {
+            fn relayCallback(ctx: *RelayContext, client_id: u64, client: *ClientInfo) void {
+                // Skip the sender
+                if (client_id == ctx.exclude_client_id) {
+                    return;
+                }
 
-            if (self.clients.getClient(client_id)) |client| {
                 const was_empty = client.write_buffer.items.len == 0;
 
-                client.write_buffer.appendSlice(self.allocator, data) catch |err| {
+                client.write_buffer.appendSlice(ctx.server.allocator, ctx.data) catch |err| {
                     logging.logDebug("Failed to queue relay data for client {}: {}\n", .{ client_id, err });
-                    failed_relays += 1;
-                    if (self.isConnectionError(err)) {
+                    ctx.failed_relays += 1;
+                    if (ctx.server.isConnectionError(err)) {
                         logging.logTrace("Client {} connection error during relay queue, will be removed\n", .{client_id});
                     }
-                    continue;
+                    return;
                 };
 
-                self.flow_control.recordDataPending(client_id, @intCast(data.len));
+                ctx.server.flow_control.recordDataPending(client_id, @intCast(ctx.data.len));
 
                 // Attempt immediate flush to minimize latency
-                self.flushWriteBuffer(client_id) catch |err| {
+                ctx.server.flushWriteBuffer(client_id) catch |err| {
                     logging.logDebug("Failed to flush relay buffer for client {}: {}\n", .{ client_id, err });
-                    failed_relays += 1;
-                    if (self.isConnectionError(err)) {
+                    ctx.failed_relays += 1;
+                    if (ctx.server.isConnectionError(err)) {
                         logging.logTrace("Client {} connection error during relay flush, will be removed\n", .{client_id});
                     }
-                    continue;
+                    return;
                 };
 
-                successful_relays += 1;
+                ctx.successful_relays += 1;
 
                 logging.logTrace("Queued {} bytes to client {} (buffer was {s})\n", .{
-                    data.len,
+                    ctx.data.len,
                     client_id,
                     if (was_empty) "empty" else "pending",
                 });
             }
-        }
+        }.relayCallback);
 
         // Record relay statistics
-        self.performance_monitor.recordRelay(data.len, successful_relays);
-        if (failed_relays > 0) {
-            logging.logDebug("Relay complete: {} successful, {} failed\n", .{ successful_relays, failed_relays });
+        self.performance_monitor.recordRelay(data.len, context.successful_relays);
+        if (context.failed_relays > 0) {
+            logging.logDebug("Relay complete: {} successful, {} failed\n", .{ context.successful_relays, context.failed_relays });
         } else {
-            logging.logTrace("Relay complete: {} clients\n", .{successful_relays});
+            logging.logTrace("Relay complete: {} clients\n", .{context.successful_relays});
         }
     }
 

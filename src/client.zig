@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Client mode implementation for zigcat.
 //!
 //! This module handles all client-side functionality including:
@@ -81,6 +80,8 @@ const logging = @import("util/logging.zig");
 const portscan = @import("util/portscan.zig");
 const Connection = @import("net/connection.zig").Connection;
 const TelnetConnection = @import("protocol/telnet_connection.zig").TelnetConnection;
+const tty_state = @import("terminal").tty_state;
+const tty_control = @import("terminal").tty_control;
 
 inline fn contextToPtr(comptime T: type, context: *anyopaque) *T {
     const aligned_ctx: *align(@alignOf(T)) anyopaque = @alignCast(context);
@@ -325,6 +326,15 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     var hex_dumper = try hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file);
     defer hex_dumper.deinit();
 
+    var local_tty_state: ?tty_state.TtyState = null;
+    defer {
+        if (local_tty_state) |*state| {
+            tty_control.restoreOriginalTermios(state) catch |err| {
+                logging.logWarning("Failed to restore terminal mode: {}\n", .{err});
+            };
+        }
+    }
+
     // Handle Telnet protocol mode
     if (cfg.telnet) {
         // DTLS does not support Telnet protocol (datagram-based)
@@ -333,14 +343,58 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             return error.InvalidConfiguration;
         }
 
+        const raw_platform_warning = "Telnet raw mode not supported on this platform; continuing without TTY control\n";
+        const raw_tty_warning = "Standard input is not a TTY; Telnet raw mode disabled\n";
+
+        if (local_tty_state == null) {
+            if (!tty_state.supportsRawMode()) {
+                logging.logWarning(raw_platform_warning, .{});
+            } else {
+                const stdin_file = std.fs.File.stdin();
+                var tty_candidate = tty_state.init(stdin_file.handle);
+
+                if (!tty_state.isTerminal(&tty_candidate)) {
+                    logging.logWarning(raw_tty_warning, .{});
+                } else {
+                    const raw_enabled = blk: {
+                        tty_control.saveOriginalTermios(&tty_candidate) catch |err| {
+                            if (err == error.NotATerminal) {
+                                logging.logWarning(raw_tty_warning, .{});
+                                break :blk false;
+                            }
+                            logging.logError(err, "saving terminal state");
+                            return err;
+                        };
+
+                        tty_control.enableRawMode(&tty_candidate) catch |err| {
+                            if (err == error.NotATerminal) {
+                                logging.logWarning(raw_tty_warning, .{});
+                                break :blk false;
+                            }
+                            logging.logError(err, "enabling raw mode");
+                            return err;
+                        };
+
+                        break :blk true;
+                    };
+
+                    if (raw_enabled) {
+                        local_tty_state = tty_candidate;
+                    }
+                }
+            }
+        }
+
         // Create Connection wrapper for the underlying socket/TLS connection
         const connection = if (tls_connection) |*conn|
             Connection.fromTls(conn.*)
         else
             Connection.fromSocket(raw_socket);
 
+        const local_tty_ptr: ?*tty_state.TtyState = if (local_tty_state) |*state| state else null;
+
         // Wrap with TelnetConnection for protocol processing
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, local_tty_ptr);
         defer telnet_conn.deinit();
 
         if (cfg.verbose) {
@@ -502,35 +556,8 @@ pub fn netStreamToStream(net_stream: std.net.Stream) stream.Stream {
 /// Parameters:
 ///   data: Binary data to display in hex format
 fn printHexDump(cfg: *const config.Config, data: []const u8) void {
-    var i: usize = 0;
-    while (i < data.len) : (i += 16) {
-        logging.logTrace(cfg, "{x:0>8}: ", .{i});
-
-        // Hex bytes
-        var j: usize = 0;
-        while (j < 16) : (j += 1) {
-            if (i + j < data.len) {
-                logging.logTrace(cfg, "{x:0>2} ", .{data[i + j]});
-            } else {
-                logging.logTrace(cfg, "   ", .{});
-            }
-        }
-
-        logging.logTrace(cfg, " |", .{});
-
-        // ASCII representation
-        j = 0;
-        while (j < 16 and i + j < data.len) : (j += 1) {
-            const c = data[i + j];
-            if (c >= 32 and c <= 126) {
-                logging.logTrace(cfg, "{c}", .{c});
-            } else {
-                logging.logTrace(cfg, ".", .{});
-            }
-        }
-
-        logging.logTrace(cfg, "|\n", .{});
-    }
+    _ = cfg; // Hex dump output formatter handles verbosity internally
+    hexdump.dumpToStdout(data);
 }
 
 /// Execute command with socket connected to stdin/stdout (not yet implemented).
@@ -685,7 +712,7 @@ fn runUnixSocketClient(allocator: std.mem.Allocator, cfg: *const config.Config, 
         const connection = Connection.fromUnixSocket(unix_client.getSocket(), null);
 
         // Wrap with TelnetConnection for protocol processing
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
         defer telnet_conn.deinit();
 
         if (cfg.verbose) {

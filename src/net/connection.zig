@@ -28,6 +28,7 @@ pub const ConnectionType = enum {
 pub const UnixSocketSupport = struct {
     pub const available = switch (builtin.os.tag) {
         .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => true,
+        .windows => builtin.os.version_range.windows.isAtLeast(.win10_rs4) orelse false,
         else => false,
     };
 

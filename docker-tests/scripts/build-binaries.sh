@@ -267,6 +267,7 @@ build_binary_docker() {
         fi
 
         if timeout "$BUILD_TIMEOUT" docker build \
+            --no-cache \
             --platform="$docker_platform" \
             $seccomp_opt \
             --file="$dockerfile_path" \

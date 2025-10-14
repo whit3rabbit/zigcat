@@ -15,6 +15,7 @@ const std = @import("std");
 const Connection = @import("../net/connection.zig").Connection;
 const TelnetProcessor = @import("telnet_processor.zig").TelnetProcessor;
 const telnet = @import("telnet.zig");
+const tty_state = @import("terminal").tty_state;
 
 const TelnetCommand = telnet.TelnetCommand;
 const TelnetOption = telnet.TelnetOption;
@@ -40,6 +41,7 @@ pub const TelnetConnection = struct {
         terminal_type: ?[]const u8,
         window_width: ?u16,
         window_height: ?u16,
+        local_tty: ?*tty_state.TtyState,
     ) !TelnetConnection {
         const term_type = terminal_type orelse "UNKNOWN";
         const width = window_width orelse 80;
@@ -47,7 +49,7 @@ pub const TelnetConnection = struct {
 
         return TelnetConnection{
             .inner = connection,
-            .processor = TelnetProcessor.init(allocator, term_type, width, height),
+            .processor = TelnetProcessor.init(allocator, term_type, width, height, local_tty),
             .read_buffer = try std.ArrayList(u8).initCapacity(allocator, BUFFER_SIZE),
             .write_buffer = try std.ArrayList(u8).initCapacity(allocator, BUFFER_SIZE),
             .allocator = allocator,
@@ -234,7 +236,7 @@ pub const TelnetConnection = struct {
 
 /// Create TelnetConnection with default settings.
 pub fn fromConnection(connection: Connection, allocator: std.mem.Allocator) !TelnetConnection {
-    return TelnetConnection.init(connection, allocator, null, null, null);
+    return TelnetConnection.init(connection, allocator, null, null, null, null);
 }
 
 /// Create TelnetConnection with custom terminal configuration.
@@ -245,5 +247,5 @@ pub fn fromConnectionWithConfig(
     window_width: u16,
     window_height: u16,
 ) !TelnetConnection {
-    return TelnetConnection.init(connection, allocator, terminal_type, window_width, window_height);
+    return TelnetConnection.init(connection, allocator, terminal_type, window_width, window_height, null);
 }

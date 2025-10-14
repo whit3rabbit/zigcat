@@ -23,8 +23,8 @@ test "ExecConfig default values" {
 test "buildShellCommand creates proper shell invocation" {
     const allocator = std.testing.allocator;
 
-    const result = try exec.buildShellCommand(allocator, "echo hello");
-    defer allocator.free(result.args);
+    var result = try exec.buildShellCommand(allocator, "echo hello");
+    defer result.deinit();
 
     if (@import("builtin").os.tag == .windows) {
         try std.testing.expectEqualStrings("cmd.exe", result.program);
@@ -41,8 +41,8 @@ test "buildShellCommand with complex command" {
     const allocator = std.testing.allocator;
 
     const cmd = "echo 'hello world' | grep hello";
-    const result = try exec.buildShellCommand(allocator, cmd);
-    defer allocator.free(result.args);
+    var result = try exec.buildShellCommand(allocator, cmd);
+    defer result.deinit();
 
     try std.testing.expectEqual(@as(usize, 2), result.args.len);
     try std.testing.expectEqualStrings(cmd, result.args[1]);
@@ -118,8 +118,8 @@ test "exec mode safety: shell command sanitization" {
 
     // Test that we properly pass commands through shell
     const dangerous_cmd = "echo test; rm -rf /";
-    const result = try exec.buildShellCommand(allocator, dangerous_cmd);
-    defer allocator.free(result.args);
+    var result = try exec.buildShellCommand(allocator, dangerous_cmd);
+    defer result.deinit();
 
     // The command should be passed as a single argument to -c
     // Shell will handle it (but we should still validate with allow list)

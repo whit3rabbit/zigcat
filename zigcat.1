@@ -132,7 +132,7 @@ Only receive data, ignoring sent data (mutually exclusive with \fB--send-only\fR
 Convert LF to CRLF.
 .TP
 .BR -t ", " --telnet
-Act like a telnet client.
+Enable Telnet protocol processing (RFC 854). Handles IAC (Interpret As Command) sequences, performs automatic option negotiation (WILL/WONT/DO/DONT), and escapes binary data (IAC IAC). Supports ECHO, SUPPRESS-GO-AHEAD, TERMINAL-TYPE, NAWS (window size), and LINEMODE options. Use when connecting to BBSes, MUD servers, network equipment management interfaces, and other Telnet-based legacy systems. The protocol is 8-bit clean with application data remaining untouched.
 .TP
 .B --no-shutdown
 Do not shutdown the write half of the socket after EOF on stdin.
@@ -210,12 +210,15 @@ The proxy authentication credentials.
 .BR --proxy-dns " <mode>"
 Proxy DNS resolution mode; accepted values are local, remote, both.
 .SS "EXECUTION OPTIONS"
+.PP
+.B zigcat
+requires explicit security acknowledgment for exec mode in listen mode to prevent accidental remote code execution vulnerabilities.
 .TP
 .BR -e ", " --exec " <cmd> " [\fIargs...\fR]
-Execute the given command with its arguments.
+Execute the given command with its arguments. When in listen mode (\fB-l\fR), requires the \fB--allow\fR flag. Optionally add \fB--allow-ip\fR for IP-based restrictions (defense-in-depth).
 .TP
 .BR -c ", " --sh-exec " <cmd>"
-Execute the given command via a shell.
+Execute the given command via a shell. When in listen mode (\fB-l\fR), requires the \fB--allow\fR flag. Optionally add \fB--allow-ip\fR for IP-based restrictions (defense-in-depth).
 .TP
 .B --no-stdin
 Do not forward client stdin to the executed command.
@@ -227,7 +230,7 @@ Discard stdout from the executed command.
 Discard stderr from the executed command.
 .TP
 .B --allow
-Acknowledge and permit potentially dangerous exec operations.
+Acknowledge and permit potentially dangerous exec operations (REQUIRED for \fB-e\fR/\fB-c\fR in listen mode). When used alone, accepts connections from any IP address (ncat-compatible). Add \fB--allow-ip\fR for defense-in-depth IP restrictions.
 .SS "OUTPUT OPTIONS"
 .TP
 .BR -v ", " --verbose
@@ -266,7 +269,7 @@ Connection events and warnings (default).
 .SS "ACCESS CONTROL"
 .TP
 .BR --allow-ip " <ips>"
-Allow specific IPs/CIDRs/hostnames (comma-separated).
+Allow specific IPs/CIDRs/hostnames (comma-separated). Optional for exec mode (\fB-e\fR/\fB-c\fR) when \fB--allow\fR is specified, provides defense-in-depth by restricting which IP addresses can use exec mode.
 .TP
 .BR --deny-ip " <ips>"
 Deny specific IPs/CIDRs/hostnames (comma-separated).
@@ -441,17 +444,24 @@ zigcat -l -U /tmp/socket
 .RE
 .SS "Command execution"
 .PP
-Execute grep (args without hyphens):
+Execute a shell (ncat-compatible, accepts all IPs):
 .RS
 .EX
-zigcat -l -e grep foo
+zigcat -l 9000 -e /bin/sh --allow
 .EE
 .RE
 .PP
-Execute grep with -v flag (using --):
+Execute a shell with IP restrictions (defense-in-depth):
 .RS
 .EX
-zigcat -l -e -- grep -v foo
+zigcat -l 9000 -e /bin/sh --allow --allow-ip 127.0.0.1
+.EE
+.RE
+.PP
+Execute grep with flags (using -- to separate):
+.RS
+.EX
+zigcat -l 9000 --allow -e -- grep -v foo
 .EE
 .RE
 .SS "Port scanning"
@@ -474,6 +484,49 @@ Perform a stealthier scan with added delay between probes:
 .RS
 .EX
 zigcat -z --scan-parallel --scan-delay 100 target.example 1-65535
+.EE
+.RE
+.SS "Telnet connections"
+.PP
+Connect to a BBS with Telnet protocol:
+.RS
+.EX
+zigcat --telnet bbs.example.com 23
+.EE
+.RE
+.PP
+Connect to a MUD server with verbose logging:
+.RS
+.EX
+zigcat --telnet -v mud.example.com 4000
+.EE
+.RE
+.PP
+Telnet server with protocol handling:
+.RS
+.EX
+zigcat -l --telnet 2323
+.EE
+.RE
+.PP
+Telnet over TLS (secure connection):
+.RS
+.EX
+zigcat --telnet --ssl telnet-secure.example.com 992
+.EE
+.RE
+.PP
+Telnet through SOCKS5 proxy:
+.RS
+.EX
+zigcat --telnet --proxy socks5://localhost:1080 bbs.example.com 23
+.EE
+.RE
+.PP
+Debug Telnet protocol with hex dump:
+.RS
+.EX
+zigcat --telnet -vv -x debug.hex server.example.com 23
 .EE
 .RE
 .SS "DTLS connections"

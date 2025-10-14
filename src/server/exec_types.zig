@@ -110,4 +110,10 @@ pub const ExecError = error{
 
     /// Invalid session configuration detected
     InvalidConfiguration,
+
+    /// io_uring provided buffer not available in CQE (kernel 5.7+ feature)
+    BufferNotProvided,
+
+    /// Failed to replenish io_uring provided buffer pool
+    BufferReplenishFailed,
 };

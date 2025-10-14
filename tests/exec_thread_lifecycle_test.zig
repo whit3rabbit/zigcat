@@ -327,11 +327,11 @@ test "T4.3: edge case - shell command with pipe" {
     defer posix.close(sv[1]);
 
     const socket = net.Stream{ .handle = sv[0] };
-    const client_addr = try net.Address.parseIp4("127.0.0.1", 0);
+   const client_addr = try net.Address.parseIp4("127.0.0.1", 0);
 
     // Build shell command
-    const result = try exec.buildShellCommand(allocator, "echo hello | grep hello");
-    defer allocator.free(result.args);
+    var result = try exec.buildShellCommand(allocator, "echo hello | grep hello");
+    defer result.deinit();
 
     const config = exec.ExecConfig{
         .mode = .shell,

@@ -1,7 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const telnet = @import("../src/protocol/telnet.zig");
-const telnet_options = @import("../src/protocol/telnet_options.zig");
+const protocol = @import("protocol");
+const telnet = protocol.telnet;
+const telnet_options = protocol.telnet_options;
 
 const TelnetCommand = telnet.TelnetCommand;
 const TelnetOption = telnet.TelnetOption;
@@ -301,7 +302,7 @@ test "LinemodeHandler - handle MODE subnegotiation with ACK" {
 }
 
 test "OptionHandlerRegistry - initialization" {
-    const registry = OptionHandlerRegistry.init("xterm", 80, 24);
+    const registry = OptionHandlerRegistry.init("xterm", 80, 24, null);
 
     try testing.expectEqualStrings("xterm", registry.terminal_type_handler.terminal_type);
     try testing.expectEqual(@as(u16, 80), registry.naws_handler.width);
@@ -309,7 +310,7 @@ test "OptionHandlerRegistry - initialization" {
 }
 
 test "OptionHandlerRegistry - handle supported option negotiation" {
-    var registry = OptionHandlerRegistry.init("vt100", 132, 43);
+    var registry = OptionHandlerRegistry.init("vt100", 132, 43, null);
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 
@@ -325,7 +326,7 @@ test "OptionHandlerRegistry - handle supported option negotiation" {
 }
 
 test "OptionHandlerRegistry - handle unsupported option negotiation" {
-    var registry = OptionHandlerRegistry.init("xterm", 80, 24);
+    var registry = OptionHandlerRegistry.init("xterm", 80, 24, null);
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 
@@ -341,7 +342,7 @@ test "OptionHandlerRegistry - handle unsupported option negotiation" {
 }
 
 test "OptionHandlerRegistry - handle terminal type subnegotiation" {
-    var registry = OptionHandlerRegistry.init("ansi", 80, 24);
+    var registry = OptionHandlerRegistry.init("ansi", 80, 24, null);
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 
@@ -367,7 +368,7 @@ test "OptionHandlerRegistry - handle terminal type subnegotiation" {
 }
 
 test "OptionHandlerRegistry - handle NAWS subnegotiation" {
-    var registry = OptionHandlerRegistry.init("xterm", 80, 24);
+    var registry = OptionHandlerRegistry.init("xterm", 80, 24, null);
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 
@@ -379,7 +380,7 @@ test "OptionHandlerRegistry - handle NAWS subnegotiation" {
 }
 
 test "OptionHandlerRegistry - update window size" {
-    var registry = OptionHandlerRegistry.init("xterm", 80, 24);
+    var registry = OptionHandlerRegistry.init("xterm", 80, 24, null);
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 

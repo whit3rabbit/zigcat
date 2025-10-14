@@ -10,6 +10,7 @@
 const std = @import("std");
 
 const config = @import("../../config.zig");
+const hexdump = @import("../hexdump.zig");
 const logging = @import("../../util/logging.zig");
 
 /// Comprehensive error set for TLS transfer operations.
@@ -218,35 +219,7 @@ pub fn handleOutputError(err: anyerror, cfg: *const config.Config, operation: []
 
 /// Print data as hex dump to stdout with ASCII sidebar.
 pub fn printHexDump(data: []const u8) void {
-    if (@import("builtin").is_test) return;
-
-    var i: usize = 0;
-    while (i < data.len) : (i += 16) {
-        logging.log(1, "{x:0>8}: ", .{i});
-
-        var j: usize = 0;
-        while (j < 16) : (j += 1) {
-            if (i + j < data.len) {
-                logging.log(1, "{x:0>2} ", .{data[i + j]});
-            } else {
-                logging.log(1, "   ", .{});
-            }
-        }
-
-        logging.log(1, " |", .{});
-
-        j = 0;
-        while (j < 16 and i + j < data.len) : (j += 1) {
-            const c = data[i + j];
-            if (c >= 32 and c <= 126) {
-                logging.log(1, "{c}", .{c});
-            } else {
-                logging.log(1, ".", .{});
-            }
-        }
-
-        logging.log(1, "|\n", .{});
-    }
+    hexdump.dumpToStdout(data);
 }
 
 // -----------------------------------------------------------------------------+
