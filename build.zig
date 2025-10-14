@@ -537,6 +537,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const timeout_tests = b.addTest(.{ .root_module = timeout_test_module });
+    timeout_tests.linkLibC();
     const run_timeout_tests = b.addRunArtifact(timeout_tests);
     const timeout_test_step = b.step("test-timeout", "Run timeout-specific tests");
     timeout_test_step.dependOn(&run_timeout_tests.step);
@@ -596,6 +597,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    udp_test_module.addImport("zigcat", exe.root_module);
     const udp_tests = b.addTest(.{ .root_module = udp_test_module });
     udp_tests.linkLibC();
     const run_udp_tests = b.addRunArtifact(udp_tests);

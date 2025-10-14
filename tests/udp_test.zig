@@ -1,7 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 const posix = std.posix;
-const socket = @import("../src/net/socket.zig");
+const zigcat = @import("zigcat");
+const socket = zigcat.socket;
 
 // Self-contained UDP test utilities
 fn createUdpSocket(family: posix.sa_family_t) !posix.socket_t {

@@ -108,9 +108,10 @@ jobs:
           - os: windows-latest
             label: Windows
             install_deps: |
-              # Install OpenSSL via Chocolatey (faster than vcpkg)
-              choco install openssl -y --no-progress
-              # vcpkg install openssl:x64-windows  # Commented out: hangs in CI
+              # Install OpenSSL via vcpkg (GitHub Actions runners have vcpkg pre-installed)
+              vcpkg install openssl:x64-windows
+              # Set VCPKG_ROOT for build.zig to find libraries (bash syntax for Windows)
+              echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
             commands: |
               zig build test
               zig build test-timeout
