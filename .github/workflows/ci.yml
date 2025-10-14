@@ -69,6 +69,7 @@ jobs:
     name: Full Test Matrix
     needs: smoke
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20  # Kill job after 20 minutes (prevents 43+ minute hangs)
     strategy:
       fail-fast: false
       matrix:
@@ -109,9 +110,25 @@ jobs:
             label: Windows
             install_deps: |
               # Install OpenSSL via vcpkg (GitHub Actions runners have vcpkg pre-installed)
+              echo "Installing OpenSSL via vcpkg..."
               vcpkg install openssl:x64-windows
-              # Set VCPKG_ROOT for build.zig to find libraries (bash syntax for Windows)
+
+              # Integrate vcpkg with MSBuild (makes libraries discoverable)
+              vcpkg integrate install
+
+              # Set VCPKG_ROOT for build.zig
               echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
+
+              # Verify installation succeeded
+              echo "Verifying OpenSSL installation..."
+              if [ -f "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libssl.lib" ]; then
+                echo "✓ OpenSSL libraries found at: $VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/"
+                ls -lh "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/" | grep -i ssl || true
+              else
+                echo "✗ ERROR: OpenSSL libraries not found after vcpkg install"
+                echo "Expected path: $VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libssl.lib"
+                exit 1
+              fi
             commands: |
               zig build test
               zig build test-timeout
@@ -153,12 +170,14 @@ jobs:
 
       - name: Run ${{ matrix.label }} tests
         shell: bash
+        timeout-minutes: 15  # Per-step timeout (allows 15 min for all tests)
         run: |
           set -euo pipefail
           while IFS= read -r cmd; do
             if [[ -n "$cmd" ]]; then
               echo "Running: $cmd"
-              $cmd || echo "Test $cmd failed but continuing..."
+              # Add 5-minute timeout per individual test command
+              timeout 300 $cmd || echo "Test $cmd failed but continuing..."
             fi
           done <<'EOF'
           ${{ matrix.commands }}
