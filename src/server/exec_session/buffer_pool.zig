@@ -133,7 +133,7 @@ pub const FixedBufferPool = struct {
 
         // Initialize free list with all buffer IDs
         var free_list = try std.ArrayList(u16).initCapacity(allocator, buffer_count);
-        errdefer free_list.deinit();
+        errdefer free_list.deinit(allocator);
 
         var i: u16 = 0;
         while (i < buffer_count) : (i += 1) {
@@ -396,7 +396,7 @@ test "FixedBufferPool: stress test" {
     defer pool.deinit();
 
     var acquired = std.ArrayList(u16).init(allocator);
-    defer acquired.deinit();
+    defer acquired.deinit(allocator);
 
     // Acquire all buffers
     var i: usize = 0;
