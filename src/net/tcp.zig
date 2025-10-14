@@ -278,22 +278,52 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *cons
         };
 
         // Convert timeout to kernel_timespec (same pattern as portscan_uring.zig:218-222)
-        const timeout_ns = safe_timeout * std.time.ns_per_ms;
+        const timeout_ns = @as(u64, safe_timeout) * std.time.ns_per_ms;
         const timeout_spec = std.os.linux.kernel_timespec{
             .sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
             .nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
         };
 
-        // Wait for completion with timeout
-        const cqe = ring.copy_cqe_wait(&timeout_spec) catch |err| {
+        // Wait for completion with timeout (using timeout + copy_cqes pattern)
+        const linux = std.os.linux;
+        const TIMEOUT_USER_DATA: u64 = std.math.maxInt(u64);
+
+        // Submit timeout operation
+        _ = ring.timeout(TIMEOUT_USER_DATA, &timeout_spec, 0, 0) catch |err| {
             socket.closeSocket(sock);
-            if (err == error.Timeout) {
-                last_error = error.ConnectionTimeout;
-            } else {
-                last_error = err;
-            }
+            last_error = err;
             continue;
         };
+
+        // Submit all operations (connect + timeout)
+        _ = ring.submit() catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
+        // Wait for completion
+        var cqes: [1]linux.io_uring_cqe = undefined;
+        const count = ring.copy_cqes(&cqes, 1) catch |err| {
+            socket.closeSocket(sock);
+            last_error = err;
+            continue;
+        };
+
+        if (count == 0) {
+            socket.closeSocket(sock);
+            last_error = error.ConnectionTimeout;
+            continue;
+        }
+
+        const cqe = cqes[0];
+
+        // Check if this is a timeout completion
+        if (cqe.user_data == TIMEOUT_USER_DATA) {
+            socket.closeSocket(sock);
+            last_error = error.ConnectionTimeout;
+            continue;
+        }
 
         // Check connection result
         // cqe.res == 0: connection succeeded
@@ -304,15 +334,43 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *cons
         } else if (cqe.res == -@as(i32, @intCast(@intFromEnum(std.posix.E.INPROGRESS)))) {
             // Connection in progress, wait for completion
             // This shouldn't happen with io_uring connect, but handle it just in case
-            const cqe2 = ring.copy_cqe_wait(&timeout_spec) catch |err| {
+
+            // Submit timeout operation for second wait
+            _ = ring.timeout(TIMEOUT_USER_DATA, &timeout_spec, 0, 0) catch |err| {
                 socket.closeSocket(sock);
-                if (err == error.Timeout) {
-                    last_error = error.ConnectionTimeout;
-                } else {
-                    last_error = err;
-                }
+                last_error = err;
                 continue;
             };
+
+            // Submit
+            _ = ring.submit() catch |err| {
+                socket.closeSocket(sock);
+                last_error = err;
+                continue;
+            };
+
+            // Wait for second completion
+            var cqes2: [1]linux.io_uring_cqe = undefined;
+            const count2 = ring.copy_cqes(&cqes2, 1) catch |err| {
+                socket.closeSocket(sock);
+                last_error = err;
+                continue;
+            };
+
+            if (count2 == 0) {
+                socket.closeSocket(sock);
+                last_error = error.ConnectionTimeout;
+                continue;
+            }
+
+            const cqe2 = cqes2[0];
+
+            // Check if this is a timeout completion
+            if (cqe2.user_data == TIMEOUT_USER_DATA) {
+                socket.closeSocket(sock);
+                last_error = error.ConnectionTimeout;
+                continue;
+            }
 
             if (cqe2.res == 0) {
                 return sock;

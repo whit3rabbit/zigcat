@@ -191,16 +191,18 @@ pub const UringSession = struct {
 
             // Compute timeout for io_uring wait
             const timeout_ms = self.computeUringTimeout();
-            const timeout_spec = if (timeout_ms >= 0) blk: {
+
+            // Wait for completion with timeout
+            const cqe_result = if (timeout_ms >= 0) blk: {
                 const timeout_ns = @as(u64, @intCast(timeout_ms)) * std.time.ns_per_ms;
-                break :blk std.os.linux.kernel_timespec{
+                const timeout_spec = std.os.linux.kernel_timespec{
                     .sec = @intCast(@divFloor(timeout_ns, std.time.ns_per_s)),
                     .nsec = @intCast(@mod(timeout_ns, std.time.ns_per_s)),
                 };
-            } else null;
+                break :blk self.ring.waitForCompletion(&timeout_spec);
+            } else self.ring.waitForCompletion(null);
 
-            // Wait for completion
-            const cqe = self.ring.waitForCompletion(if (timeout_ms >= 0) &timeout_spec else null) catch |err| {
+            const cqe = cqe_result catch |err| {
                 if (err == error.Timeout) {
                     try self.checkTimeouts();
                     continue;

@@ -169,7 +169,7 @@ pub const UringEventLoop = if (io_uring_supported) struct {
     /// Returns: Error if submission queue is full
     pub fn submitRead(self: *UringEventLoop, fd: posix.fd_t, buffer: []u8, user_data: u64) !void {
         const sqe = try self.ring.get_sqe();
-        sqe.prep_recv(fd, .{ .buffer = buffer }, 0);
+        sqe.prep_recv(fd, buffer, 0);
         sqe.user_data = user_data;
     }
 
@@ -243,7 +243,7 @@ pub const UringEventLoop = if (io_uring_supported) struct {
     /// Returns: Error if submission queue is full
     pub fn submitWrite(self: *UringEventLoop, fd: posix.fd_t, buffer: []const u8, user_data: u64) !void {
         const sqe = try self.ring.get_sqe();
-        sqe.prep_send(fd, .{ .buffer = buffer }, 0);
+        sqe.prep_send(fd, buffer, 0);
         sqe.user_data = user_data;
     }
 
@@ -557,14 +557,38 @@ pub const UringEventLoop = if (io_uring_supported) struct {
         self: *UringEventLoop,
         timeout_spec: ?*const std.os.linux.kernel_timespec,
     ) !CompletionResult {
-        // Submit all pending operations
+        const linux = std.os.linux;
+
+        // Reserve a special user_data value for timeout operations
+        const TIMEOUT_USER_DATA: u64 = std.math.maxInt(u64);
+
+        // If timeout is specified, submit a timeout operation
+        if (timeout_spec) |ts| {
+            _ = try self.ring.timeout(TIMEOUT_USER_DATA, ts, 0, 0);
+        }
+
+        // Submit all pending operations (including timeout if any)
         _ = try self.ring.submit();
 
-        // Wait for completion with optional timeout
-        const cqe = if (timeout_spec) |ts|
-            try self.ring.copy_cqe_wait(ts)
-        else
-            try self.ring.copy_cqe();
+        // Wait for at least one completion
+        var cqes: [1]linux.io_uring_cqe = undefined;
+        const count = try self.ring.copy_cqes(&cqes, 1);
+        if (count == 0) {
+            return error.Timeout;
+        }
+
+        const cqe = cqes[0];
+
+        // If this is a timeout completion, return error
+        if (cqe.user_data == TIMEOUT_USER_DATA) {
+            // cqe.res is negative errno, so compare against -@intFromEnum(linux.E.TIME)
+            const ETIME: i32 = -@as(i32, @intCast(@intFromEnum(linux.E.TIME)));
+            if (cqe.res == ETIME) {
+                return error.Timeout;
+            }
+            // If timeout was cancelled or other error, treat as timeout
+            return error.Timeout;
+        }
 
         return CompletionResult{
             .user_data = cqe.user_data,
