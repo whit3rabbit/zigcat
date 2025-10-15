@@ -49,7 +49,7 @@ jobs:
 
       - name: Smoke test suite
         shell: bash
-        run: zig build test -Doptimize=ReleaseSafe
+        run: zig build test --release=safe
 
       - name: Test wolfSSL build
         shell: bash
@@ -80,32 +80,32 @@ jobs:
               sudo apt-get update
               sudo apt-get install -y libssl-dev pkg-config
             commands: |
-              zig build test -Doptimize=ReleaseSafe
-              zig build test-timeout -Doptimize=ReleaseSafe
-              zig build test-udp -Doptimize=ReleaseSafe
-              zig build test-zero-io -Doptimize=ReleaseSafe
-              zig build test-quit-eof -Doptimize=ReleaseSafe
-              zig build test-platform -Doptimize=ReleaseSafe
-              zig build test-portscan-features -Doptimize=ReleaseSafe
-              zig build test-portscan-uring -Doptimize=ReleaseSafe
-              zig build test-validation -Doptimize=ReleaseSafe
-              zig build test-parallel-scan -Doptimize=ReleaseSafe
-              zig build test-ssl -Doptimize=ReleaseSafe
+              zig build test --release=safe
+              zig build test-timeout --release=safe
+              zig build test-udp --release=safe
+              zig build test-zero-io --release=safe
+              zig build test-quit-eof --release=safe
+              zig build test-platform --release=safe
+              zig build test-portscan-features --release=safe
+              zig build test-portscan-uring --release=safe
+              zig build test-validation --release=safe
+              zig build test-parallel-scan --release=safe
+              zig build test-ssl --release=safe
           - os: macos-latest
             label: macOS
             install_deps: |
               brew install openssl@3 pkg-config
             commands: |
-              zig build test -Doptimize=ReleaseSafe
-              zig build test-timeout -Doptimize=ReleaseSafe
-              zig build test-udp -Doptimize=ReleaseSafe
-              zig build test-zero-io -Doptimize=ReleaseSafe
-              zig build test-quit-eof -Doptimize=ReleaseSafe
-              zig build test-platform -Doptimize=ReleaseSafe
-              zig build test-portscan-features -Doptimize=ReleaseSafe
-              zig build test-validation -Doptimize=ReleaseSafe
-              zig build test-parallel-scan -Doptimize=ReleaseSafe
-              zig build test-ssl -Doptimize=ReleaseSafe
+              zig build test --release=safe
+              zig build test-timeout --release=safe
+              zig build test-udp --release=safe
+              zig build test-zero-io --release=safe
+              zig build test-quit-eof --release=safe
+              zig build test-platform --release=safe
+              zig build test-portscan-features --release=safe
+              zig build test-validation --release=safe
+              zig build test-parallel-scan --release=safe
+              zig build test-ssl --release=safe
           - os: windows-latest
             label: Windows
             install_deps: |
@@ -155,12 +155,12 @@ jobs:
 
               echo "=== End Debug Info ==="
             commands: |
-              zig build test -Doptimize=ReleaseSafe
-              zig build test-timeout -Doptimize=ReleaseSafe
-              zig build test-udp -Doptimize=ReleaseSafe
-              zig build test-validation -Doptimize=ReleaseSafe
-              zig build test-platform -Doptimize=ReleaseSafe
-              zig build test-ssl -Doptimize=ReleaseSafe
+              zig build test --release=safe
+              zig build test-timeout --release=safe
+              zig build test-udp --release=safe
+              zig build test-validation --release=safe
+              zig build test-platform --release=safe
+              zig build test-ssl --release=safe
     env:
       ZIG_VERSION: 0.15.1
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
