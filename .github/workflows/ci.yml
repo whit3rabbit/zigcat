@@ -109,20 +109,17 @@ jobs:
           - os: windows-latest
             label: Windows
             install_deps: |
-              # Install wolfSSL via chocolatey
-              echo "Installing wolfSSL via chocolatey..."
-              choco install -y wolfssl
-
-              echo "=== wolfSSL Installation Info ==="
-              if [ -d "C:/Program Files/wolfSSL" ]; then
-                echo "✓ wolfSSL directory found at C:/Program Files/wolfSSL"
-                ls -la "C:/Program Files/wolfSSL/" || true
+              # Windows runners have OpenSSL pre-installed
+              # Verify OpenSSL installation
+              echo "=== OpenSSL Installation Info ==="
+              if [ -d "C:/Program Files/OpenSSL" ]; then
+                echo "✓ OpenSSL directory found at C:/Program Files/OpenSSL"
+                ls -la "C:/Program Files/OpenSSL/" || true
               fi
 
-              # Check common installation paths
-              if [ -d "C:/ProgramData/chocolatey/lib/wolfssl" ]; then
-                echo "✓ wolfSSL chocolatey package found"
-                ls -la "C:/ProgramData/chocolatey/lib/wolfssl/" || true
+              if [ -d "C:/Program Files/OpenSSL-Win64" ]; then
+                echo "✓ OpenSSL directory found at C:/Program Files/OpenSSL-Win64"
+                ls -la "C:/Program Files/OpenSSL-Win64/" || true
               fi
               echo "=== End Installation Info ==="
             commands: |
