@@ -412,8 +412,14 @@ pub fn build(b: *std.Build) void {
                 std.debug.print("[wolfSSL] Added Linux include and library search paths\n", .{});
             }
         } else {
-            exe.linkSystemLibrary("ssl");
-            exe.linkSystemLibrary("crypto");
+            // Windows uses different library names with vcpkg: libssl.lib instead of ssl.lib
+            if (target.result.os.tag == .windows) {
+                exe.linkSystemLibrary("libssl");
+                exe.linkSystemLibrary("libcrypto");
+            } else {
+                exe.linkSystemLibrary("ssl");
+                exe.linkSystemLibrary("crypto");
+            }
 
             // Add include and library search paths for cross-compilation (Docker builds)
             // This helps Zig find OpenSSL headers and libraries when cross-compiling for Linux targets
