@@ -119,16 +119,41 @@ jobs:
               # Set VCPKG_ROOT for build.zig
               echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
 
-              # Verify installation succeeded
-              echo "Verifying OpenSSL installation..."
-              if [ -f "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libssl.lib" ]; then
-                echo "✓ OpenSSL libraries found at: $VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/"
-                ls -lh "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/" | grep -i ssl || true
+              # Debug: Show vcpkg installation structure
+              echo "=== vcpkg Installation Debug Info ==="
+              echo "VCPKG_INSTALLATION_ROOT: $VCPKG_INSTALLATION_ROOT"
+
+              echo -e "\n--- Checking installed directory structure ---"
+              if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows" ]; then
+                echo "✓ x64-windows directory exists"
+                ls -la "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/"
               else
-                echo "✗ ERROR: OpenSSL libraries not found after vcpkg install"
-                echo "Expected path: $VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/libssl.lib"
-                exit 1
+                echo "✗ x64-windows directory NOT found"
               fi
+
+              echo -e "\n--- Checking lib directory contents ---"
+              if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib" ]; then
+                echo "✓ lib directory exists"
+                echo "Full contents:"
+                ls -lah "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/" | head -30
+                echo -e "\nSSL-related files:"
+                find "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib" -name "*ssl*" -o -name "*crypto*" 2>/dev/null || echo "No SSL files found with find"
+              else
+                echo "✗ lib directory NOT found"
+              fi
+
+              echo -e "\n--- Checking include directory ---"
+              if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/include/openssl" ]; then
+                echo "✓ OpenSSL headers found"
+                ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/include/openssl/" | head -10
+              else
+                echo "✗ OpenSSL headers NOT found"
+              fi
+
+              echo -e "\n--- vcpkg list output ---"
+              vcpkg list | grep -i openssl || echo "OpenSSL not in vcpkg list"
+
+              echo "=== End Debug Info ==="
             commands: |
               zig build test
               zig build test-timeout
