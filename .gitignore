@@ -61,3 +61,4 @@ docker-tests/artifacts/build-report.json
 /docker-tests/results
 docker-tests/results/test-report.json
 docker-tests/results/session-id
+docker-tests/results/session-id
