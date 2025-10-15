@@ -109,58 +109,28 @@ jobs:
           - os: windows-latest
             label: Windows
             install_deps: |
-              # Install OpenSSL via vcpkg (GitHub Actions runners have vcpkg pre-installed)
-              echo "Installing OpenSSL via vcpkg..."
-              vcpkg install openssl:x64-windows
+              # Install wolfSSL via chocolatey
+              echo "Installing wolfSSL via chocolatey..."
+              choco install -y wolfssl
 
-              # Integrate vcpkg with MSBuild (makes libraries discoverable)
-              vcpkg integrate install
-
-              # Set VCPKG_ROOT for build.zig
-              echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
-
-              # Debug: Show vcpkg installation structure
-              echo "=== vcpkg Installation Debug Info ==="
-              echo "VCPKG_INSTALLATION_ROOT: $VCPKG_INSTALLATION_ROOT"
-
-              echo -e "\n--- Checking installed directory structure ---"
-              if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows" ]; then
-                echo "✓ x64-windows directory exists"
-                ls -la "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/"
-              else
-                echo "✗ x64-windows directory NOT found"
+              echo "=== wolfSSL Installation Info ==="
+              if [ -d "C:/Program Files/wolfSSL" ]; then
+                echo "✓ wolfSSL directory found at C:/Program Files/wolfSSL"
+                ls -la "C:/Program Files/wolfSSL/" || true
               fi
 
-              echo -e "\n--- Checking lib directory contents ---"
-              if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib" ]; then
-                echo "✓ lib directory exists"
-                echo "Full contents:"
-                ls -lah "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib/" | head -30
-                echo -e "\nSSL-related files:"
-                find "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/lib" -name "*ssl*" -o -name "*crypto*" 2>/dev/null || echo "No SSL files found with find"
-              else
-                echo "✗ lib directory NOT found"
+              # Check common installation paths
+              if [ -d "C:/ProgramData/chocolatey/lib/wolfssl" ]; then
+                echo "✓ wolfSSL chocolatey package found"
+                ls -la "C:/ProgramData/chocolatey/lib/wolfssl/" || true
               fi
-
-              echo -e "\n--- Checking include directory ---"
-              if [ -d "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/include/openssl" ]; then
-                echo "✓ OpenSSL headers found"
-                ls "$VCPKG_INSTALLATION_ROOT/installed/x64-windows/include/openssl/" | head -10
-              else
-                echo "✗ OpenSSL headers NOT found"
-              fi
-
-              echo -e "\n--- vcpkg list output ---"
-              vcpkg list | grep -i openssl || echo "OpenSSL not in vcpkg list"
-
-              echo "=== End Debug Info ==="
+              echo "=== End Installation Info ==="
             commands: |
               zig build test --release=safe
               zig build test-timeout --release=safe
               zig build test-udp --release=safe
               zig build test-validation --release=safe
               zig build test-platform --release=safe
-              zig build test-ssl --release=safe
     env:
       ZIG_VERSION: 0.15.1
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache

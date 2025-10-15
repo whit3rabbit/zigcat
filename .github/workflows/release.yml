@@ -215,8 +215,8 @@ jobs:
             BUILD_ARGS="$BUILD_ARGS -Dstatic=true"
           fi
 
-          echo "Building with: zig build $BUILD_ARGS"
-          zig build $BUILD_ARGS
+          echo "Building with: zig build $BUILD_ARGS --release=small"
+          zig build $BUILD_ARGS --release=small
 
           # Rename binary
           if [ -n "${{ matrix.extension }}" ]; then
