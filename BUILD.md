@@ -214,7 +214,7 @@ zig build -Dtls=true -Dtls-backend=openssl
 - macOS: `brew install openssl`
 - Debian/Ubuntu: `sudo apt install libssl-dev`
 - RHEL/Fedora: `sudo yum install openssl-devel`
-- Windows: use a prebuilt OpenSSL package (e.g., from slproweb.com)
+- Windows: See [Building on Windows](#building-on-windows) for vcpkg, Chocolatey, and manual installation instructions
 
 **Features:**
 - Full TLS 1.0-1.3 support
@@ -380,3 +380,228 @@ zig build -Dtls=false -Dstrip=true
 - Native builds produce ~1.8-2.0 MB stripped binaries
 - All core features (TCP, UDP, Unix sockets, port scanning, exec mode) work normally
 - For TLS support on BSD, you'll need to wait for v0.1.0 which will include wolfSSL static linking
+
+## Building on Windows
+
+ZigCat builds natively on Windows with support for both OpenSSL and wolfSSL TLS backends. The build system automatically detects libraries installed via vcpkg, Chocolatey, or manual installation.
+
+### Prerequisites: Install Zig
+
+**Option 1: Chocolatey (Recommended)**
+```powershell
+choco install zig
+```
+
+**Option 2: Direct Download**
+- Download Zig 0.15.1 or later from: https://ziglang.org/download/
+- Extract to `C:\zig` (or your preferred location)
+- Add to PATH: `setx PATH "%PATH%;C:\zig"`
+
+### OpenSSL Installation (3 methods)
+
+The build system supports three OpenSSL installation methods, automatically detecting libraries in the following order:
+
+#### 1. vcpkg (Recommended for CI/CD)
+
+vcpkg is Microsoft's C/C++ package manager, ideal for reproducible builds and CI/CD pipelines.
+
+```powershell
+# Install vcpkg
+git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+cd C:\vcpkg
+.\bootstrap-vcpkg.bat
+
+# Install OpenSSL for x64-windows
+.\vcpkg install openssl:x64-windows
+
+# Set environment variable (required for build detection)
+setx VCPKG_ROOT "C:\vcpkg"
+```
+
+**Note**: After setting `VCPKG_ROOT`, restart your terminal or IDE for the environment variable to take effect.
+
+#### 2. Chocolatey
+
+```powershell
+choco install openssl
+```
+
+This installs OpenSSL to `C:\Program Files\OpenSSL-Win64\`, which the build system auto-detects.
+
+#### 3. Manual Download (Win64 OpenSSL)
+
+- Download from: https://slproweb.com/products/Win32OpenSSL.html
+- Choose "Win64 OpenSSL v3.x.x" (not the "Light" version)
+- Install to default location: `C:\Program Files\OpenSSL-Win64\`
+- Add to PATH (for runtime DLLs): `setx PATH "%PATH%;C:\Program Files\OpenSSL-Win64\bin"`
+
+**Supported Paths** (auto-detected by build system):
+- vcpkg: `%VCPKG_ROOT%\installed\x64-windows\`
+- GitHub Actions: `C:\Program Files\OpenSSL\`
+- Chocolatey: `C:\Program Files\OpenSSL-Win64\` or `C:\OpenSSL-Win64\`
+
+### wolfSSL Installation (2 methods)
+
+wolfSSL provides a lightweight TLS alternative (60% smaller binaries, GPLv2 license).
+
+#### 1. vcpkg
+
+```powershell
+# Install wolfSSL for x64-windows
+cd C:\vcpkg
+.\vcpkg install wolfssl:x64-windows
+```
+
+#### 2. Build from Source
+
+- Download from: https://www.wolfssl.com/download/
+- Extract and open `wolfssl64.sln` in Visual Studio
+- Build the Release configuration
+- Copy headers to `C:\Program Files\wolfSSL\include\`
+- Copy `wolfssl.lib` to `C:\Program Files\wolfSSL\lib\`
+
+**License Warning**: wolfSSL is licensed under GPLv2. Binaries built with wolfSSL must comply with GPLv2 terms if distributed.
+
+### Build Commands
+
+```powershell
+# Standard build (no TLS)
+zig build
+
+# Build with OpenSSL TLS support (default backend)
+zig build -Dtls=true
+
+# Build with wolfSSL TLS support (lightweight alternative)
+zig build -Dtls=true -Dtls-backend=wolfssl
+
+# Build with optimizations
+zig build -Doptimize=ReleaseSmall -Dstrip=true
+
+# Cross-compile for Windows from Linux/macOS
+zig build -Dtarget=x86_64-windows -Dtls=true
+```
+
+**Binary Location**: `.\zig-out\bin\zigcat.exe` (or `zigcat-wolfssl.exe` for wolfSSL builds)
+
+### Binary Size Comparison
+
+| Configuration | Binary Size | Dependencies | Notes |
+|--------------|-------------|--------------|-------|
+| No TLS | ~1.8 MB | None | Smallest, no SSL/TLS |
+| OpenSSL TLS | ~2.0-2.2 MB | `libssl-3-x64.dll`, `libcrypto-3-x64.dll` | Default, ubiquitous |
+| wolfSSL TLS | ~2.4 MB | `wolfssl.dll` | Lightweight, GPLv2 license |
+
+**Note**: Windows builds use dynamic linking by default. Ensure OpenSSL/wolfSSL DLLs are in your PATH or in the same directory as `zigcat.exe`.
+
+### Troubleshooting
+
+#### Error: "OpenSSL not found"
+
+**Symptoms**: Build fails with `TLS support requested but OpenSSL not found`
+
+**Solutions**:
+1. **vcpkg users**: Verify `VCPKG_ROOT` environment variable is set:
+   ```powershell
+   echo %VCPKG_ROOT%  # Should output: C:\vcpkg
+   ```
+   If not set, run: `setx VCPKG_ROOT "C:\vcpkg"` and restart your terminal.
+
+2. **Chocolatey/Manual users**: Verify installation path exists:
+   ```powershell
+   dir "C:\Program Files\OpenSSL-Win64\bin\libssl-3-x64.dll"
+   ```
+   If not found, reinstall OpenSSL or use vcpkg.
+
+3. **Check library detection** (verbose output):
+   ```powershell
+   zig build -Dtls=true 2>&1 | findstr "OpenSSL Detection"
+   ```
+   This shows which paths the build system checked.
+
+#### Error: "library not found for -llibssl"
+
+**Symptoms**: Linker fails to find `libssl.lib`
+
+**Solutions**:
+1. **vcpkg users**: Ensure you installed for the correct triplet:
+   ```powershell
+   .\vcpkg list openssl  # Should show: openssl:x64-windows
+   ```
+   If not, run: `.\vcpkg install openssl:x64-windows`
+
+2. **Manual users**: Verify `.lib` files exist:
+   ```powershell
+   dir "C:\Program Files\OpenSSL-Win64\lib\libssl.lib"
+   dir "C:\Program Files\OpenSSL-Win64\lib\libcrypto.lib"
+   ```
+   If not found, download the full installer (not "Light" version) from slproweb.com.
+
+#### Runtime Error: "libssl-3-x64.dll not found"
+
+**Symptoms**: `zigcat.exe` runs but crashes with DLL not found error
+
+**Solutions**:
+1. **Add OpenSSL to PATH**:
+   ```powershell
+   setx PATH "%PATH%;C:\Program Files\OpenSSL-Win64\bin"
+   ```
+   Restart your terminal after setting PATH.
+
+2. **Copy DLLs to executable directory** (alternative):
+   ```powershell
+   copy "C:\Program Files\OpenSSL-Win64\bin\*.dll" .\zig-out\bin\
+   ```
+
+3. **vcpkg users**: Copy DLLs from vcpkg installation:
+   ```powershell
+   copy "%VCPKG_ROOT%\installed\x64-windows\bin\*.dll" .\zig-out\bin\
+   ```
+
+#### Performance Issues
+
+**Symptoms**: Slow build times or large binaries
+
+**Solutions**:
+- **Enable Link-Time Optimization** (15-20% smaller binaries):
+  ```powershell
+  zig build -Doptimize=ReleaseSmall -Dlto=thin
+  ```
+
+- **Use wolfSSL backend** (60% smaller TLS binary):
+  ```powershell
+  zig build -Dtls=true -Dtls-backend=wolfssl
+  ```
+
+### Development Tools
+
+**Recommended IDE Setup**:
+- Visual Studio Code with Zig Language extension
+- ZLS (Zig Language Server): https://github.com/zigtools/zls
+
+**Testing**:
+```powershell
+# Run all tests
+zig build test
+
+# Run specific test suites
+zig build test-net        # Network tests
+zig build test-ssl        # TLS/SSL tests (requires OpenSSL/wolfSSL)
+zig build test-timeout    # Timeout handling tests
+```
+
+### Cross-Compilation from Windows
+
+You can cross-compile for other platforms from Windows:
+
+```powershell
+# Linux x64 (musl static binary)
+zig build -Dtarget=x86_64-linux-musl -Dstatic=true -Dtls=false
+
+# macOS Apple Silicon
+zig build -Dtarget=aarch64-macos
+
+# macOS Intel
+zig build -Dtarget=x86_64-macos
+```
+
+**Note**: Cross-compiled TLS builds require the target platform's SSL libraries to be available on the Windows build machine.
