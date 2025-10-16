@@ -109,25 +109,17 @@ jobs:
           - os: windows-latest
             label: Windows
             install_deps: |
-              # Windows runners have OpenSSL pre-installed
-              # Verify OpenSSL installation
-              echo "=== OpenSSL Installation Info ==="
-              if [ -d "C:/Program Files/OpenSSL" ]; then
-                echo "✓ OpenSSL directory found at C:/Program Files/OpenSSL"
-                ls -la "C:/Program Files/OpenSSL/" || true
-              fi
-
-              if [ -d "C:/Program Files/OpenSSL-Win64" ]; then
-                echo "✓ OpenSSL directory found at C:/Program Files/OpenSSL-Win64"
-                ls -la "C:/Program Files/OpenSSL-Win64/" || true
-              fi
-              echo "=== End Installation Info ==="
+              # Windows runners don't have OpenSSL libraries available
+              # All Windows builds must use -Dtls=false
+              echo "=== Windows Build Info ==="
+              echo "TLS will be disabled for all Windows builds (no OpenSSL available)"
+              echo "=== End Build Info ==="
             commands: |
-              zig build test --release=safe
-              zig build test-timeout --release=safe
-              zig build test-udp --release=safe
-              zig build test-validation --release=safe
-              zig build test-platform --release=safe
+              zig build test --release=safe -Dtls=false
+              zig build test-timeout --release=safe -Dtls=false
+              zig build test-udp --release=safe -Dtls=false
+              zig build test-validation --release=safe -Dtls=false
+              zig build test-platform --release=safe -Dtls=false
     env:
       ZIG_VERSION: 0.15.1
       ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/zig-global-cache
