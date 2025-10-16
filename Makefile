@@ -32,7 +32,9 @@ BIN_NAME = zigcat
 	macos-x64 macos-arm64 \
 	windows-x64 windows-x86 \
 	freebsd-x64 openbsd-x64 netbsd-x64 \
-	bsd all-bsd all-x86 all-x86-static help check-size man deb rpm
+	bsd all-bsd all-x86 all-x86-static help check-size man deb rpm \
+	release-all release-linux release-alpine release-bsd release-macos \
+	release-checksums release-package release-validate release-clean
 
 all: build
 
@@ -72,6 +74,17 @@ help:
 	@echo "  make deb                    - Build Debian package (dpkg-buildpackage)"
 	@echo "  make rpm                    - Build RPM package (rpmbuild)"
 	@echo "  make clean                  - Remove build artifacts"
+	@echo ""
+	@echo "Release builds (via Docker):"
+	@echo "  make release-all            - Build all release artifacts (Linux, Alpine, BSD)"
+	@echo "  make release-linux          - Build all Linux variants (glibc, musl, musl+wolfSSL)"
+	@echo "  make release-alpine         - Build Alpine static+wolfSSL (~835KB smallest)"
+	@echo "  make release-bsd            - Build FreeBSD variants"
+	@echo "  make release-macos          - Build macOS variants (requires native macOS)"
+	@echo "  make release-package        - Package artifacts into tarballs"
+	@echo "  make release-checksums      - Generate SHA256SUMS"
+	@echo "  make release-validate       - Validate all release binaries"
+	@echo "  make release-clean          - Clean release artifacts"
 
 build:
 	$(ZIG) build
@@ -216,3 +229,80 @@ man:
 clean:
 	rm -rf zig-out
 	rm -rf zig-cache
+
+# ==============================================================================
+# Release Build Targets (via docker-tests system)
+# ==============================================================================
+
+# Build all release artifacts (Linux glibc, musl, Alpine wolfSSL, FreeBSD)
+release-all:
+	@echo "Building all release artifacts..."
+	./docker-tests/scripts/build-release.sh \
+		--config docker-tests/configs/releases/release-all.yml \
+		--parallel \
+		--verbose
+
+# Build all Linux variants (glibc dynamic+TLS, musl static)
+release-linux:
+	@echo "Building Linux release variants..."
+	./docker-tests/scripts/build-release.sh \
+		--config docker-tests/configs/releases/release-linux.yml \
+		--parallel \
+		--verbose
+
+# Build Alpine static+wolfSSL (smallest build ~835KB)
+release-alpine:
+	@echo "Building Alpine wolfSSL release (smallest with TLS)..."
+	./docker-tests/scripts/build-release.sh \
+		--config docker-tests/configs/releases/release-alpine.yml \
+		--verbose
+
+# Build FreeBSD variants
+release-bsd:
+	@echo "Building BSD release variants..."
+	./docker-tests/scripts/build-release.sh \
+		--config docker-tests/configs/releases/release-bsd.yml \
+		--verbose
+
+# Build macOS variants (REQUIRES NATIVE MACOS)
+release-macos:
+	@echo "Building macOS release variants (native build required)..."
+	@if [ "$$(uname)" != "Darwin" ]; then \
+		echo "ERROR: macOS builds must be run on native macOS system"; \
+		exit 1; \
+	fi
+	./docker-tests/scripts/build-release.sh \
+		--config docker-tests/configs/releases/release-macos.yml \
+		--native \
+		--verbose
+
+# Package existing artifacts into tarballs
+release-package:
+	@echo "Packaging release artifacts..."
+	./docker-tests/scripts/package-artifacts.sh \
+		--artifacts-dir docker-tests/artifacts \
+		--verbose
+
+# Generate SHA256 checksums
+release-checksums:
+	@echo "Generating SHA256 checksums..."
+	@if [ -z "$$(ls -A docker-tests/artifacts/releases/*/zigcat-*.tar.gz 2>/dev/null)" ]; then \
+		echo "ERROR: No release tarballs found. Run 'make release-all' first."; \
+		exit 1; \
+	fi
+	./docker-tests/scripts/generate-checksums.sh \
+		--release-dir "$$(ls -d docker-tests/artifacts/releases/v* | head -1)" \
+		--verbose
+
+# Validate release binaries
+release-validate:
+	@echo "Validating release binaries..."
+	./docker-tests/scripts/validate-releases.sh \
+		--artifacts-dir docker-tests/artifacts \
+		--verbose
+
+# Clean release artifacts
+release-clean:
+	@echo "Cleaning release artifacts..."
+	rm -rf docker-tests/artifacts/releases/*
+	@echo "Release artifacts cleaned"

@@ -1,0 +1,75 @@
+# ZigCat Release Build Configuration - BSD Platforms
+# Builds FreeBSD (cross-compiled from Linux, NO TLS)
+#
+# Note: OpenBSD and NetBSD require native builds due to Zig cross-compilation limitations
+#
+# Usage:
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-bsd.yml
+
+platforms:
+  # FreeBSD (cross-compiled from Linux, NO TLS)
+  - name: freebsd
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.freebsd
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-freebsd
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=false"
+    artifact_suffix: "freebsd"
+    notes: |
+      Cross-compiled from Linux (NO TLS support).
+      For TLS support, build natively on FreeBSD with OpenSSL installed.
+    enabled: true
+
+# Build configuration
+build:
+  zig_version: "0.15.1"
+  optimization: "ReleaseSmall"
+  parallel_builds: false  # Only one BSD platform currently
+  cache_enabled: true
+
+  timeouts:
+    compile: 600
+    test: 180
+    total: 900
+
+# Release settings
+release:
+  version: "v0.1.0"
+  create_checksums: true
+  package_format: "tar.gz"
+  include_files:
+    - LICENSE
+    - README.md
+  notes: |
+    FreeBSD build is cross-compiled from Linux and has TLS disabled.
+
+    For native FreeBSD builds with TLS:
+      pkg install zig openssl
+      zig build -Doptimize=ReleaseSmall -Dtls=true -Dstrip=true
+
+    OpenBSD and NetBSD are not included in this config because Zig 0.15.2
+    lacks cross-compilation libc support for modern BSD versions.
+    Build natively on those platforms instead.
+
+# Resources
+resources:
+  build_containers:
+    cpu_limit: "2.0"
+    memory_limit: "2G"
+
+timeouts:
+  global: 1200
+  build: 600
+  cleanup: 30
+
+logging:
+  level: "info"
+  format: "text"
+
+cleanup:
+  auto_cleanup: true
+  keep_artifacts_on_failure: true

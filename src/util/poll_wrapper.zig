@@ -334,12 +334,13 @@ pub fn shutdown(socket: posix.socket_t, mode: enum { send, receive, both }) !voi
             return error.ShutdownFailed;
         }
     } else {
-        const how = switch (mode) {
-            .send => posix.SHUT.WR,
-            .receive => posix.SHUT.RD,
-            .both => posix.SHUT.RDWR,
-        };
-        try posix.shutdown(socket, how);
+        // Use posix.ShutdownHow enum values
+        // Note: SHUT.WR/RD/RDWR are comptime_int constants that map to the enum
+        switch (mode) {
+            .send => try posix.shutdown(socket, .send),
+            .receive => try posix.shutdown(socket, .recv),
+            .both => try posix.shutdown(socket, .both),
+        }
     }
 }
 

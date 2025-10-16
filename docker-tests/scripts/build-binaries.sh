@@ -268,7 +268,6 @@ build_binary_docker() {
 
         if timeout "$BUILD_TIMEOUT" docker build \
             --no-cache \
-            --platform="$docker_platform" \
             $seccomp_opt \
             --file="$dockerfile_path" \
             --target=artifacts \
@@ -279,19 +278,32 @@ build_binary_docker() {
             echo "=== Build Successful ==="
 
             # Verify binary was created
+            # Try multiple binary names (zigcat, zigcat-wolfssl, zigcat-openssl)
             local binary_name="zigcat"
-            local binary_path="$artifact_dir/bin/$binary_name"
+            local binary_path=""
 
-            if [[ -f "$binary_path" ]]; then
+            for name in "zigcat" "zigcat-wolfssl" "zigcat-openssl"; do
+                if [[ -f "$artifact_dir/bin/$name" ]]; then
+                    binary_path="$artifact_dir/bin/$name"
+                    binary_name="$name"
+                    break
+                fi
+            done
+
+            if [[ -n "$binary_path" && -f "$binary_path" ]]; then
                 # Move binary from bin/ subdirectory to artifact_dir root
-                mv "$binary_path" "$artifact_dir/"
+                # Always rename to 'zigcat' for consistency
+                mv "$binary_path" "$artifact_dir/zigcat"
                 rmdir "$artifact_dir/bin" 2>/dev/null || true
 
-                echo "Binary extracted to: $artifact_dir/$binary_name"
+                if [[ "$binary_name" != "zigcat" ]]; then
+                    echo "Binary found as '$binary_name', renamed to 'zigcat' for consistency"
+                fi
+                echo "Binary extracted to: $artifact_dir/zigcat"
 
                 # Get binary info
                 local binary_size
-                binary_size=$(stat -f%z "$artifact_dir/$binary_name" 2>/dev/null || stat -c%s "$artifact_dir/$binary_name" 2>/dev/null || echo "unknown")
+                binary_size=$(stat -f%z "$artifact_dir/zigcat" 2>/dev/null || stat -c%s "$artifact_dir/zigcat" 2>/dev/null || echo "unknown")
                 echo "Binary size: $binary_size bytes"
 
                 echo ""
@@ -299,7 +311,8 @@ build_binary_docker() {
                 echo "✓ Cross-compiled binary created in Docker"
                 echo "✓ Binary file exists and has reasonable size"
             else
-                echo "✗ Binary not found at expected path: $binary_path"
+                echo "✗ Binary not found at expected path: $artifact_dir/bin/zigcat (or variants)"
+                ls -la "$artifact_dir/bin/" 2>/dev/null || echo "bin/ directory not found"
                 return 1
             fi
 

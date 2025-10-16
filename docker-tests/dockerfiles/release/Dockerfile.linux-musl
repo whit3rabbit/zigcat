@@ -1,0 +1,101 @@
+# Multi-stage Dockerfile for Linux musl static builds (NO TLS)
+# Builds fully static binaries for x86_64, aarch64, x86, and arm
+#
+# Usage:
+#   docker build --platform=linux/amd64 -f docker-tests/dockerfiles/release/Dockerfile.linux-musl .
+#   docker build --platform=linux/arm64 -f docker-tests/dockerfiles/release/Dockerfile.linux-musl .
+
+FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG ZIG_VERSION=0.15.1
+
+# Install system dependencies
+RUN apk add --no-cache \
+    wget \
+    xz \
+    ca-certificates \
+    bash
+
+# Install Zig compiler (architecture-aware)
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
+    mv zig-linux-${ARCH}-${ZIG_VERSION} /opt/zig && \
+    rm zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz
+
+ENV PATH="/opt/zig:$PATH"
+
+# Set Zig cache directories
+ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache
+
+# Create cache directories
+RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
+
+# Create build directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Platform-to-Zig target mapping for musl
+RUN printf '#!/bin/bash\n\
+case "$1" in\n\
+  "linux/amd64") echo "x86_64-linux-musl" ;;\n\
+  "linux/arm64") echo "aarch64-linux-musl" ;;\n\
+  "linux/386") echo "x86-linux-musl" ;;\n\
+  "linux/arm/v7") echo "arm-linux-musleabihf" ;;\n\
+  *) echo "x86_64-linux-musl" ;;\n\
+esac\n' > /usr/local/bin/platform-to-zig-target.sh \
+    && chmod +x /usr/local/bin/platform-to-zig-target.sh
+
+# Build for musl target with NO TLS (static linking for maximum portability)
+# Static builds have TLS disabled to ensure zero dependencies
+RUN --mount=type=cache,target=/build/.zig-cache \
+    --mount=type=cache,target=/tmp/zig-global-cache \
+    echo "Building native musl static binary (NO TLS for portability)" && \
+    zig build -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=false
+
+# Run unit tests (native, NO TLS, static)
+RUN --mount=type=cache,target=/build/.zig-cache \
+    --mount=type=cache,target=/tmp/zig-global-cache \
+    echo "Running native tests (NO TLS, static)" && \
+    zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=false
+
+# Export stage for artifacts
+FROM scratch AS artifacts
+COPY --from=builder /build/zig-out/bin/ /bin/
+COPY --from=builder /build/zig-out/ /artifacts/
+
+# Runtime stage for testing
+FROM alpine:3.18 AS runtime
+
+# Install runtime dependencies for testing
+RUN apk add --no-cache \
+    netcat-openbsd \
+    curl \
+    wget \
+    bash \
+    file \
+    ca-certificates
+
+# Copy built binary
+COPY --from=builder /build/zig-out/bin/zigcat /usr/local/bin/
+
+# Verify static linking (should show "not a dynamic executable")
+RUN echo "=== Binary Information ===" && \
+    file /usr/local/bin/zigcat && \
+    ls -lh /usr/local/bin/zigcat && \
+    echo "=== Static Linkage Verification ===" && \
+    (ldd /usr/local/bin/zigcat 2>&1 | grep -q "not a dynamic executable" && echo "✓ True static binary (no dependencies)") || echo "⚠ Has dynamic dependencies" && \
+    echo "=== Version Check ===" && \
+    /usr/local/bin/zigcat --version
+
+# Create test directories
+RUN mkdir -p /test-results /test-logs /artifacts
+WORKDIR /test
+
+# Default command
+CMD ["/bin/bash", "-c", "sleep infinity"]

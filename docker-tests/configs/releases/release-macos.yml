@@ -1,0 +1,112 @@
+# ZigCat Release Build Configuration - macOS Platforms
+# Builds macOS binaries (REQUIRES NATIVE macOS SYSTEM)
+#
+# ⚠️  IMPORTANT: This configuration requires running on a native macOS system.
+#     Cross-compiling macOS binaries from Docker/Linux is not supported due to:
+#     - Licensing restrictions (macOS SDK cannot be legally redistributed)
+#     - Technical complexity (osxcross setup is fragile and error-prone)
+#
+# Usage (on macOS):
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-macos.yml --native
+
+platforms:
+  # macOS Intel (native build required)
+  - name: macos-x64
+    native_build: true  # This flag indicates no Docker, build directly with Zig
+    architectures: [x64]
+    zig_target_map:
+      x64: x86_64-macos
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=true"
+      - "-Dtls-backend=openssl"
+    artifact_suffix: "macos-openssl"
+    prerequisites:
+      - "macOS system (native build required)"
+      - "Zig 0.15.1+ installed: brew install zig"
+      - "OpenSSL installed: brew install openssl"
+    notes: |
+      This build MUST be performed on a native macOS Intel system.
+      Cross-compilation from Docker/Linux is not supported.
+    enabled: true
+
+  # macOS Apple Silicon (native build required)
+  - name: macos-arm64
+    native_build: true  # This flag indicates no Docker, build directly with Zig
+    architectures: [arm64]
+    zig_target_map:
+      arm64: aarch64-macos
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=true"
+      - "-Dtls-backend=openssl"
+    artifact_suffix: "macos-openssl"
+    prerequisites:
+      - "macOS Apple Silicon system (native build required)"
+      - "Zig 0.15.1+ installed: brew install zig"
+      - "OpenSSL installed: brew install openssl"
+    notes: |
+      This build MUST be performed on a native macOS Apple Silicon system.
+      Cross-compilation from Docker/Linux is not supported.
+    enabled: true
+
+# Build configuration
+build:
+  zig_version: "0.15.1"
+  optimization: "ReleaseSmall"
+  parallel_builds: true
+  cache_enabled: true
+  native_only: true  # No Docker, native builds only
+
+  timeouts:
+    compile: 600
+    test: 180
+    total: 1200
+
+# Release settings
+release:
+  version: "v0.1.0"
+  create_checksums: true
+  package_format: "tar.gz"
+  include_files:
+    - LICENSE
+    - README.md
+  notes: |
+    macOS builds require a native macOS system and cannot be built from Docker/Linux.
+
+    Build instructions:
+      1. Install prerequisites:
+         brew install zig openssl
+
+      2. Run build script:
+         ./docker-tests/scripts/build-release.sh \\
+           --config docker-tests/configs/releases/release-macos.yml \\
+           --native
+
+    Alternative (manual build):
+      # Intel
+      zig build -Dtarget=x86_64-macos -Doptimize=ReleaseSmall -Dtls=true -Dstrip=true
+
+      # Apple Silicon
+      zig build -Dtarget=aarch64-macos -Doptimize=ReleaseSmall -Dtls=true -Dstrip=true
+
+# Resources (not applicable for native builds)
+resources:
+  build_containers:
+    cpu_limit: "N/A"
+    memory_limit: "N/A"
+
+timeouts:
+  global: 1800
+  build: 600
+  cleanup: 30
+
+logging:
+  level: "info"
+  format: "text"
+
+cleanup:
+  auto_cleanup: true
+  keep_artifacts_on_failure: true

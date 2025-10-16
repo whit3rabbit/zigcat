@@ -44,9 +44,11 @@ RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
 
 # Run unit tests (cross-compiled, TLS disabled)
-RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Running tests for Zig target: $ZIG_TARGET (TLS disabled)" && \
-    zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
+# NOTE: Tests are skipped for cross-compiled FreeBSD binaries since they cannot run on Linux
+# Cross-compiled FreeBSD binaries require FreeBSD runtime libraries and kernel
+# RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
+#     echo "Running tests for Zig target: $ZIG_TARGET (TLS disabled)" && \
+#     zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
 
 # Export stage for artifacts
 FROM scratch AS artifacts

@@ -1,0 +1,128 @@
+# ZigCat Release Build Configuration - Complete Matrix
+# Builds all release artifacts for all supported platforms and configurations
+#
+# Usage:
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-all.yml
+
+platforms:
+  # Linux glibc (dynamic with OpenSSL TLS)
+  - name: linux-glibc
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.linux-glibc
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+      arm64: aarch64-linux-gnu
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=true"
+      - "-Dtls-backend=openssl"
+    artifact_suffix: "glibc-openssl"
+    enabled: true
+
+  # Linux musl (static NO TLS for maximum portability)
+  - name: linux-musl-static
+    base_image: alpine:3.18
+    dockerfile: Dockerfile.linux-musl
+    architectures: [amd64, arm64, x86, arm]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+      x86: x86-linux-musl
+      arm: arm-linux-musleabihf
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dstatic=true"
+      - "-Dtls=false"
+    artifact_suffix: "musl-static"
+    enabled: true
+
+  # Alpine musl (static WITH wolfSSL - smallest build ~835KB)
+  - name: alpine-wolfssl
+    base_image: alpine:3.18
+    dockerfile: Dockerfile.alpine-wolfssl
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dstatic=true"
+      - "-Dtls=true"
+      - "-Dtls-backend=wolfssl"
+    artifact_suffix: "musl-wolfssl-static"
+    enabled: true
+
+  # FreeBSD (cross-compiled from Linux)
+  - name: freebsd
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.freebsd
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-freebsd
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=false"
+    artifact_suffix: "freebsd"
+    enabled: true
+
+# Build configuration
+build:
+  zig_version: "0.15.1"
+  optimization: "ReleaseSmall"
+  parallel_builds: true
+  cache_enabled: true
+
+  # Build timeouts (in seconds)
+  timeouts:
+    compile: 600
+    test: 180
+    total: 1800
+
+# Release-specific settings
+release:
+  version: "v0.1.0"  # Override with --version flag
+  create_checksums: true
+  create_signatures: false  # Set to true if GPG signing enabled
+  package_format: "tar.gz"
+  include_files:
+    - LICENSE
+    - README.md
+    - CHANGELOG.md
+
+  # Artifact naming: {name}-{version}-{platform}-{arch}-{suffix}.{format}
+  # Example: zigcat-v0.1.0-linux-x64-glibc-openssl.tar.gz
+  artifact_pattern: "{name}-{version}-{platform}-{arch}-{suffix}.{format}"
+
+# Resource limits
+resources:
+  build_containers:
+    cpu_limit: "4.0"
+    memory_limit: "4G"
+    cpu_reservation: "1.0"
+    memory_reservation: "1G"
+
+# Global timeouts (in seconds)
+timeouts:
+  global: 3600      # 1 hour total
+  build: 600        # 10 minutes per build
+  test: 180         # 3 minutes per test
+  cleanup: 30       # 30 seconds for cleanup
+
+# Logging configuration
+logging:
+  level: "info"     # debug, info, warn, error
+  format: "text"    # json, text
+  timestamps: true
+  colors: true
+
+# Cleanup configuration
+cleanup:
+  auto_cleanup: true
+  keep_artifacts_on_failure: true
+  keep_logs: true
+  cleanup_timeout: 30

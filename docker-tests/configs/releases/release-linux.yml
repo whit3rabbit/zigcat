@@ -1,0 +1,80 @@
+# ZigCat Release Build Configuration - Linux Variants Only
+# Builds Linux glibc (dynamic+TLS) and musl (static) variants
+#
+# Usage:
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-linux.yml
+
+platforms:
+  # Linux glibc (dynamic with OpenSSL TLS)
+  - name: linux-glibc
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.linux-glibc
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+      arm64: aarch64-linux-gnu
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dtls=true"
+      - "-Dtls-backend=openssl"
+    artifact_suffix: "glibc-openssl"
+    enabled: true
+
+  # Linux musl (static NO TLS for maximum portability)
+  - name: linux-musl-static
+    base_image: alpine:3.18
+    dockerfile: Dockerfile.linux-musl
+    architectures: [amd64, arm64, x86, arm]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+      x86: x86-linux-musl
+      arm: arm-linux-musleabihf
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dstatic=true"
+      - "-Dtls=false"
+    artifact_suffix: "musl-static"
+    enabled: true
+
+# Build configuration
+build:
+  zig_version: "0.15.1"
+  optimization: "ReleaseSmall"
+  parallel_builds: true
+  cache_enabled: true
+
+  timeouts:
+    compile: 600
+    test: 180
+    total: 1800
+
+# Release settings
+release:
+  version: "v0.1.0"
+  create_checksums: true
+  package_format: "tar.gz"
+  include_files:
+    - LICENSE
+    - README.md
+
+# Resources
+resources:
+  build_containers:
+    cpu_limit: "4.0"
+    memory_limit: "4G"
+
+timeouts:
+  global: 2400
+  build: 600
+  cleanup: 30
+
+logging:
+  level: "info"
+  format: "text"
+
+cleanup:
+  auto_cleanup: true
+  keep_artifacts_on_failure: true

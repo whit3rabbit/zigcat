@@ -1,0 +1,114 @@
+# Multi-stage Dockerfile for Alpine/musl static builds with wolfSSL TLS
+# Builds the SMALLEST zigcat binary with TLS support (~835KB on x64)
+# IMPORTANT: wolfSSL is licensed under GPLv2
+#
+# Usage:
+#   docker build --platform=linux/amd64 \
+#     --security-opt seccomp=docker-tests/seccomp/zig-builder.json \
+#     -f docker-tests/dockerfiles/release/Dockerfile.alpine-wolfssl .
+
+FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG ZIG_VERSION=0.15.1
+
+# Install system dependencies including wolfSSL
+RUN apk add --no-cache \
+    wget \
+    xz \
+    ca-certificates \
+    bash \
+    wolfssl-dev
+
+# Install Zig compiler (architecture-aware)
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
+    mv zig-linux-${ARCH}-${ZIG_VERSION} /opt/zig && \
+    rm zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz
+
+ENV PATH="/opt/zig:$PATH"
+
+# Set Zig cache directories for better control and performance
+ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache
+
+# Create cache directories
+RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
+
+# Create build directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Platform-to-Zig target mapping for musl
+RUN printf '#!/bin/bash\n\
+case "$1" in\n\
+  "linux/amd64") echo "x86_64-linux-musl" ;;\n\
+  "linux/arm64") echo "aarch64-linux-musl" ;;\n\
+  *) echo "x86_64-linux-musl" ;;\n\
+esac\n' > /usr/local/bin/platform-to-zig-target.sh \
+    && chmod +x /usr/local/bin/platform-to-zig-target.sh
+
+# Build for musl target with TLS using wolfSSL (static linking)
+# NOTE: wolfSSL supports static linking, enabling TLS in static musl builds
+# Binary will be named zigcat-wolfssl to distinguish from OpenSSL builds
+# Build natively (no cross-compilation) to avoid architecture mismatch issues
+#
+# IMPORTANT: This build requires Docker 20.10.6+ with libseccomp 2.4.4+
+#            OR use custom seccomp profile: --security-opt seccomp=docker-tests/seccomp/zig-builder.json
+#            Zig 0.15.1 uses faccessat2 syscall which older Docker versions block (errno 38 / ENOSYS)
+#            See docker-tests/DOCKER_BUILD_ERRORS.md for troubleshooting
+RUN --mount=type=cache,target=/build/.zig-cache \
+    --mount=type=cache,target=/tmp/zig-global-cache \
+    echo "Building native musl static binary with wolfSSL TLS (~835KB)" && \
+    zig build -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl
+
+# Run unit tests (native, TLS enabled with wolfSSL, static)
+RUN --mount=type=cache,target=/build/.zig-cache \
+    --mount=type=cache,target=/tmp/zig-global-cache \
+    echo "Running native tests with wolfSSL TLS (static)" && \
+    zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=true -Dtls-backend=wolfssl
+
+# Export stage for artifacts
+FROM scratch AS artifacts
+COPY --from=builder /build/zig-out/bin/ /bin/
+COPY --from=builder /build/zig-out/ /artifacts/
+
+# Runtime stage for testing
+FROM alpine:3.18 AS runtime
+
+# Install runtime dependencies for testing
+RUN apk add --no-cache \
+    netcat-openbsd \
+    curl \
+    wget \
+    bash \
+    file \
+    ca-certificates
+
+# Copy built binary
+COPY --from=builder /build/zig-out/bin/zigcat-wolfssl /usr/local/bin/
+
+# Verify static linking and TLS support
+RUN echo "=== Binary Information ===" && \
+    file /usr/local/bin/zigcat-wolfssl && \
+    ls -lh /usr/local/bin/zigcat-wolfssl && \
+    echo "=== Static Linkage Verification ===" && \
+    (ldd /usr/local/bin/zigcat-wolfssl 2>&1 | grep -q "not a dynamic executable" && echo "✓ True static binary (no dependencies)") || echo "⚠ Has dynamic dependencies" && \
+    echo "=== Version Check ===" && \
+    /usr/local/bin/zigcat-wolfssl --version && \
+    echo "=== TLS Support Check ===" && \
+    (strings /usr/local/bin/zigcat-wolfssl | grep -qi "wolfssl" && echo "✓ wolfSSL TLS support detected") || echo "⚠ wolfSSL not detected" && \
+    echo "" && \
+    echo "⚠️  LICENSE NOTICE: This binary includes wolfSSL (GPLv2 license)" && \
+    echo "    Distribution of this binary requires GPL compliance."
+
+# Create test directories
+RUN mkdir -p /test-results /test-logs /artifacts
+WORKDIR /test
+
+# Default command
+CMD ["/bin/bash", "-c", "sleep infinity"]

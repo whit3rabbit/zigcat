@@ -1,5 +1,7 @@
 # Multi-stage Dockerfile for Linux cross-compilation
-FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS builder
+# Container runs on native architecture, Zig handles cross-compilation
+# Using Ubuntu 20.04 (glibc 2.31) to avoid ld.lld --no-allow-shlib-undefined issues with glibc 2.34+
+FROM ubuntu:20.04 AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
@@ -12,13 +14,17 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cross-compilation toolchain and TLS dependencies
-RUN dpkg --add-architecture arm64 && \
+# Install TLS dependencies for target platform
+# Container architecture now matches target (no cross-compilation needed)
+# Set non-interactive mode and pre-configure tzdata to avoid prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
     apt-get update && apt-get install -y \
-        gcc-aarch64-linux-gnu \
-        libssl-dev \
-        libssl-dev:arm64 \
-        pkg-config \
+    gcc \
+    libssl-dev \
+    libcrypto++-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zig compiler (architecture-aware)
@@ -61,7 +67,7 @@ COPY --from=builder /build/zig-out/bin/ /bin/
 COPY --from=builder /build/zig-out/ /artifacts/
 
 # Runtime stage for testing
-FROM ubuntu:22.04 AS runtime
+FROM ubuntu:20.04 AS runtime
 
 # Install runtime dependencies for testing
 RUN apt-get update && apt-get install -y \

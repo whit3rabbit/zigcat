@@ -423,33 +423,38 @@ pub fn build(b: *std.Build) void {
 
             // Add include and library search paths for cross-compilation (Docker builds)
             // This helps Zig find OpenSSL headers and libraries when cross-compiling for Linux targets
+            // CRITICAL: Only add paths matching the target architecture to avoid linker errors
             if (target.result.os.tag == .linux) {
-                // Standard Ubuntu/Debian include paths for native and cross-compilation
-                const include_paths = [_][]const u8{
-                    "/usr/include/x86_64-linux-gnu", // x86_64 (amd64) headers
-                    "/usr/include/aarch64-linux-gnu", // aarch64 (arm64) headers
-                    "/usr/include", // Standard include path
-                    "/usr/local/include", // User-installed headers
-                };
-                for (include_paths) |include_path| {
-                    std.fs.accessAbsolute(include_path, .{}) catch continue;
-                    exe.addSystemIncludePath(.{ .cwd_relative = include_path });
+                // Determine architecture-specific paths based on target CPU architecture
+                const arch = target.result.cpu.arch;
+
+                // Architecture-specific include paths (only for matching arch)
+                // NOTE: Add paths unconditionally - linker will skip non-existent paths
+                if (arch == .x86_64) {
+                    exe.addSystemIncludePath(.{ .cwd_relative = "/usr/include/x86_64-linux-gnu" });
+                } else if (arch == .aarch64) {
+                    exe.addSystemIncludePath(.{ .cwd_relative = "/usr/include/aarch64-linux-gnu" });
                 }
 
-                // Standard Ubuntu/Debian library paths for native and cross-compilation
-                const lib_paths = [_][]const u8{
-                    "/usr/lib/x86_64-linux-gnu", // x86_64 (amd64) libraries
-                    "/usr/lib/aarch64-linux-gnu", // aarch64 (arm64) libraries
-                    "/usr/lib", // Standard library path
-                    "/usr/local/lib", // User-installed libraries
-                    "/lib/x86_64-linux-gnu", // Additional x86_64 path
-                    "/lib/aarch64-linux-gnu", // Additional aarch64 path
-                };
-                for (lib_paths) |lib_path| {
-                    std.fs.accessAbsolute(lib_path, .{}) catch continue;
-                    exe.addLibraryPath(.{ .cwd_relative = lib_path });
+                // Generic include paths (always add as fallback)
+                exe.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+                exe.addSystemIncludePath(.{ .cwd_relative = "/usr/local/include" });
+
+                // Architecture-specific library paths (only for matching arch)
+                // NOTE: Add paths unconditionally - linker will skip non-existent paths
+                if (arch == .x86_64) {
+                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
+                    exe.addLibraryPath(.{ .cwd_relative = "/lib/x86_64-linux-gnu" });
+                } else if (arch == .aarch64) {
+                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+                    exe.addLibraryPath(.{ .cwd_relative = "/lib/aarch64-linux-gnu" });
                 }
-                std.debug.print("[OpenSSL] Added Linux include and library search paths for cross-compilation\n", .{});
+
+                // Generic library paths (always add as fallback)
+                exe.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+                exe.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+
+                std.debug.print("[OpenSSL] Added Linux include and library search paths for {s} architecture\n", .{@tagName(arch)});
             }
 
             // Add Windows-specific OpenSSL paths for vcpkg, GitHub Actions, and Chocolatey

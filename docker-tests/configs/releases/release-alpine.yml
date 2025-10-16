@@ -1,0 +1,74 @@
+# ZigCat Release Build Configuration - Alpine wolfSSL (Smallest Build)
+# Builds Alpine musl static binaries with wolfSSL TLS support (~835KB)
+#
+# Usage:
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-alpine.yml
+
+platforms:
+  # Alpine musl (static WITH wolfSSL - smallest build ~835KB)
+  - name: alpine-wolfssl
+    base_image: alpine:3.18
+    dockerfile: Dockerfile.alpine-wolfssl
+    architectures: [amd64, arm64]
+    zig_target_map:
+      amd64: x86_64-linux-musl
+      arm64: aarch64-linux-musl
+    build_options:
+      - "-Doptimize=ReleaseSmall"
+      - "-Dstrip=true"
+      - "-Dstatic=true"
+      - "-Dtls=true"
+      - "-Dtls-backend=wolfssl"
+    artifact_suffix: "musl-wolfssl-static"
+    notes: |
+      This is the smallest zigcat build with TLS support (~835KB on x64).
+      Uses wolfSSL for TLS, which is licensed under GPLv2.
+      Fully static binary with no dependencies.
+    enabled: true
+
+# Build configuration
+build:
+  zig_version: "0.15.1"
+  optimization: "ReleaseSmall"
+  parallel_builds: true
+  cache_enabled: true
+
+  # Alpine builds may need custom seccomp profile for Zig 0.15.1
+  docker_security_opts:
+    - "seccomp=docker-tests/seccomp/zig-builder.json"
+
+  timeouts:
+    compile: 600
+    test: 180
+    total: 1200
+
+# Release settings
+release:
+  version: "v0.1.0"
+  create_checksums: true
+  package_format: "tar.gz"
+  include_files:
+    - LICENSE
+    - README.md
+  license_notice: |
+    This build includes wolfSSL, which is licensed under GPLv2.
+    By using this binary, you must comply with GPLv2 terms.
+
+# Resources
+resources:
+  build_containers:
+    cpu_limit: "2.0"
+    memory_limit: "2G"
+
+timeouts:
+  global: 1800
+  build: 600
+  cleanup: 30
+
+logging:
+  level: "info"
+  format: "text"
+
+cleanup:
+  auto_cleanup: true
+  keep_artifacts_on_failure: true
