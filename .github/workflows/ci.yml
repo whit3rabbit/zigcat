@@ -178,8 +178,13 @@ jobs:
       - name: Build artifact (for testing)
         shell: bash
         run: |
-          # Build with TLS enabled on all platforms
-          zig build -Dstrip=true
+          # Build with TLS disabled on Windows (no OpenSSL available)
+          # Build with TLS enabled on other platforms
+          if [ "${{ matrix.label }}" = "Windows" ]; then
+            zig build -Dstrip=true -Dtls=false
+          else
+            zig build -Dstrip=true
+          fi
           ls -lh zig-out/bin/
 
       - name: Upload build artifact
