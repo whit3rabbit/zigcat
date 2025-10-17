@@ -34,6 +34,15 @@ zigcat \- Concatenate and redirect sockets
 .br
 .B zigcat
 .BR --help " | " --version " | " --version-all
+.br
+.B zigcat
+.BR -l " | " --listen
+.BR --gs-secret " " \fIsecret\fR
+[\fIoptions\fR]
+.br
+.B zigcat
+.BR --gs-secret " " \fIsecret\fR
+[\fIoptions\fR]
 .SH DESCRIPTION
 .B zigcat
 is a feature-rich network utility which reads and writes data across networks from the command line.
@@ -196,6 +205,74 @@ The SNI server name for virtual hosting.
 .TP
 .BR --ssl-alpn " <protocols>"
 The ALPN protocol list (e.g., "h2,http/1.1").
+.SS "GSOCKET OPTIONS"
+.PP
+.B zigcat
+supports NAT traversal through the Global Socket Relay Network (GSRN) using the
+.B --gs-secret
+flag. This allows two peers behind NAT/firewalls to establish a direct connection without port forwarding or VPN configuration.
+.PP
+.B Protocol Overview:
+.IP \(bu 2
+Both peers derive a shared GS-Address from the secret using SHA256
+.IP \(bu 2
+Peers connect to gs.thc.org:443 (GSRN relay server)
+.IP \(bu 2
+Server sends GsListen packet, client sends GsConnect packet
+.IP \(bu 2
+Relay matches addresses and establishes raw TCP tunnel
+.IP \(bu 2
+SRP (Secure Remote Password) handshake provides end-to-end encryption
+.IP \(bu 2
+Cipher: SRP-AES-256-CBC-SHA (compatible with gs-netcat)
+.PP
+.B Security Notes:
+.IP \(bu 2
+SRP provides mutual authentication without X.509 certificates
+.IP \(bu 2
+Uses SHA-1 MAC (weak, but required for gs-netcat compatibility)
+.IP \(bu 2
+Secret strength is critical (use strong passphrases)
+.IP \(bu 2
+No host/port arguments needed in connect mode (uses secret only)
+.PP
+.B SECURITY WARNING:
+.PP
+Gsocket uses
+.B SRP-AES-256-CBC-SHA
+which includes SHA-1 for message authentication. SHA-1 is
+.B cryptographically weak
+with known collision vulnerabilities. While AES-256 provides strong encryption for confidentiality, the SHA-1 HMAC component reduces overall security.
+.PP
+.B Do NOT use gsocket for:
+.IP \(bu 2
+Highly sensitive data (financial, medical, classified)
+.IP \(bu 2
+Compliance environments (PCI DSS, FIPS 140-2/3, SOC 2)
+.IP \(bu 2
+High-value targets (nation-state threat models, critical infrastructure)
+.IP \(bu 2
+Long-term data protection requiring >5 year confidentiality
+.PP
+.B Use at your own risk.
+For production systems handling sensitive data, consider alternatives:
+.BR WireGuard ", " OpenVPN " (TLS 1.3), " SSH ", or " Tailscale/ZeroTier .
+See
+.I GSOCKET.md
+for detailed security considerations.
+.PP
+.B Incompatibilities:
+.IP \(bu 2
+Cannot use with UDP mode (\fB-u\fR) or SCTP (\fB--sctp\fR)
+.IP \(bu 2
+Cannot use with Unix sockets (\fB-U\fR)
+.IP \(bu 2
+Cannot use with proxies (\fB--proxy\fR)
+.IP \(bu 2
+Cannot use with SSL/TLS (\fB--ssl\fR) or DTLS (\fB--dtls\fR)
+.TP
+.BR --gs-secret " <secret>"
+Shared secret for GSRN connection. Both peers must use the exact same secret. The secret is used to derive a 128-bit GS-Address (SHA256 hash) for peer matching on the relay server.
 .SS "PROXY OPTIONS"
 .TP
 .BR --proxy " <url>"
@@ -571,6 +648,65 @@ DTLS server with client certificate verification (mutual TLS):
 .RS
 .EX
 zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem --ssl-verify --ssl-trustfile ca.pem 4433
+.EE
+.RE
+.SS "Global Socket (NAT traversal)"
+.PP
+Listen via GSRN (wait for peer):
+.RS
+.EX
+zigcat -l --gs-secret MySecret
+.EE
+.RE
+.PP
+Connect via GSRN (to listening peer):
+.RS
+.EX
+zigcat --gs-secret MySecret
+.EE
+.RE
+.PP
+Both peers auto-connect through gs.thc.org relay. No host/port arguments needed in connect mode.
+.PP
+File transfer example (receiver):
+.RS
+.EX
+zigcat -l --gs-secret "file-transfer-secret" > received-file.tar.gz
+.EE
+.RE
+.PP
+File transfer example (sender):
+.RS
+.EX
+cat myfile.tar.gz | zigcat --gs-secret "file-transfer-secret"
+.EE
+.RE
+.PP
+Remote shell with GSRN (server):
+.RS
+.EX
+zigcat -l --gs-secret "shell-secret" -e /bin/sh --allow
+.EE
+.RE
+.PP
+Remote shell with GSRN (client):
+.RS
+.EX
+zigcat --gs-secret "shell-secret"
+.EE
+.RE
+.PP
+GSRN with custom timeout (for slow networks):
+.RS
+.EX
+zigcat -l --gs-secret MySecret -w 60
+.EE
+.RE
+.PP
+Verbose GSRN connection with protocol details:
+.RS
+.EX
+zigcat -vv --gs-secret MySecret
 .EE
 .RE
 .SH "SEE ALSO"

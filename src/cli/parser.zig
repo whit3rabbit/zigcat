@@ -271,6 +271,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
             cfg.ssl_crl = args[i];
+        } else if (std.mem.eql(u8, arg, "--gs-secret")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.gsocket_secret = args[i];
         } else if (std.mem.eql(u8, arg, "--proxy")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;

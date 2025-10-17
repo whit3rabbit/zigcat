@@ -115,7 +115,12 @@ inline fn contextToPtr(comptime T: type, context: *anyopaque) *T {
 ///
 /// Returns: Error if connection fails or I/O error occurs
 pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void {
-    // Check for Unix socket mode first
+    // Check for gsocket mode first
+    if (cfg.gsocket_secret) |secret| {
+        return runGsocketClient(allocator, cfg, secret);
+    }
+
+    // Check for Unix socket mode
     if (cfg.unix_socket_path) |socket_path| {
         return runUnixSocketClient(allocator, cfg, socket_path);
     }
@@ -486,6 +491,55 @@ pub fn tlsConnectionToStream(tls_conn: *tls.TlsConnection) stream.Stream {
     };
 }
 
+/// Wrap SRP connection in generic stream.Stream interface.
+///
+/// This adapter allows SrpConnection to work with bidirectionalTransfer(),
+/// which expects a unified Stream interface (same pattern as TLS, DTLS, Telnet).
+///
+/// The wrapper provides:
+/// - read(): Decrypts data from SRP-AES-256-CBC-SHA stream
+/// - write(): Encrypts data before sending
+/// - close(): Sends TLS close_notify
+/// - handle(): Returns underlying socket handle for poll()
+///
+/// Parameters:
+///   srp_conn: Heap-allocated SrpConnection pointer
+///
+/// Returns: stream.Stream with vtable pointing to SRP methods
+pub fn srpConnectionToStream(srp_conn: anytype) stream.Stream {
+    return stream.Stream{
+        .context = @ptrCast(@constCast(srp_conn)),
+        .readFn = struct {
+            fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
+                const srp = @import("tls/srp_openssl.zig");
+                const c = contextToPtr(srp.SrpConnection, context);
+                return c.read(buffer);
+            }
+        }.read,
+        .writeFn = struct {
+            fn write(context: *anyopaque, data: []const u8) anyerror!usize {
+                const srp = @import("tls/srp_openssl.zig");
+                const c = contextToPtr(srp.SrpConnection, context);
+                return c.write(data);
+            }
+        }.write,
+        .closeFn = struct {
+            fn close(context: *anyopaque) void {
+                const srp = @import("tls/srp_openssl.zig");
+                const c = contextToPtr(srp.SrpConnection, context);
+                c.close();
+            }
+        }.close,
+        .handleFn = struct {
+            fn handle(context: *anyopaque) std.posix.socket_t {
+                const srp = @import("tls/srp_openssl.zig");
+                const c = contextToPtr(srp.SrpConnection, context);
+                return c.getSocket();
+            }
+        }.handle,
+    };
+}
+
 pub fn dtlsConnectionToStream(dtls_conn: *dtls.DtlsConnection) stream.Stream {
     return stream.Stream{
         .context = @ptrCast(dtls_conn),
@@ -585,6 +639,82 @@ fn executeCommand(allocator: std.mem.Allocator, socket: posix.socket_t, cmd: []c
     _ = cfg;
     logging.logWarning("Command execution not yet implemented\n", .{});
     return error.NotImplemented;
+}
+
+/// Run gsocket client mode - NAT-traversal connection via GSRN relay.
+///
+/// gsocket client workflow:
+/// 1. Establish GSRN tunnel to relay server (gs.thc.org)
+/// 2. Perform SRP handshake for end-to-end encryption
+/// 3. Bidirectional data transfer with logging
+///
+/// gsocket specific behavior:
+/// - No TLS support (has its own SRP encryption)
+/// - No proxy support (has its own NAT traversal)
+/// - Connects through GSRN relay network
+/// - End-to-end encrypted with SRP-AES-256-CBC-SHA
+///
+/// Parameters:
+///   allocator: Memory allocator for dynamic allocations
+///   cfg: Configuration with gsocket secret and connection options
+///   secret: Shared secret for GSRN address derivation and SRP auth
+///
+/// Returns: Error if connection fails or I/O error occurs
+fn runGsocketClient(allocator: std.mem.Allocator, cfg: *const config.Config, secret: []const u8) !void {
+    const gsocket = @import("net/gsocket.zig");
+    const srp = @import("tls/srp_openssl.zig");
+
+    if (cfg.verbose) {
+        logging.logVerbose(cfg, "gsocket mode enabled\n", .{});
+        logging.logVerbose(cfg, "  Mode: {s}\n", .{if (cfg.listen_mode) "listen" else "connect"});
+    }
+
+    // 1. Establish GSRN tunnel through relay
+    //    Connect to gs.thc.org:443, send GsListen/GsConnect packet,
+    //    wait for GsStart response, return raw TCP tunnel
+    const raw_stream = try gsocket.establishGsrnTunnel(allocator, cfg);
+    defer raw_stream.close();
+
+    // 2. Perform SRP handshake over tunnel
+    //    Use -w timeout if set, otherwise connect_timeout
+    const timeout_ms = if (cfg.wait_time > 0) cfg.wait_time else cfg.connect_timeout;
+
+    // Role determined by GsStart.flags from relay:
+    //   GS_FL_PROTO_START_SERVER → act as SRP server
+    //   GS_FL_PROTO_START_CLIENT → act as SRP client
+    // (Currently only client mode implemented)
+    var srp_conn = if (cfg.listen_mode)
+        try srp.SrpConnection.initServer(allocator, raw_stream, secret, timeout_ms)
+    else
+        try srp.SrpConnection.initClient(allocator, raw_stream, secret, timeout_ms);
+
+    defer {
+        srp_conn.close(); // Send TLS close_notify
+        srp_conn.deinit(allocator); // Free OpenSSL resources AND heap-allocated struct
+    }
+
+    if (cfg.verbose) {
+        logging.logVerbose(cfg, "gsocket connection established (encrypted with SRP)\n", .{});
+    }
+
+    // 3. Handle zero-I/O mode (connection test)
+    if (cfg.zero_io) {
+        if (cfg.verbose) {
+            logging.logVerbose(cfg, "Zero-I/O mode (-z): gsocket connection test successful, closing.\n", .{});
+        }
+        return;
+    }
+
+    // 4. Bidirectional data transfer
+    var output_logger = try output.OutputLoggerAuto.init(allocator, cfg.output_file, cfg.append_output);
+    defer output_logger.deinit();
+
+    var hex_dumper = try hexdump.HexDumperAuto.initFromPath(allocator, cfg.hex_dump_file);
+    defer hex_dumper.deinit();
+
+    // Wrap SRP connection in Stream interface for bidirectionalTransfer()
+    const s = srpConnectionToStream(srp_conn);
+    try transfer.bidirectionalTransfer(allocator, s, cfg, &output_logger, &hex_dumper);
 }
 
 /// Run Unix socket client mode - connect to Unix domain socket.

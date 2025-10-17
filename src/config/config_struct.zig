@@ -146,6 +146,10 @@ pub const Config = struct {
     /// Anti-replay window size (number of packets). Controlled by `--dtls-replay-window`. Default: `64`.
     dtls_replay_window: u32 = 64,
 
+    // Global Socket (gsocket)
+    /// Shared secret for gsocket NAT-traversal mode. Controlled by `--gs-secret`. Default: `null`.
+    gsocket_secret: ?[]const u8 = null,
+
     // Proxy
     /// Proxy address (`host:port`). Controlled by `-x`, `--proxy`. Default: `null`.
     proxy: ?[]const u8 = null,
