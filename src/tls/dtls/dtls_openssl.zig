@@ -823,7 +823,7 @@ pub const OpenSslDtls = struct {
 ///
 /// **Returns:**
 /// 1 on success, 0 on failure (OpenSSL convention)
-fn generateCookie(ssl: *c.SSL, cookie: [*c]u8, cookie_len: [*c]c_uint) callconv(.C) c_int {
+fn generateCookie(ssl: *c.SSL, cookie: [*c]u8, cookie_len: [*c]c_uint) callconv(std.builtin.CallingConvention.c) c_int {
     // Get client address from BIO
     var peer_addr: posix.sockaddr = undefined;
     const peer_len: posix.socklen_t = @sizeOf(posix.sockaddr);
@@ -880,7 +880,7 @@ fn generateCookie(ssl: *c.SSL, cookie: [*c]u8, cookie_len: [*c]c_uint) callconv(
 ///
 /// **Returns:**
 /// 1 if cookie is valid, 0 if invalid (OpenSSL convention)
-fn verifyCookie(ssl: *c.SSL, cookie: [*c]const u8, cookie_len: c_uint) callconv(.C) c_int {
+fn verifyCookie(ssl: *c.SSL, cookie: [*c]const u8, cookie_len: c_uint) callconv(std.builtin.CallingConvention.c) c_int {
     // Generate expected cookie for this client
     var expected_cookie: [32]u8 = undefined;
     var expected_len: c_uint = expected_cookie.len;

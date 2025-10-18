@@ -149,7 +149,7 @@ pub fn runUnixSocketClient(
         const connection = Connection.fromUnixSocket(unix_client.getSocket(), null);
 
         // Wrap with TelnetConnection for protocol processing
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null, false);
         defer telnet_conn.deinit();
 
         if (cfg.verbose) {

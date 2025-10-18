@@ -567,7 +567,13 @@ pub const TelnetProcessor = struct {
         const opt = option orelse return;
 
         // Use option handlers for subnegotiation
-        try self.option_handlers.handleSubnegotiation(self.outputAllocator(), opt, data, response);
+        self.option_handlers.handleSubnegotiation(self.outputAllocator(), opt, data, response) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // All other errors (InvalidOption, BufferOverflow, SubnegotiationTooLong, InvalidWtf8,
+            // EnvironmentVariableNotFound) are not in our error set.
+            // Map them all to InvalidCommand as a generic fallback
+            else => return error.InvalidCommand,
+        };
     }
 
     fn outputAllocator(self: *const TelnetProcessor) std.mem.Allocator {
@@ -600,7 +606,7 @@ pub const TelnetProcessor = struct {
             try self.option_handlers.updateWindowSize(self.allocator, width, height, &response);
         }
 
-        return try response.toOwnedSlice();
+        return try response.toOwnedSlice(self.allocator);
     }
 
     /// Get the current state of a Telnet option

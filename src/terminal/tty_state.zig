@@ -1,8 +1,8 @@
 //! This module defines the state management for terminal (TTY) operations.
 //! Its primary purpose is to hold the original terminal settings (`termios`) so
 //! they can be restored when the application exits, ensuring the terminal is
-...
-//! (`tcgetattr`, `tcsetattr`, etc.) can be mocked for testing purposes.
+//! returned to its original mode. Additionally, this module abstracts platform-
+//! specific terminal control functions so that they can be mocked for testing.
 
 const std = @import("std");
 const posix = std.posix;

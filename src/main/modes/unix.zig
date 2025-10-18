@@ -20,7 +20,7 @@ const security = @import("../../util/security.zig");
 const output = @import("../../io/output.zig");
 const hexdump = @import("../../io/hexdump.zig");
 const exec = @import("../../server/exec.zig");
-const client = @import("../../client.zig");
+const client = @import("../../client/mod.zig");
 const transfer = @import("../../io/transfer.zig");
 const Connection = @import("../../net/connection.zig").Connection;
 const TelnetConnection = @import("../../protocol/telnet_connection.zig").TelnetConnection;
@@ -32,8 +32,8 @@ const broker_mode = @import("broker.zig");
 /// This function handles the full lifecycle of a Unix domain socket server. It
 /// validates the socket path, drops privileges if configured, creates and binds
 /// the socket, and then enters an accept loop. It supports multiple operational
-...
-/// (`--max-conns`), and graceful shutdown.
+/// modes: standalone server, exec mode, broker mode, basic data transfer,
+/// connection limits (`--max-conns`), and graceful shutdown.
 ///
 /// - `allocator`: The memory allocator for all dynamic allocations.
 /// - `cfg`: A pointer to the application's global configuration.

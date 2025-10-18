@@ -35,7 +35,7 @@ pub const Collection = struct {
     pub fn init(allocator: std.mem.Allocator) Collection {
         return .{
             .allocator = allocator,
-            .entries = std.ArrayList(OwnedEntry).init(allocator),
+            .entries = std.ArrayList(OwnedEntry){},
         };
     }
 
@@ -77,7 +77,7 @@ pub fn buildIsResponse(
     allocator: std.mem.Allocator,
     entries: []const OwnedEntry,
 ) std.mem.Allocator.Error![]u8 {
-    var response = std.ArrayList(u8).init(allocator);
+    var response = std.ArrayList(u8){};
     errdefer response.deinit(allocator);
 
     try response.append(allocator, NewEnviron.IS);

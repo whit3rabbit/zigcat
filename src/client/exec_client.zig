@@ -137,7 +137,7 @@ fn runExecSession(
         const TelnetConnection = @import("../protocol/telnet_connection.zig").TelnetConnection;
 
         const connection = Connection.fromSocket(socket);
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null, false);
         defer telnet_conn.deinit();
 
         if (cfg.verbose) {

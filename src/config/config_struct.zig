@@ -64,6 +64,8 @@ pub const Config = struct {
     telnet_signal_mode: types.TelnetSignalMode = .local,
     /// Telnet editing behavior. Controlled by `--telnet-edit-mode`. Default: `.remote`.
     telnet_edit_mode: types.TelnetEditMode = .remote,
+    /// ANSI escape code handling. Controlled by `--telnet-ansi-mode`. Default: `null` (auto: passthrough for TTY, disabled for non-TTY).
+    telnet_ansi_mode: ?types.AnsiMode = null,
 
     // Server options
     /// Keep listening for new connections after the current one finishes. Controlled by `-k`, `--keep-listening`. Default: `false`.

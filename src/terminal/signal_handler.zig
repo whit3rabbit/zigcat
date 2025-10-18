@@ -10,7 +10,7 @@ const supports_posix_signals = has_sigwinch;
 var handler_installed = std.atomic.Value(bool).init(false);
 var window_size_changed = std.atomic.Value(bool).init(false);
 
-fn sigwinchHandler(_: c_int) callconv(.C) void {
+fn sigwinchHandler(_: c_int) callconv(std.builtin.CallingConvention.c) void {
     window_size_changed.store(true, .release);
 }
 
@@ -40,7 +40,7 @@ pub fn setupSigwinchHandler() !void {
         .flags = posix.SA.RESTART,
     };
 
-    try posix.sigaction(posix.SIG.WINCH, &sigaction, null);
+    posix.sigaction(posix.SIG.WINCH, &sigaction, null);
     handler_installed.store(true, .release);
 }
 

@@ -12,7 +12,7 @@ const std = @import("std");
 
 const cli = @import("../cli.zig");
 const config = @import("../config.zig");
-const client = @import("../client.zig");
+const client = @import("../client/mod.zig");
 const net = @import("../net/socket.zig");
 const logging = @import("../util/logging.zig");
 

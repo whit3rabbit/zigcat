@@ -18,7 +18,6 @@ const broker = @import("../../server/broker.zig");
 ///
 /// This function sets up the `BrokerServer` instance, logs the initial configuration,
 /// and starts the main event loop. It handles initialization errors and gracefully
-...
 /// logs server shutdown.
 ///
 /// - `allocator`: The memory allocator for all dynamic allocations.

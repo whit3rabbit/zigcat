@@ -277,7 +277,8 @@ pub const NewEnvironHandler = struct {
         return .{};
     }
 
-    pub fn handleWill(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleWill(self: *NewEnvironHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        _ = self;
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.do),
@@ -285,7 +286,8 @@ pub const NewEnvironHandler = struct {
         });
     }
 
-    pub fn handleDo(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleDo(self: *NewEnvironHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        _ = self;
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.will),
@@ -293,7 +295,8 @@ pub const NewEnvironHandler = struct {
         });
     }
 
-    pub fn handleWont(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleWont(self: *NewEnvironHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        _ = self;
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.dont),
@@ -301,7 +304,8 @@ pub const NewEnvironHandler = struct {
         });
     }
 
-    pub fn handleDont(allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+    pub fn handleDont(self: *NewEnvironHandler, allocator: std.mem.Allocator, response: *std.ArrayList(u8)) !void {
+        _ = self;
         try response.appendSlice(allocator, &[_]u8{
             @intFromEnum(TelnetCommand.iac),
             @intFromEnum(TelnetCommand.wont),
@@ -322,7 +326,7 @@ pub const NewEnvironHandler = struct {
                 var requested = try parseRequestedNames(allocator, data[1..]);
                 defer freeRequestedNames(&requested, allocator);
 
-                var requested_refs = std.ArrayList([]const u8).init(allocator);
+                var requested_refs = std.ArrayList([]const u8){};
                 defer requested_refs.deinit(allocator);
                 for (requested.items) |name| {
                     try requested_refs.append(allocator, name);
@@ -358,7 +362,7 @@ pub const NewEnvironHandler = struct {
         allocator: std.mem.Allocator,
         names: []const []const u8,
     ) std.mem.Allocator.Error!std.ArrayList([]const u8) {
-        var filtered = std.ArrayList([]const u8).init(allocator);
+        var filtered = std.ArrayList([]const u8){};
         errdefer filtered.deinit(allocator);
 
         for (names) |name| {
@@ -374,7 +378,7 @@ pub const NewEnvironHandler = struct {
         allocator: std.mem.Allocator,
         data: []const u8,
     ) std.mem.Allocator.Error!std.ArrayList([]u8) {
-        var result = std.ArrayList([]u8).init(allocator);
+        var result = std.ArrayList([]u8){};
         errdefer freeRequestedNames(&result, allocator);
 
         var i: usize = 0;
@@ -383,7 +387,7 @@ pub const NewEnvironHandler = struct {
             i += 1;
             switch (marker) {
                 NewEnviron.VAR, NewEnviron.USERVAR => {
-                    var buffer = std.ArrayList(u8).init(allocator);
+                    var buffer = std.ArrayList(u8){};
                     defer buffer.deinit(allocator);
 
                     while (i < data.len) {

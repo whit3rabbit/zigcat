@@ -8,7 +8,7 @@ const supports_posix_signals = switch (builtin.os.tag) {
     else => false,
 };
 
-pub const SignalMode = enum {
+pub const SignalMode = enum(u8) {
     local,
     remote,
 };
@@ -35,11 +35,11 @@ var previous_sigtstp: posix.Sigaction = undefined;
 var have_previous_sigint = std.atomic.Value(bool).init(false);
 var have_previous_sigtstp = std.atomic.Value(bool).init(false);
 
-fn sigintHandler(_: c_int) callconv(.C) void {
+fn sigintHandler(_: c_int) callconv(std.builtin.CallingConvention.c) void {
     ctrl_c_flag.store(true, .release);
 }
 
-fn sigtstpHandler(_: c_int) callconv(.C) void {
+fn sigtstpHandler(_: c_int) callconv(std.builtin.CallingConvention.c) void {
     ctrl_z_flag.store(true, .release);
 }
 
@@ -73,7 +73,7 @@ pub fn install(mode: SignalMode) !void {
             .mask = posix.sigemptyset(),
             .flags = posix.SA.RESTART,
         };
-        try posix.sigaction(posix.SIG.INT, &handler, &previous_sigint);
+        posix.sigaction(posix.SIG.INT, &handler, &previous_sigint);
         have_previous_sigint.store(true, .release);
     }
 
@@ -83,7 +83,7 @@ pub fn install(mode: SignalMode) !void {
             .mask = posix.sigemptyset(),
             .flags = posix.SA.RESTART,
         };
-        try posix.sigaction(posix.SIG.TSTP, &handler, &previous_sigtstp);
+        posix.sigaction(posix.SIG.TSTP, &handler, &previous_sigtstp);
         have_previous_sigtstp.store(true, .release);
     }
 
@@ -100,7 +100,7 @@ pub fn teardown() !void {
             .mask = posix.sigemptyset(),
             .flags = 0,
         };
-        try posix.sigaction(posix.SIG.INT, &restore, null);
+        posix.sigaction(posix.SIG.INT, &restore, null);
     }
 
     if (has_sigtstp) {
@@ -109,7 +109,7 @@ pub fn teardown() !void {
             .mask = posix.sigemptyset(),
             .flags = 0,
         };
-        try posix.sigaction(posix.SIG.TSTP, &restore, null);
+        posix.sigaction(posix.SIG.TSTP, &restore, null);
     }
 
     installed.store(false, .release);

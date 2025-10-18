@@ -63,6 +63,11 @@ inline fn contextToPtr(comptime T: type, context: *anyopaque) *T {
 /// - write(): May insert IAC sequences (e.g., for option negotiation)
 /// - close(): Closes underlying connection
 /// - handle(): Returns socket handle for poll()
+/// - maintain(): Handles SIGWINCH (window resize) and sends Telnet NAWS updates
+///
+/// The maintenanceFn callback is critical for dynamic window resize support.
+/// It checks for SIGWINCH signals and sends Telnet NAWS (Negotiate About Window Size)
+/// updates to the remote server when the terminal window is resized.
 ///
 /// Parameters:
 ///   telnet_conn: Pointer to TelnetConnection
@@ -95,6 +100,12 @@ pub fn telnetConnectionToStream(telnet_conn: *TelnetConnection) stream.Stream {
                 return c.getSocket();
             }
         }.handle,
+        .maintenanceFn = struct {
+            fn maintain(context: *anyopaque) anyerror!void {
+                const c = contextToPtr(TelnetConnection, context);
+                try c.handleMaintenance();
+            }
+        }.maintain,
     };
 }
 

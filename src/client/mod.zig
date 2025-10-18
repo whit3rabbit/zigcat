@@ -32,15 +32,17 @@ const gsocket_client = @import("./gsocket_client.zig");
 const unix_client = @import("./unix_client.zig");
 const tcp_client = @import("./tcp_client.zig");
 const tls_client = @import("./tls_client.zig");
+const telnet_client = @import("./telnet_client.zig");
 const adapters = @import("./stream_adapters.zig");
 const TransferContext = @import("./transfer_context.zig").TransferContext;
 const exec_client = @import("./exec_client.zig");
 
-// Protocol support
-const Connection = @import("../net/connection.zig").Connection;
-const TelnetConnection = @import("../protocol/telnet_connection.zig").TelnetConnection;
-const tty_state = @import("terminal").tty_state;
-const tty_control = @import("terminal").tty_control;
+// Re-export stream adapters for use by server mode
+pub const telnetConnectionToStream = adapters.telnetConnectionToStream;
+pub const tlsConnectionToStream = adapters.tlsConnectionToStream;
+pub const srpConnectionToStream = adapters.srpConnectionToStream;
+pub const dtlsConnectionToStream = adapters.dtlsConnectionToStream;
+pub const netStreamToStream = adapters.netStreamToStream;
 
 /// Run client mode - connect to remote host and transfer data.
 ///
@@ -274,8 +276,15 @@ fn runBidirectionalTransfer(
 
 /// Run bidirectional transfer with Telnet protocol processing.
 ///
-/// Enables raw mode on local TTY if available, performs Telnet negotiation,
-/// and runs bidirectional transfer with IAC sequence handling.
+/// Delegates to telnet_client module for full Telnet functionality:
+/// - TTY raw mode configuration
+/// - Signal translation (SIGINT → Telnet IP, etc.)
+/// - SIGWINCH tracking (window resize → Telnet NAWS)
+/// - Initial Telnet negotiation
+/// - Bidirectional transfer with IAC processing
+///
+/// This function is a thin wrapper that maintains API compatibility while
+/// delegating to the specialized telnet_client module.
 fn runTelnetTransfer(
     allocator: std.mem.Allocator,
     cfg: *const config.Config,
@@ -283,81 +292,7 @@ fn runTelnetTransfer(
     tls_conn: ?*@import("../tls/tls.zig").TlsConnection,
     transfer_ctx: *TransferContext,
 ) !void {
-    // Setup TTY raw mode for interactive Telnet sessions
-    var local_tty_state: ?tty_state.TtyState = null;
-    defer {
-        if (local_tty_state) |*state| {
-            tty_control.restoreOriginalTermios(state) catch |err| {
-                logging.logWarning("Failed to restore terminal mode: {}\n", .{err});
-            };
-        }
-    }
-
-    // Attempt to enable raw mode
-    const raw_platform_warning = "Telnet raw mode not supported on this platform; continuing without TTY control\n";
-    const raw_tty_warning = "Standard input is not a TTY; Telnet raw mode disabled\n";
-
-    if (local_tty_state == null) {
-        if (!tty_state.supportsRawMode()) {
-            logging.logWarning(raw_platform_warning, .{});
-        } else {
-            const stdin_file = std.fs.File.stdin();
-            var tty_candidate = tty_state.init(stdin_file.handle);
-
-            if (!tty_state.isTerminal(&tty_candidate)) {
-                logging.logWarning(raw_tty_warning, .{});
-            } else {
-                const raw_enabled = blk: {
-                    tty_control.saveOriginalTermios(&tty_candidate) catch |err| {
-                        if (err == error.NotATerminal) {
-                            logging.logWarning(raw_tty_warning, .{});
-                            break :blk false;
-                        }
-                        logging.logError(err, "saving terminal state");
-                        return err;
-                    };
-
-                    tty_control.enableRawMode(&tty_candidate) catch |err| {
-                        if (err == error.NotATerminal) {
-                            logging.logWarning(raw_tty_warning, .{});
-                            break :blk false;
-                        }
-                        logging.logError(err, "enabling raw mode");
-                        return err;
-                    };
-
-                    break :blk true;
-                };
-
-                if (raw_enabled) {
-                    local_tty_state = tty_candidate;
-                }
-            }
-        }
-    }
-
-    // Create Connection wrapper for the underlying socket/TLS connection
-    const connection = if (tls_conn) |conn|
-        Connection.fromTls(conn.*)
-    else
-        Connection.fromSocket(raw_socket);
-
-    const local_tty_ptr: ?*tty_state.TtyState = if (local_tty_state) |*state| state else null;
-
-    // Wrap with TelnetConnection for protocol processing
-    var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, local_tty_ptr);
-    defer telnet_conn.deinit();
-
-    if (cfg.verbose) {
-        logging.logVerbose(cfg, "Telnet protocol mode enabled, performing initial negotiation...\n", .{});
-    }
-
-    // Perform initial Telnet negotiation
-    try telnet_conn.performInitialNegotiation();
-
-    // Use TelnetConnection for bidirectional transfer
-    const s = adapters.telnetConnectionToStream(&telnet_conn);
-    try transfer_ctx.runTransfer(allocator, s, cfg);
+    return telnet_client.runTelnetClient(allocator, cfg, raw_socket, tls_conn, transfer_ctx);
 }
 
 // ============================================================================

@@ -62,3 +62,24 @@ pub const TelnetEditMode = enum {
     remote,
     local,
 };
+
+/// ANSI escape code handling mode.
+///
+/// Determines how zigcat processes ANSI/VT100 escape sequences in Telnet mode.
+/// - `disabled`: No ANSI parsing, raw data passes through unchanged
+/// - `passthrough`: Parse and validate sequences, forward to terminal (default for TTY)
+/// - `active`: Parse and interpret sequences, maintain terminal state
+pub const AnsiMode = enum {
+    disabled,
+    passthrough,
+    active,
+
+    /// Parse ANSI mode from string (for CLI parsing)
+    pub fn fromString(s: []const u8) ?AnsiMode {
+        const std = @import("std");
+        if (std.mem.eql(u8, s, "disabled")) return .disabled;
+        if (std.mem.eql(u8, s, "passthrough")) return .passthrough;
+        if (std.mem.eql(u8, s, "active")) return .active;
+        return null;
+    }
+};

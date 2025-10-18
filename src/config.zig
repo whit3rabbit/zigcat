@@ -22,6 +22,8 @@ pub const VerbosityLevel = types.VerbosityLevel;
 pub const ProxyType = types.ProxyType;
 pub const ProxyDns = types.ProxyDns;
 pub const TelnetSignalMode = types.TelnetSignalMode;
+pub const TelnetEditMode = types.TelnetEditMode;
+pub const AnsiMode = types.AnsiMode;
 
 pub const Config = config_struct.Config;
 pub const buildExecSessionConfig = config_struct.buildExecSessionConfig;

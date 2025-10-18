@@ -59,6 +59,7 @@ pub fn printHelp() void {
         \\  -t, --telnet                  Telnet protocol mode (process IAC sequences)
         \\  --telnet-signal-mode <mode>    Telnet signal behavior (local|remote)
         \\  --telnet-edit-mode <mode>      Telnet editing (remote|local)
+        \\  --telnet-ansi-mode <mode>      ANSI escape handling (disabled|passthrough|active)
         \\  --no-shutdown                 Keep socket write-half open after stdin EOF
         \\  -d, --delay <ms>              Traffic shaping delay in milliseconds
         \\

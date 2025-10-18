@@ -1,7 +1,47 @@
+// Copyright (c) 2025 whit3rabbit
+// SPDX-License-Identifier: MIT
+//
+// This file is part of zigcat and is licensed under the MIT license.
+// See the LICENSE-MIT file in the root of this repository for details.
+
+//! Local line editor for Telnet client mode.
+//!
+//! Provides client-side line editing with support for:
+//! - Basic editing: backspace, delete, kill line, erase word
+//! - Cursor movement: arrow keys, Home/End, Ctrl+A/E, Ctrl+B/F
+//! - Word-wise navigation: Ctrl+Left/Right (via CSI modifiers)
+//! - Visual feedback: local echo, cursor positioning
+//! - CRLF/LF handling based on server requirements
+//!
+//! The editor handles basic ANSI escape sequences for cursor movement
+//! and can coordinate with the full ANSI parser (ansi_parser.zig) when
+//! enabled via --telnet-ansi-mode.
+//!
+//! ## Integration with ANSI Parser
+//!
+//! When ANSI parsing is enabled, the line editor coordinates cursor
+//! position with the parser's terminal state. This ensures that ANSI
+//! cursor movement commands (CUU, CUD, CUF, CUB, CUP) update the editor's
+//! cursor correctly during local editing mode.
+//!
+//! ## Usage
+//!
+//! ```zig
+//! var editor = try LineEditor.init(allocator, stdout, true); // CRLF mode
+//! defer editor.deinit();
+//!
+//! // Process user input
+//! const sent = try editor.processInput(stream, user_input);
+//! if (sent) {
+//!     // Data was transmitted to server
+//! }
+//! ```
+
 const std = @import("std");
 
 const Stream = @import("stream.zig").Stream;
 
+/// Local line editor for Telnet client mode
 pub const LineEditor = struct {
     allocator: std.mem.Allocator,
     buffer: std.ArrayList(u8),
@@ -10,7 +50,7 @@ pub const LineEditor = struct {
     cursor: usize = 0,
     last_rendered_len: usize = 0,
     escape_state: EscapeState = .none,
-    csi_buf: [4]u8 = undefined,
+    csi_buf: [12]u8 = undefined,
     csi_len: usize = 0,
 
     const EscapeState = enum {
@@ -22,14 +62,14 @@ pub const LineEditor = struct {
     pub fn init(allocator: std.mem.Allocator, stdout: std.fs.File, crlf: bool) !LineEditor {
         return .{
             .allocator = allocator,
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = std.ArrayList(u8){},
             .stdout = stdout,
             .crlf = crlf,
         };
     }
 
     pub fn deinit(self: *LineEditor) void {
-        self.buffer.deinit();
+        self.buffer.deinit(self.allocator);
     }
 
     /// Process incoming terminal bytes. Returns true when data was forwarded to the network.
@@ -44,18 +84,9 @@ pub const LineEditor = struct {
     fn handleByte(self: *LineEditor, stream: Stream, byte: u8) !bool {
         switch (self.escape_state) {
             .none => return self.handleRegularByte(stream, byte),
-            .esc => {
-                if (byte == '[') {
-                    self.escape_state = .csi;
-                    self.csi_len = 0;
-                } else {
-                    self.escape_state = .none;
-                    try self.handleRegularByte(stream, byte);
-                }
-                return false;
-            },
+            .esc => return self.handleEscSequence(stream, byte),
             .csi => {
-                if (byte >= '0' and byte <= '9') {
+                if ((byte >= '0' and byte <= '9') or byte == ';') {
                     if (self.csi_len < self.csi_buf.len) {
                         self.csi_buf[self.csi_len] = byte;
                         self.csi_len += 1;
@@ -66,12 +97,20 @@ pub const LineEditor = struct {
                 self.escape_state = .none;
                 switch (byte) {
                     'D' => {
-                        if (self.cursor > 0) self.cursor -= 1;
-                        try self.redrawLine();
+                        if (self.csiHasWordModifier()) {
+                            try self.moveCursorWordLeft();
+                        } else if (self.cursor > 0) {
+                            self.cursor -= 1;
+                            try self.redrawLine();
+                        }
                     },
                     'C' => {
-                        if (self.cursor < self.buffer.items.len) self.cursor += 1;
-                        try self.redrawLine();
+                        if (self.csiHasWordModifier()) {
+                            try self.moveCursorWordRight();
+                        } else if (self.cursor < self.buffer.items.len) {
+                            self.cursor += 1;
+                            try self.redrawLine();
+                        }
                     },
                     'H' => {
                         self.cursor = 0;
@@ -85,6 +124,40 @@ pub const LineEditor = struct {
                     else => {},
                 }
                 return false;
+            },
+        }
+    }
+
+    fn handleEscSequence(self: *LineEditor, stream: Stream, byte: u8) !bool {
+        switch (byte) {
+            '[' => {
+                self.escape_state = .csi;
+                self.csi_len = 0;
+                return false;
+            },
+            'b', 'B' => {
+                self.escape_state = .none;
+                try self.moveCursorWordLeft();
+                return false;
+            },
+            'f', 'F' => {
+                self.escape_state = .none;
+                try self.moveCursorWordRight();
+                return false;
+            },
+            'd', 'D' => {
+                self.escape_state = .none;
+                try self.eraseWordRight();
+                return false;
+            },
+            0x7F, 0x08 => {
+                self.escape_state = .none;
+                try self.eraseWord();
+                return false;
+            },
+            else => {
+                self.escape_state = .none;
+                return try self.handleRegularByte(stream, byte);
             },
         }
     }
@@ -105,6 +178,11 @@ pub const LineEditor = struct {
                 return false;
             },
             0x04 => {
+                if (self.cursor == self.buffer.items.len) {
+                    // Treat Ctrl+D at end-of-line as EOF (flush pending data).
+                    return try self.flushPending(stream);
+                }
+
                 try self.deleteChar();
                 return false;
             },
@@ -141,7 +219,7 @@ pub const LineEditor = struct {
                 if (self.buffer.items.len > 0) {
                     _ = try self.commitLine(stream);
                 }
-                try stream.write(&[_]u8{byte});
+                _ = try stream.write(&[_]u8{byte});
                 return true;
             },
         }
@@ -176,26 +254,38 @@ pub const LineEditor = struct {
     fn eraseWord(self: *LineEditor) !void {
         if (self.cursor == 0) return;
 
-        var index = self.cursor;
-        while (index > 0 and self.buffer.items[index - 1] == ' ') index -= 1;
-        while (index > 0 and self.buffer.items[index - 1] != ' ') index -= 1;
+        const target = self.scanWordLeft(self.cursor);
+        if (target == self.cursor) return;
 
-        const removed = self.cursor - index;
-        try self.buffer.replaceRange(self.allocator, index, removed, &[_]u8{});
-        self.cursor = index;
+        const removed = self.cursor - target;
+        try self.buffer.replaceRange(self.allocator, target, removed, &[_]u8{});
+        self.cursor = target;
+        try self.redrawLine();
+    }
+
+    fn eraseWordRight(self: *LineEditor) !void {
+        if (self.cursor >= self.buffer.items.len) return;
+
+        const target = self.scanWordRight(self.cursor);
+        if (target == self.cursor) return;
+
+        const removed = target - self.cursor;
+        try self.buffer.replaceRange(self.allocator, self.cursor, removed, &[_]u8{});
         try self.redrawLine();
     }
 
     fn commitLine(self: *LineEditor, stream: Stream) !bool {
+        self.escape_state = .none;
+
         if (self.buffer.items.len > 0) {
-            try stream.write(self.buffer.items);
+            _ = try stream.write(self.buffer.items);
         }
 
         if (self.crlf) {
-            try stream.write(&[_]u8{ '\r', '\n' });
+            _ = try stream.write(&[_]u8{ '\r', '\n' });
             try self.stdout.writeAll("\r\n");
         } else {
-            try stream.write(&[_]u8{'\n'});
+            _ = try stream.write(&[_]u8{'\n'});
             try self.stdout.writeAll("\n");
         }
 
@@ -203,6 +293,11 @@ pub const LineEditor = struct {
         self.cursor = 0;
         self.last_rendered_len = 0;
         return true;
+    }
+
+    pub fn flushPending(self: *LineEditor, stream: Stream) !bool {
+        if (self.buffer.items.len == 0) return false;
+        return try self.commitLine(stream);
     }
 
     fn redrawLine(self: *LineEditor) !void {
@@ -229,15 +324,89 @@ pub const LineEditor = struct {
     }
 
     fn handleCsiTilde(self: *LineEditor) !void {
-        const seq = self.csi_buf[0..self.csi_len];
-        if (std.mem.eql(u8, seq, "3")) {
-            try self.deleteChar();
-        } else if (std.mem.eql(u8, seq, "1") or std.mem.eql(u8, seq, "7")) {
-            self.cursor = 0;
-            try self.redrawLine();
-        } else if (std.mem.eql(u8, seq, "4") or std.mem.eql(u8, seq, "8")) {
-            self.cursor = self.buffer.items.len;
-            try self.redrawLine();
+        const params = self.csiParseParams();
+        const first = params.first orelse return;
+
+        switch (first) {
+            3 => {
+                if (self.csiHasWordModifier()) {
+                    try self.eraseWordRight();
+                } else {
+                    try self.deleteChar();
+                }
+            },
+            1, 7 => {
+                self.cursor = 0;
+                try self.redrawLine();
+            },
+            4, 8 => {
+                self.cursor = self.buffer.items.len;
+                try self.redrawLine();
+            },
+            else => {},
         }
+    }
+
+    fn moveCursorWordLeft(self: *LineEditor) !void {
+        if (self.cursor == 0) return;
+        self.cursor = self.scanWordLeft(self.cursor);
+        try self.redrawLine();
+    }
+
+    fn moveCursorWordRight(self: *LineEditor) !void {
+        if (self.cursor >= self.buffer.items.len) {
+            self.cursor = self.buffer.items.len;
+            return;
+        }
+        self.cursor = self.scanWordRight(self.cursor);
+        try self.redrawLine();
+    }
+
+    fn scanWordLeft(self: *const LineEditor, start: usize) usize {
+        var index = start;
+        while (index > 0 and std.ascii.isWhitespace(self.buffer.items[index - 1])) {
+            index -= 1;
+        }
+        while (index > 0 and !std.ascii.isWhitespace(self.buffer.items[index - 1])) {
+            index -= 1;
+        }
+        return index;
+    }
+
+    fn scanWordRight(self: *const LineEditor, start: usize) usize {
+        var index = start;
+        while (index < self.buffer.items.len and std.ascii.isWhitespace(self.buffer.items[index])) {
+            index += 1;
+        }
+        while (index < self.buffer.items.len and !std.ascii.isWhitespace(self.buffer.items[index])) {
+            index += 1;
+        }
+        return index;
+    }
+
+    fn csiParseParams(self: *const LineEditor) struct { first: ?u8, last: ?u8 } {
+        const seq = self.csi_buf[0..self.csi_len];
+        var it = std.mem.splitScalar(u8, seq, ';');
+        var first_value: ?u8 = null;
+        var last_value: ?u8 = null;
+
+        while (it.next()) |token| {
+            if (token.len == 0) continue;
+            const value = std.fmt.parseUnsigned(u8, token, 10) catch continue;
+            if (first_value == null) first_value = value;
+            last_value = value;
+        }
+
+        return .{ .first = first_value, .last = last_value };
+    }
+
+    fn csiHasWordModifier(self: *const LineEditor) bool {
+        const params = self.csiParseParams();
+        const last = params.last orelse return false;
+
+        return switch (last) {
+            3, 4, 5, 6, 7, 8 => true,
+            else => false,
+        };
     }
 };

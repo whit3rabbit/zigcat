@@ -35,7 +35,7 @@ pub const c = @cImport({
 });
 
 // SRP password callback type
-const SrpClientPwdCallback = ?*const fn (?*c.SSL, ?*anyopaque) callconv(.C) [*c]u8;
+const SrpClientPwdCallback = ?*const fn (?*c.SSL, ?*anyopaque) callconv(std.builtin.CallingConvention.c) [*c]u8;
 
 // ============================================================================
 // Error Types

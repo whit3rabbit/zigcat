@@ -160,6 +160,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
                 logging.logWarning("  Supported values: remote, local\n", .{});
                 return CliError.UnknownOption;
             };
+        } else if (std.mem.eql(u8, arg, "--telnet-ansi-mode")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.telnet_ansi_mode = config.AnsiMode.fromString(args[i]) orelse {
+                logging.logError(error.InvalidAnsiMode, "Invalid ANSI mode");
+                logging.logWarning("  Supported values: disabled, passthrough, active\n", .{});
+                return CliError.UnknownOption;
+            };
         } else if (std.mem.eql(u8, arg, "--append")) {
             cfg.append_output = true;
         } else if (std.mem.eql(u8, arg, "--append-output")) {

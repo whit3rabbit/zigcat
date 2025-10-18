@@ -10,10 +10,11 @@
 //! to the server's operational mode (`broker` or `chat`), and dispatching the
 //! content for relay to other clients.
 //!
-...
-//!   and validating nicknames.
-//! - **Data Framing**: It handles line-based message framing for chat mode,
-//!   extracting complete lines from the incoming byte stream.
+//! Key responsibilities:
+//! - **Broker Mode**: Raw byte relay without message parsing.
+//! - **Chat Mode**: Line-based message parsing, nickname extraction/validation.
+//! - **Data Framing**: Line-based message framing for chat mode, extracting
+//!   complete lines from the incoming byte stream.
 
 const std = @import("std");
 const broker = @import("../broker.zig");
@@ -206,7 +207,10 @@ pub fn processChatData(
 ///
 /// This function contains the core logic for the chat protocol.
 /// - If the client has not yet set a nickname, this line is treated as a
-...
+///   new nickname registration (with validation).
+/// - If the client has a nickname, the line is treated as a regular message
+///   and is broadcast to all other clients.
+///
 /// - `line`: The complete line of text to process (without the trailing newline).
 /// - `scratch`: A temporary allocator for generating response messages.
 ///

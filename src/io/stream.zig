@@ -23,6 +23,7 @@ pub const Stream = struct {
     writeFn: *const fn (self: *anyopaque, data: []const u8) anyerror!usize,
     closeFn: *const fn (self: *anyopaque) void,
     handleFn: *const fn (self: *anyopaque) std.posix.socket_t,
+    maintenanceFn: ?*const fn (self: *anyopaque) anyerror!void = null,
 
     /// Reads data from the stream into the provided buffer.
     ///
@@ -55,5 +56,19 @@ pub const Stream = struct {
     /// I/O mechanisms like `poll` or `epoll`.
     pub fn handle(self: Stream) std.posix.socket_t {
         return self.handleFn(self.context);
+    }
+
+    /// Performs optional maintenance operations on the stream.
+    ///
+    /// This is used for protocol-specific maintenance tasks like:
+    /// - Telnet: Checking for SIGWINCH and sending window size updates (NAWS)
+    /// - Other protocols: Keepalive, timeout checks, etc.
+    ///
+    /// This method is called periodically during bidirectional transfer loops.
+    /// If maintenanceFn is null (not supported by the stream type), this is a no-op.
+    pub fn maintain(self: Stream) !void {
+        if (self.maintenanceFn) |maintain_fn| {
+            try maintain_fn(self.context);
+        }
     }
 };

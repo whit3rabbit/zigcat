@@ -139,6 +139,19 @@ Convert LF to CRLF.
 .BR -t ", " --telnet
 Enable Telnet protocol processing (RFC 854). Handles IAC (Interpret As Command) sequences, performs automatic option negotiation (WILL/WONT/DO/DONT), and escapes binary data (IAC IAC). Supports ECHO, SUPPRESS-GO-AHEAD, TERMINAL-TYPE, NAWS (window size), and LINEMODE options. Use when connecting to BBSes, MUD servers, network equipment management interfaces, and other Telnet-based legacy systems. The protocol is 8-bit clean with application data remaining untouched.
 .TP
+.B --telnet-ansi-mode " <mode>"
+Controls ANSI/VT100 escape sequence handling when Telnet mode is enabled. Valid modes are
+.BR disabled " (no ANSI parsing, raw passthrough), "
+.BR passthrough " (parse and validate sequences, forward to terminal), and "
+.BR active " (parse and interpret sequences, maintain terminal state)."
+Default is auto-detect: passthrough for TTY, disabled for non-TTY. Use
+.B passthrough
+for BBS connections with color support,
+.B active
+for terminal emulation with state tracking, and
+.B disabled
+for raw mode. Supports VT100, xterm extensions (256-color, true-color RGB), and SGR 1006 mouse tracking.
+.TP
 .B --no-shutdown
 Do not shutdown the write half of the socket after EOF on stdin.
 .TP
@@ -622,6 +635,27 @@ Debug Telnet protocol with hex dump:
 .RS
 .EX
 zigcat --telnet -vv -x debug.hex server.example.com 23
+.EE
+.RE
+.PP
+Telnet with ANSI color support (passthrough mode for BBSs):
+.RS
+.EX
+zigcat --telnet --telnet-ansi-mode passthrough bbs.example.com 23
+.EE
+.RE
+.PP
+Telnet with ANSI state tracking (active mode for terminal emulation):
+.RS
+.EX
+zigcat --telnet --telnet-ansi-mode active server.example.com 23
+.EE
+.RE
+.PP
+Telnet with ANSI parsing disabled (raw mode):
+.RS
+.EX
+zigcat --telnet --telnet-ansi-mode disabled server.example.com 23
 .EE
 .RE
 .SS "DTLS connections"

@@ -689,8 +689,8 @@ pub const BrokerServer = struct {
 
     /// Removes a client from the server and cleans up all associated resources.
     ///
-    ...
-    ///    announcement.
+    /// This includes closing sockets, freeing memory, removing from active clients list,
+    /// and broadcasting a disconnect announcement in chat mode.
     ///
     /// This function does not return a value, as it is designed to always succeed
     /// in removing the client, logging any intermediate errors.

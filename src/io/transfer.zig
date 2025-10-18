@@ -151,6 +151,15 @@ pub fn bidirectionalTransferWindows(
 
         if (ready == 0) {
             // Idle timeout reached
+            if (editor_opt) |*editor| {
+                const flushed = editor.flushPending(stream) catch |err| blk: {
+                    logging.logVerbose(cfg, "Local editor flush failed on timeout: {any}\n", .{err});
+                    break :blk false;
+                };
+                if (flushed) {
+                    logging.logVerbose(cfg, "Flushed pending line due to idle timeout\n", .{});
+                }
+            }
             logging.logVerbose(cfg, "Idle timeout reached\n", .{});
             break;
         }
@@ -163,6 +172,16 @@ pub fn bidirectionalTransferWindows(
                 logging.logVerbose(cfg, "stdin read failed: {any}, treating as closed\n", .{err});
                 stdin_closed = true;
 
+                if (editor_opt) |*editor| {
+                    const flushed = editor.flushPending(stream) catch |flush_err| blk: {
+                        logging.logVerbose(cfg, "Local editor flush failed on stdin error: {any}\n", .{flush_err});
+                        break :blk false;
+                    };
+                    if (flushed) {
+                        logging.logVerbose(cfg, "Flushed pending line after stdin error\n", .{});
+                    }
+                }
+
                 // Handle half-close: shutdown write-half but keep reading (Windows)
                 if (!cfg.no_shutdown) {
                     poll_wrapper.shutdown(stream.handle(), .send) catch |shutdown_err| {
@@ -174,11 +193,21 @@ pub fn bidirectionalTransferWindows(
                     break;
                 }
 
-                continue;  // Skip to next poll iteration
+                continue; // Skip to next poll iteration
             };
 
             if (n == 0) {
                 stdin_closed = true;
+
+                if (editor_opt) |*editor| {
+                    const flushed = editor.flushPending(stream) catch |flush_err| blk: {
+                        logging.logVerbose(cfg, "Local editor flush failed on stdin EOF: {any}\n", .{flush_err});
+                        break :blk false;
+                    };
+                    if (flushed) {
+                        logging.logVerbose(cfg, "Flushed pending line on stdin EOF\n", .{});
+                    }
+                }
 
                 // Handle half-close: shutdown write-half but keep reading (Windows)
                 if (!cfg.no_shutdown) {
@@ -429,6 +458,15 @@ pub fn bidirectionalTransferPosix(
 
         if (ready == 0) {
             // Timeout
+            if (posix_editor) |*editor| {
+                const flushed = editor.flushPending(stream) catch |err| blk: {
+                    logging.logVerbose(cfg, "Local editor flush failed on timeout: {any}\n", .{err});
+                    break :blk false;
+                };
+                if (flushed) {
+                    logging.logVerbose(cfg, "Flushed pending line due to idle timeout\n", .{});
+                }
+            }
             logging.logVerbose(cfg, "Idle timeout reached\n", .{});
             break;
         }
@@ -441,6 +479,16 @@ pub fn bidirectionalTransferPosix(
                 logging.logVerbose(cfg, "stdin read failed: {any}, treating as closed\n", .{err});
                 stdin_closed = true;
 
+                if (posix_editor) |*editor| {
+                    const flushed = editor.flushPending(stream) catch |flush_err| blk: {
+                        logging.logVerbose(cfg, "Local editor flush failed on stdin error: {any}\n", .{flush_err});
+                        break :blk false;
+                    };
+                    if (flushed) {
+                        logging.logVerbose(cfg, "Flushed pending line after stdin error\n", .{});
+                    }
+                }
+
                 // Handle half-close: shutdown write-half but keep reading
                 if (!cfg.no_shutdown) {
                     posix.shutdown(stream.handle(), .send) catch |shutdown_err| {
@@ -452,11 +500,21 @@ pub fn bidirectionalTransferPosix(
                     break;
                 }
 
-                continue;  // Skip to next poll iteration
+                continue; // Skip to next poll iteration
             };
 
             if (n == 0) {
                 stdin_closed = true;
+
+                if (posix_editor) |*editor| {
+                    const flushed = editor.flushPending(stream) catch |flush_err| blk: {
+                        logging.logVerbose(cfg, "Local editor flush failed on stdin EOF: {any}\n", .{flush_err});
+                        break :blk false;
+                    };
+                    if (flushed) {
+                        logging.logVerbose(cfg, "Flushed pending line on stdin EOF\n", .{});
+                    }
+                }
 
                 // Handle half-close: shutdown write-half but keep reading
                 if (!cfg.no_shutdown) {
