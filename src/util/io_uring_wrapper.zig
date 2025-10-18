@@ -173,6 +173,16 @@ pub const UringEventLoop = if (io_uring_supported) struct {
         sqe.user_data = user_data;
     }
 
+    /// Submit an asynchronous read for non-socket file descriptors.
+    ///
+    /// Uses IORING_OP_READ which supports pipes, character devices, and regular files.
+    /// The provided buffer must remain valid until the operation completes.
+    pub fn submitReadFile(self: *UringEventLoop, fd: posix.fd_t, buffer: []u8, user_data: u64) !void {
+        const sqe = try self.ring.get_sqe();
+        sqe.prep_read(fd, buffer, 0);
+        sqe.user_data = user_data;
+    }
+
     /// Submit an asynchronous read operation with provided buffers (kernel 5.7+).
     ///
     /// This variant uses a buffer that was previously registered with submitProvideBuffers().
@@ -639,6 +649,10 @@ pub const UringEventLoop = if (io_uring_supported) struct {
     pub fn deinit(_: *UringEventLoop) void {}
 
     pub fn submitRead(_: *UringEventLoop, _: posix.fd_t, _: []u8, _: u64) !void {
+        return error.IoUringNotSupported;
+    }
+
+    pub fn submitReadFile(_: *UringEventLoop, _: posix.fd_t, _: []u8, _: u64) !void {
         return error.IoUringNotSupported;
     }
 

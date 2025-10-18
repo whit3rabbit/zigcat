@@ -280,12 +280,26 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             cfg.ssl_alpn = args[i];
         } else if (std.mem.eql(u8, arg, "--ssl-verify")) {
             cfg.ssl_verify = true;
+            cfg.insecure = false;
+        } else if (std.mem.eql(u8, arg, "--insecure")) {
+            cfg.insecure = true;
+            cfg.ssl_verify = false;
         } else if (std.mem.eql(u8, arg, "--no-ssl-verify") or std.mem.eql(u8, arg, "--ssl-verify=false")) {
+            logging.logWarning("⚠️  --no-ssl-verify is deprecated; use --insecure instead.\n", .{});
+            cfg.insecure = true;
             cfg.ssl_verify = false;
         } else if (std.mem.eql(u8, arg, "--ssl-crl")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
             cfg.ssl_crl = args[i];
+        } else if (std.mem.eql(u8, arg, "--gs-secret")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.gsocket_secret = args[i];
+        } else if (std.mem.eql(u8, arg, "-R") or std.mem.eql(u8, arg, "--relay")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.gsocket_relay = args[i];
         } else if (std.mem.eql(u8, arg, "--proxy")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;

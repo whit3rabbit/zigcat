@@ -13,7 +13,16 @@ const logging = @import("../util/logging.zig");
 const ExecConfig = @import("./exec_types.zig").ExecConfig;
 const ExecError = @import("./exec_types.zig").ExecError;
 
-/// Fallback threaded execution path (primarily for Windows).
+/// Manages a command execution session using a separate thread for each I/O stream.
+///
+/// This function serves as a fallback I/O mechanism when more advanced,
+/// single-threaded event loops (like `io_uring` or `iocp`) are not available.
+/// It spawns up to three threads:
+/// 1. A thread to pipe data from the network stream to the child's stdin.
+/// 2. A thread to pipe data from the child's stdout to the network stream.
+/// 3. A thread to pipe data from the child's stderr to the network stream.
+///
+/// The function waits for all spawned threads to complete before returning.
 pub fn runThreadedExec(stream: std.net.Stream, child: *std.process.Child) !void {
     var stdin_thread: ?std.Thread = null;
     var stdout_thread: ?std.Thread = null;
@@ -60,8 +69,12 @@ pub fn runThreadedExec(stream: std.net.Stream, child: *std.process.Child) !void 
     if (stderr_thread) |t| t.join();
 }
 
-/// Pipe data from socket to child stdin
-fn pipeToChild(src: std.net.Stream, dst: std.fs.File) void {
+    /// The entry point for a thread that pipes data from a network stream (source)
+    /// to a child process's standard input (destination).
+    ///
+    /// It continuously reads from the stream and writes to the file until either
+    /// an EOF is received or a write error occurs.
+    fn pipeToChild(src: std.net.Stream, dst: std.fs.File) void {
     defer dst.close();
 
     var buf: [8192]u8 = undefined;
@@ -83,8 +96,12 @@ fn pipeToChild(src: std.net.Stream, dst: std.fs.File) void {
     }
 }
 
-/// Pipe data from child stdout/stderr to socket
-fn pipeFromChild(src: std.fs.File, dst: std.net.Stream) void {
+    /// The entry point for a thread that pipes data from a child process's
+    /// output (stdout or stderr) to a network stream.
+    ///
+    /// It continuously reads from the file and writes to the stream until an
+    /// EOF is received or a write error occurs.
+    fn pipeFromChild(src: std.fs.File, dst: std.net.Stream) void {
     defer src.close();
 
     var buf: [8192]u8 = undefined;
@@ -201,8 +218,13 @@ pub fn executeWithTelnetConnectionThreaded(
     if (stderr_thread) |t| t.join();
 }
 
-/// Pipe data from Telnet connection to child stdin (with IAC filtering).
-fn pipeToChildTelnet(telnet_conn: anytype, dst: std.fs.File) void {
+    /// The entry point for a thread that pipes data from a `TelnetConnection` to
+    /// a child's stdin.
+    ///
+    /// This function is similar to `pipeToChild`, but it reads from a
+    /// `TelnetConnection` instance, which automatically filters out Telnet
+    /// command sequences (IAC commands) before passing the application data along.
+    fn pipeToChildTelnet(telnet_conn: anytype, dst: std.fs.File) void {
     defer dst.close();
 
     var buf: [8192]u8 = undefined;
@@ -226,8 +248,13 @@ fn pipeToChildTelnet(telnet_conn: anytype, dst: std.fs.File) void {
     }
 }
 
-/// Pipe data from child stdout/stderr to Telnet connection (with IAC escaping).
-fn pipeFromChildTelnet(src: std.fs.File, telnet_conn: anytype) void {
+    /// The entry point for a thread that pipes data from a child's output to a
+    /// `TelnetConnection`.
+    ///
+    /// This function is similar to `pipeFromChild`, but it writes to a
+    /// `TelnetConnection` instance, which automatically escapes any Telnet
+    /// command bytes (e.g., `0xFF`) in the application data before sending it.
+    fn pipeFromChildTelnet(src: std.fs.File, telnet_conn: anytype) void {
     defer src.close();
 
     var buf: [8192]u8 = undefined;

@@ -36,6 +36,18 @@ const TelnetConnection = @import("../../protocol/telnet_connection.zig").TelnetC
 const broker_mode = @import("broker.zig");
 const unix_mode = @import("unix.zig");
 
+/// Runs a dual-stack (IPv4 and IPv6) TCP server.
+///
+/// This function creates and binds two separate sockets, one for IPv4 (0.0.0.0)
+/// and one for IPv6 (::), both on the same port. It then uses `poll` to monitor
+/// both listener sockets for incoming connections simultaneously. When a connection
+/// is accepted, it is dispatched to a handler function.
+///
+/// - `allocator`: The memory allocator for dynamic allocations.
+/// - `cfg`: A pointer to the application's global configuration.
+/// - `port`: The port number to listen on for both IPv4 and IPv6.
+///
+/// Returns an error if socket creation or binding fails for either protocol.
 fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, port: u16) !void {
     var server_v4 = std.net.Address.parseIp("0.0.0.0", port) catch |err| {
         logging.logError(err, "parsing IPv4 address");
@@ -141,6 +153,17 @@ fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, p
     }
 }
 
+/// The main entry point for all server-side operations.
+///
+/// This function orchestrates the entire server setup based on the provided
+/// configuration. It determines whether to start a TCP, UDP, dual-stack, or Unix
+/// domain socket server. It handles address parsing, socket binding, privilege
+/// dropping, and ultimately enters the main accept loop for the configured protocol.
+///
+/// - `allocator`: The memory allocator for all dynamic allocations.
+/// - `cfg`: A pointer to the application's global configuration.
+///
+/// Returns an error if any critical setup step (like socket binding) fails.
 pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void {
     if (cfg.unix_socket_path) |socket_path| {
         return unix_mode.runUnixSocketServer(allocator, cfg, socket_path);
@@ -332,6 +355,15 @@ const ThreadContext = struct {
     cfg: *const config.Config,
 };
 
+/// A thread entry point for handling a single client connection.
+///
+/// This function is spawned in a new thread when the server is configured to
+/// handle multiple connections (`--max-conns > 0`). It is responsible for
+/// calling the main `handleClient` logic and ensuring that the connection's
+/// resources (context, stream) are cleaned up when the handler exits.
+///
+/// - `ctx`: A pointer to `ThreadContext`, containing the allocator, connection object,
+///   and configuration.
 fn handleClientThread(ctx: *ThreadContext) void {
     defer ctx.allocator.destroy(ctx);
     defer ctx.conn.stream.close();
@@ -341,6 +373,19 @@ fn handleClientThread(ctx: *ThreadContext) void {
     };
 }
 
+/// Handles a single accepted client connection.
+///
+/// This is the core logic for a server-side connection. It determines the
+/// operational mode based on the configuration (e.g., exec, shell, TLS, Telnet)
+/// and dispatches to the appropriate handler. It sets up I/O logging, hex
+/// dumping, and ultimately calls into the data transfer or command execution logic.
+///
+/// - `allocator`: The memory allocator for dynamic allocations.
+/// - `stream`: The network stream for the connected client.
+/// - `client_address`: The address of the connected client.
+/// - `cfg`: A pointer to the application's global configuration.
+///
+/// Returns an error if any part of the handling process fails.
 fn handleClient(
     allocator: std.mem.Allocator,
     stream: std.net.Stream,

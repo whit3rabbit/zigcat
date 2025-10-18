@@ -14,6 +14,8 @@ const transfer = @import("tls_transfer/transfer.zig");
 const errors = @import("tls_transfer/errors.zig");
 const cleanup = @import("tls_transfer/cleanup.zig");
 
+/// Default buffer size for I/O operations, set to 8KB.
+/// See `io/transfer.zig` for details.
 pub const BUFFER_SIZE = transfer.BUFFER_SIZE;
 
 pub const TLSTransferError = errors.TLSTransferError;

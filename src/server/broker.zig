@@ -510,7 +510,23 @@ pub const BrokerServer = struct {
         });
     }
 
-    /// Accept a new client connection with access control, TLS support, and comprehensive logging
+    /// Accepts, validates, and initializes a new client connection.
+    ///
+    /// This method is called when the listening socket has a pending connection. It
+    /// performs the following steps:
+    /// 1. Checks if the server is at its maximum client capacity.
+    /// 2. Accepts the raw socket connection.
+    /// 3. Performs access control checks using the configured IP/CIDR allow/deny lists.
+    /// 4. Optionally performs a TLS handshake if the server is in TLS mode.
+    /// 5. Adds the validated client to the `ClientPool` and other management structures.
+    /// 6. Initializes the client for the specific server mode (e.g., sends a welcome
+    ///    message in chat mode).
+    ///
+    /// - `scratch`: A temporary allocator for short-lived allocations during the
+    ///   acceptance process.
+    ///
+    /// Returns an error if the connection cannot be established (e.g., listen error,
+    /// TLS handshake failure, access denied).
     fn acceptNewClient(self: *BrokerServer, scratch: std.mem.Allocator) !void {
         // Check client limit before accepting
         const current_clients = self.clients.getClientCount();
@@ -671,7 +687,13 @@ pub const BrokerServer = struct {
         }
     }
 
-    /// Remove a client from the server with comprehensive cleanup and enhanced logging
+    /// Removes a client from the server and cleans up all associated resources.
+    ///
+    ...
+    ///    announcement.
+    ///
+    /// This function does not return a value, as it is designed to always succeed
+    /// in removing the client, logging any intermediate errors.
     fn removeClient(self: *BrokerServer, client_id: u64, scratch: std.mem.Allocator) void {
         // Get client info before removal for chat mode cleanup and statistics
         var client_nickname: ?[]const u8 = null;
@@ -921,21 +943,23 @@ pub const BrokerServer = struct {
         };
     }
 
-    /// Relay data to all clients except the sender
+    /// Relays data to all connected clients, optionally excluding a sender.
     ///
-    /// Broadcasts the given data to all connected clients, excluding the sender.
-    /// This is used for both broker mode (raw relay) and chat mode (formatted messages).
+    /// This function broadcasts the given data to all clients in the `ClientPool`.
+    /// It is the core mechanism for both raw data forwarding in broker mode and
+    /// message broadcasting in chat mode. The data is appended to each client's
+    /// write buffer, and an immediate flush is attempted.
     ///
-    /// ## Parameters
-    /// - `data`: Data to relay to clients
-    /// - `exclude_client_id`: Client ID to exclude from relay (typically the sender), or 0 for broadcast to all
+    /// To improve performance and reduce memory allocation, this function uses a
+    /// callback-based iteration over clients, avoiding the need to create a
+    /// temporary list of client IDs on the heap for each relay operation.
     ///
-    /// ## Returns
-    /// Error if relay fails critically (individual client failures are logged but don't stop relay)
+    /// - `data`: The slice of bytes to send to clients.
+    /// - `exclude_client_id`: The ID of the client who sent the data, who should
+    ///   not receive it back. A value of 0 means the data is sent to all clients.
     ///
-    /// ## Performance
-    /// Uses zero-allocation callback pattern instead of allocating client ID list on every relay.
-    /// This eliminates heap allocation churn in high-traffic scenarios.
+    /// Returns an error only on critical failure; individual client write errors
+    /// are logged but do not stop the relay to other clients.
     pub fn relayToClients(self: *BrokerServer, data: []const u8, exclude_client_id: u64) !void {
         if (data.len == 0) {
             logging.logTrace("Relay called with empty data, skipping\n", .{});
@@ -1059,17 +1083,22 @@ pub const BrokerServer = struct {
         self.chat_nicknames.clearRetainingCapacity();
     }
 
-    /// Flush pending write data for a client
+    /// Flushes the pending write buffer for a specific client.
     ///
-    /// Called when a client socket becomes writable (POLL.OUT event) or when new
-    /// data has been queued. Attempts to drain the client's write buffer using
-    /// non-blocking writes, leaving any unsent data queued for the next POLL.OUT.
+    /// This function is called when a client's socket is reported as writable by `poll()`
+    /// (i.e., a `POLL.OUT` event) or immediately after new data is queued for relay.
+    /// It attempts to send as much data as possible from the client's `write_buffer`
+    /// in a non-blocking manner.
     ///
-    /// ## Parameters
-    /// - `client_id`: Client ID to flush
+    /// If the entire buffer is flushed, the `POLL.OUT` event is removed from the
+    /// poll set to avoid unnecessary wakeups. If the write would block or not all
+    /// data is sent, `POLL.OUT` is kept active to ensure the function is called
+    /// again when the socket is ready.
     ///
-    /// ## Returns
-    /// Error if flush fails critically
+    /// - `client_id`: The ID of the client whose write buffer should be flushed.
+    ///
+    /// Returns an error if the underlying write operation fails with something
+    /// other than `WouldBlock`.
     fn flushWriteBuffer(self: *BrokerServer, client_id: u64) !void {
         const client = self.clients.getClient(client_id) orelse return BrokerError.ClientNotFound;
 
@@ -1139,7 +1168,15 @@ pub const BrokerServer = struct {
         }
     }
 
-    /// Gracefully shutdown the broker server with enhanced logging
+    /// Initiates a graceful shutdown of the broker server.
+    ///
+    /// This function sets the `running` flag to `false`, causing the main event loop
+    /// in `run()` to terminate. It logs shutdown messages, sends a final notification
+    /// to clients in chat mode, and logs a final performance summary.
+    ///
+    /// Note that this function only signals the shutdown; the actual cleanup of
+    /// resources happens in the `deinit` function, which is called by the owner
+    /// of the `BrokerServer` instance.
     pub fn shutdown(self: *BrokerServer) void {
         self.running = false;
 

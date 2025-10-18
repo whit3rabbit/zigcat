@@ -174,8 +174,15 @@ fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socke
     return last_error orelse error.ConnectionFailed;
 }
 
-/// Resolve hostname to IPv4 address
-fn resolveToIpv4(allocator: std.mem.Allocator, host: []const u8) ![4]u8 {
+    /// Resolves a hostname to its first available IPv4 address.
+    ///
+    /// SOCKS4 requires the client to provide a destination IPv4 address. This
+    /// function first attempts to parse the host as a literal IPv4 address. If
+    /// that fails, it performs a DNS lookup and returns the first IPv4 address
+    /// found in the results.
+    ///
+    /// Returns `error.NoIpv4Address` if the host has no A records.
+    fn resolveToIpv4(allocator: std.mem.Allocator, host: []const u8) ![4]u8 {
     // Try parsing as IPv4 first
     if (std.net.Address.parseIp4(host, 0)) |addr| {
         return @as(*const [4]u8, @ptrCast(&addr.in.sa.addr)).*;
@@ -195,8 +202,12 @@ fn resolveToIpv4(allocator: std.mem.Allocator, host: []const u8) ![4]u8 {
     }
 }
 
-/// Send SOCKS4 CONNECT request
-fn sendConnectRequest(
+    /// Constructs and sends the SOCKS4 `CONNECT` request packet.
+    ///
+    /// This function assembles the SOCKS4 request packet, which includes the
+    /// protocol version, command code, destination port and address, and a
+    /// null-terminated user ID. It then sends the packet to the proxy server.
+    fn sendConnectRequest(
     sock: socket.Socket,
     target_addr: [4]u8,
     target_port: u16,
@@ -235,8 +246,12 @@ fn sendConnectRequest(
     _ = try posix.send(sock, request[0..idx], 0);
 }
 
-/// Read SOCKS4 response
-fn readConnectResponse(sock: socket.Socket) !void {
+    /// Reads and validates the 8-byte response from the SOCKS4 server.
+    ///
+    /// This function waits for the response using `poll` with a timeout, reads
+    /// the fixed-size response packet, and checks the reply code. A reply code
+    /// of `90` indicates success; any other code results in an error.
+    fn readConnectResponse(sock: socket.Socket) !void {
     var response: [8]u8 = undefined;
 
     var pollfds = [_]poll_wrapper.pollfd{.{

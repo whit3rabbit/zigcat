@@ -65,7 +65,7 @@ pub fn printHelp() void {
         \\SSL/TLS OPTIONS:
         \\  --ssl                         Enable SSL/TLS
         \\  --ssl-verify                  Enable certificate verification (default)
-        \\  --no-ssl-verify               Disable certificate verification (INSECURE!)
+        \\  --insecure                    Disable certificate verification (explicit acknowledgment)
         \\  --ssl-cert <file>             SSL certificate file (server mode)
         \\  --ssl-key <file>              SSL private key file (server mode)
         \\  --ssl-trustfile <file>        SSL CA certificate bundle
@@ -73,6 +73,16 @@ pub fn printHelp() void {
         \\  --ssl-ciphers <ciphers>       SSL cipher suite list
         \\  --ssl-servername <name>       SNI server name (for virtual hosting)
         \\  --ssl-alpn <protocols>        ALPN protocol list (e.g., "h2,http/1.1")
+        \\
+        \\GSOCKET OPTIONS:
+        \\  --gs-secret <secret>          Connect via Global Socket Relay Network (GSRN)
+        \\                                Uses secret for NAT traversal through relay server
+        \\                                Both peers must use the same secret for connection
+        \\                                Provides SRP-AES-256-CBC-SHA end-to-end encryption
+        \\                                (NOTE: Uses SHA-1 MAC for gsocket compatibility)
+        \\                                No port forwarding or firewall configuration needed
+        \\  -R, --relay <host:port>       Specify a custom GSRN relay server
+        \\                                (Default: gs.thc.org:443)
         \\
         \\PROXY OPTIONS:
         \\  --proxy <url>                 Proxy URL (http://host:port, socks5://host:port)
@@ -166,6 +176,12 @@ pub fn printHelp() void {
         \\    zigcat -l --broker --max-clients 100 8080  Broker with 100 max clients
         \\    zigcat -U /tmp/socket         Connect to Unix socket
         \\    zigcat -l -U /tmp/socket      Listen on Unix socket
+        \\
+        \\  Global Socket (NAT traversal):
+        \\    zigcat -l --gs-secret MySecret  Listen via GSRN (wait for peer)
+        \\    zigcat --gs-secret MySecret     Connect via GSRN (to listening peer)
+        \\                                    Both peers auto-connect through gs.thc.org relay
+        \\                                    End-to-end SRP-AES-256 encryption, no port forwarding
         \\
         \\  Command execution:
         \\    zigcat -l -e grep foo         Execute grep (args without hyphens)

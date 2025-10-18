@@ -238,8 +238,14 @@ fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socke
     return last_error orelse error.ConnectionFailed;
 }
 
-/// Send authentication method selection
-fn sendAuthMethodSelection(sock: socket.Socket, needs_auth: bool) !void {
+    /// Sends the initial client greeting to the SOCKS5 server, advertising
+    /// supported authentication methods.
+    ///
+    /// This function sends a packet indicating the SOCKS version and a list of
+    /// authentication methods the client supports. It always includes "No
+    /// Authentication" (0x00) and will also include "Username/Password" (0x02)
+    /// if `needs_auth` is true.
+    fn sendAuthMethodSelection(sock: socket.Socket, needs_auth: bool) !void {
     var request: [4]u8 = undefined;
     request[0] = SOCKS5_VERSION;
 
@@ -255,8 +261,13 @@ fn sendAuthMethodSelection(sock: socket.Socket, needs_auth: bool) !void {
     }
 }
 
-/// Read authentication method response
-fn readAuthMethodResponse(sock: socket.Socket) !u8 {
+    /// Reads the server's choice of authentication method.
+    ///
+    /// After the client sends its list of supported methods, the server replies
+    /// with a 2-byte message indicating the SOCKS version and the single method
+    /// it has chosen. This function reads that response and returns the selected
+    /// method code.
+    fn readAuthMethodResponse(sock: socket.Socket) !u8 {
     var response: [2]u8 = undefined;
 
     var pollfds = [_]poll_wrapper.pollfd{.{
@@ -278,8 +289,14 @@ fn readAuthMethodResponse(sock: socket.Socket) !u8 {
     return response[1];
 }
 
-/// Authenticate with username/password (RFC 1929)
-fn authenticateUserPassword(sock: socket.Socket, auth: ProxyAuth) !void {
+    /// Performs the username/password authentication sub-negotiation (RFC 1929).
+    ///
+    /// If the server selects username/password authentication, this function is
+    /// called to send the credentials and verify the server's response. It
+    /// constructs a packet containing the username and password, sends it, and
+    /// then waits for a 2-byte response. A status of `0` in the response
+    /// indicates success.
+    fn authenticateUserPassword(sock: socket.Socket, auth: ProxyAuth) !void {
     var request: [513]u8 = undefined;
     var idx: usize = 0;
 
@@ -323,8 +340,13 @@ fn authenticateUserPassword(sock: socket.Socket, auth: ProxyAuth) !void {
     }
 }
 
-/// Send CONNECT request
-fn sendConnectRequest(
+    /// Constructs and sends the SOCKS5 `CONNECT` request packet.
+    ///
+    /// This function assembles the main connection request packet. It determines
+    /// the correct address type (IPv4, IPv6, or domain name) based on the
+    /// `target_host`, and includes the address and port in the request. It then
+    /// sends the fully constructed packet to the proxy server.
+    fn sendConnectRequest(
     allocator: std.mem.Allocator,
     sock: socket.Socket,
     target_host: []const u8,
@@ -367,8 +389,14 @@ fn sendConnectRequest(
     _ = try posix.send(sock, request.items, 0);
 }
 
-/// Read CONNECT response
-fn readConnectResponse(_: std.mem.Allocator, sock: socket.Socket) !void {
+    /// Reads and validates the server's response to the `CONNECT` request.
+    ///
+    /// After sending the connection request, the server sends a final reply. This
+    /// function reads that reply, which includes the SOCKS version, a reply code,
+    /// and the address/port that the proxy has bound for the connection. It
+    /// checks that the reply code is `0x00` (success) and returns an error for
+    /// any other code.
+    fn readConnectResponse(_: std.mem.Allocator, sock: socket.Socket) !void {
     var buffer: [512]u8 = undefined;
 
     var pollfds = [_]poll_wrapper.pollfd{.{

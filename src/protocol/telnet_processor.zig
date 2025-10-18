@@ -264,6 +264,12 @@ pub const TelnetProcessor = struct {
         return try cmd_data.toOwnedSlice(out_allocator);
     }
 
+    /// Determines the next state of the state machine based on the current state
+    /// and an input byte.
+    ///
+    /// This function implements the core Telnet state transition logic as
+    /// described in RFC 854. For example, if the current state is `.data` and
+    /// the input byte is an `IAC` command, the next state will be `.iac`.
     fn getNextState(self: *const TelnetProcessor, byte: u8) TelnetError!TelnetState {
         // The transition table mirrors the RFC 854 state diagram so every byte keeps
         // the processor in a well-defined mode before validation/dispatch occur.
@@ -289,6 +295,15 @@ pub const TelnetProcessor = struct {
         };
     }
 
+    /// Processes a single byte based on the current state of the state machine.
+    ///
+    /// This function is the action-taking counterpart to `getNextState`. After a
+    /// state transition is determined, this function is called to perform the
+    /// associated action. For example:
+    /// - If the state is `.data`, the byte is appended to the application data buffer.
+    /// - If the state is `.will`, the byte is interpreted as a Telnet option, and
+    ///   the negotiation logic is triggered.
+    /// - If the state is `.sb_data`, the byte is added to the sub-negotiation buffer.
     fn processByte(self: *TelnetProcessor, byte: u8, _: TelnetState, app_data: *std.ArrayList(u8), response: *std.ArrayList(u8)) (TelnetError || std.mem.Allocator.Error)!void {
         // Data states emit straight into app_data, while negotiation states funnel
         // through OptionHandlerRegistry so each RFC-specific handler can craft replies.

@@ -33,7 +33,15 @@ const computeThresholdBytes = @import("./flow_control.zig").computeThresholdByte
 const socket_io = @import("./socket_io.zig");
 const child_io = @import("./child_io.zig");
 
-/// Poll-based exec session implementation.
+/// Implements the exec session I/O loop using the `poll()` system call.
+///
+/// This struct manages the bidirectional data flow for an exec session on
+/// Unix-like systems where `io_uring` is not available. It uses a traditional,
+/// readiness-based event loop (`poll`) to multiplex I/O between the network
+/// socket and the child process's standard I/O pipes.
+///
+/// Like other backends, it uses `IoRingBuffer`s for data buffering and a
+/// `FlowState` manager to apply backpressure and prevent memory exhaustion.
 pub const PollSession = struct {
     const socket_index: usize = 0;
     const child_stdin_index: usize = 1;
@@ -208,12 +216,17 @@ pub const PollSession = struct {
         self.maybeShutdownSocketWrite();
     }
 
+    /// Calculates the total number of bytes currently held in all I/O buffers.
     fn totalBuffered(self: *const PollSession) usize {
         return self.stdin_buffer.availableRead() +
             self.stdout_buffer.availableRead() +
             self.stderr_buffer.availableRead();
     }
 
+    /// Updates the flow control state based on the current buffer usage.
+    ///
+    /// This function checks the total buffered bytes against the configured
+    /// thresholds and updates the `flow_state` to either pause or resume reads.
     fn updateFlow(self: *PollSession) !void {
         const total = self.totalBuffered();
         if (self.flow_enabled and total > self.max_total_buffer_bytes) {
@@ -225,6 +238,13 @@ pub const PollSession = struct {
         }
     }
 
+    /// Updates the `events` fields in the `poll_fds` array based on current state.
+    ///
+    /// This function is the core of the readiness-based model. It inspects the
+    /// state of the buffers and I/O streams to determine which events (`POLL.IN`
+    /// or `POLL.OUT`) to listen for in the next call to `poll()`. For example,
+    /// it will only request `POLL.OUT` on the socket if there is data in the
+    /// stdout or stderr buffers waiting to be written.
     fn updatePollInterests(self: *PollSession) void {
         const pause_reads = self.flow_enabled and self.flow_state.shouldPause();
 
@@ -284,6 +304,11 @@ pub const PollSession = struct {
         }
     }
 
+    /// Calculates the appropriate timeout for the `poll()` system call.
+    ///
+    /// The timeout is determined by the `TimeoutTracker`, which considers the
+    /// execution, idle, and connection timeouts. This ensures the event loop
+    /// wakes up in time to enforce timeouts. Returns -1 for an infinite timeout.
     fn computePollTimeout(self: *PollSession) i32 {
         const next = self.tracker.nextPollTimeout(null);
         if (next) |ms| {
@@ -296,6 +321,10 @@ pub const PollSession = struct {
         return -1;
     }
 
+    /// Checks for and handles any expired timers.
+    ///
+    /// If a timeout (execution, idle, or connection) has occurred, this function
+    /// kills the child process and returns the corresponding timeout error.
     fn checkTimeouts(self: *PollSession) !void {
         switch (self.tracker.check()) {
             .none => {},
@@ -314,6 +343,9 @@ pub const PollSession = struct {
         }
     }
 
+    /// Determines whether the main I/O event loop should continue running.
+    ///
+    /// The loop continues as long as there is potential work to be done.
     fn shouldContinue(self: *const PollSession) bool {
         // Same logic as original ExecSession.shouldContinue()
         if (!self.socket_write_closed and (self.stdout_buffer.availableRead() > 0 or self.stderr_buffer.availableRead() > 0)) return true;
@@ -323,6 +355,10 @@ pub const PollSession = struct {
         return false;
     }
 
+    /// Handles a readable event on the network socket.
+    ///
+    /// This function reads data from the socket into the stdin buffer and then
+    /// immediately attempts to write that data to the child's stdin.
     fn handleSocketReadable(self: *PollSession) !void {
         var ctx = socket_io.SocketReadContext{
             .telnet_conn = self.telnet_conn,
@@ -339,6 +375,10 @@ pub const PollSession = struct {
         try self.handleChildStdinWritable();
     }
 
+    /// Handles a writable event on the network socket.
+    ///
+    /// This function writes data from the stdout and stderr buffers to the socket.
+    /// After writing, it checks if the socket's write side can be closed.
     fn handleSocketWritable(self: *PollSession) !void {
         if (self.socket_write_closed) return;
 
@@ -354,6 +394,10 @@ pub const PollSession = struct {
         self.maybeShutdownSocketWrite();
     }
 
+    /// Handles a readable event on the child's stdout pipe.
+    ///
+    /// This function reads data from the child's stdout into the stdout buffer
+    /// and then immediately attempts to write that data to the network socket.
     fn handleChildStdoutReadable(self: *PollSession) !void {
         var ctx = child_io.ChildReadContext{
             .fd = self.stdout_fd,
@@ -369,6 +413,10 @@ pub const PollSession = struct {
         try self.handleSocketWritable();
     }
 
+    /// Handles a readable event on the child's stderr pipe.
+    ///
+    /// This function reads data from the child's stderr into the stderr buffer
+    /// and then immediately attempts to write that data to the network socket.
     fn handleChildStderrReadable(self: *PollSession) !void {
         var ctx = child_io.ChildReadContext{
             .fd = self.stderr_fd,
@@ -384,6 +432,9 @@ pub const PollSession = struct {
         try self.handleSocketWritable();
     }
 
+    /// Handles a writable event on the child's stdin pipe.
+    ///
+    /// This function writes data from the stdin buffer to the child's stdin.
     fn handleChildStdinWritable(self: *PollSession) !void {
         var ctx = child_io.ChildWriteContext{
             .fd = self.stdin_fd,
@@ -397,6 +448,11 @@ pub const PollSession = struct {
         try self.updateFlow();
     }
 
+    /// Checks if the socket's write side can be shut down and does so if appropriate.
+    ///
+    /// The socket write side is shut down when both of the child's output pipes
+    /// (stdout and stderr) are closed and there is no more data in their
+    /// respective buffers left to write.
     fn maybeShutdownSocketWrite(self: *PollSession) void {
         if (self.socket_write_closed) return;
         if (self.stdout_buffer.availableRead() > 0 or self.stderr_buffer.availableRead() > 0) return;
@@ -412,6 +468,9 @@ pub const PollSession = struct {
     // Poll-based event dispatchers
     // ========================================================================
 
+    /// Dispatches events for the network socket based on the `revents` mask.
+    /// It calls the appropriate `handle...` function for readable, writable,
+    /// hangup, or error events.
     fn dispatchSocketEvents(self: *PollSession, revents: i16) !void {
         if (revents == 0) return;
         if ((revents & posix.POLL.NVAL) != 0) {
@@ -443,6 +502,7 @@ pub const PollSession = struct {
         }
     }
 
+    /// Dispatches events for the child's stdin pipe.
     fn dispatchChildStdinEvents(self: *PollSession, revents: i16) !void {
         if (revents == 0 or self.child_stdin_closed) return;
         if ((revents & posix.POLL.OUT) != 0) {
@@ -453,6 +513,7 @@ pub const PollSession = struct {
         }
     }
 
+    /// Dispatches events for the child's stdout pipe.
     fn dispatchChildStdoutEvents(self: *PollSession, revents: i16) !void {
         if (revents == 0 or self.child_stdout_closed) return;
         if ((revents & posix.POLL.IN) != 0) {
@@ -463,6 +524,7 @@ pub const PollSession = struct {
         }
     }
 
+    /// Dispatches events for the child's stderr pipe.
     fn dispatchChildStderrEvents(self: *PollSession, revents: i16) !void {
         if (revents == 0 or self.child_stderr_closed) return;
         if ((revents & posix.POLL.IN) != 0) {

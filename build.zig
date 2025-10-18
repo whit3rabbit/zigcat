@@ -838,6 +838,21 @@ pub fn build(b: *std.Build) void {
     const portscan_uring_test_step = b.step("test-portscan-uring", "Run io_uring compile-time tests (7 tests)");
     portscan_uring_test_step.dependOn(&run_portscan_uring_tests.step);
 
+    //--- Gsocket Integration Tests ---
+    // Tests the gsocket (Global Socket) NAT traversal protocol and SRP encryption layer.
+    // Covers secret derivation, packet structure, protocol constants, and SRP connection handling.
+    const gsocket_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/gsocket_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gsocket_test_module.addImport("zigcat", exe.root_module);
+    const gsocket_tests = b.addTest(.{ .root_module = gsocket_test_module });
+    gsocket_tests.linkLibC();
+    const run_gsocket_tests = b.addRunArtifact(gsocket_tests);
+    const gsocket_test_step = b.step("test-gsocket", "Run gsocket integration tests (NAT traversal, SRP encryption)");
+    gsocket_test_step.dependOn(&run_gsocket_tests.step);
+
     const validation_test_step = b.step("test-validation", "Run all validation tests (13 tests: 8 CRLF + 5 shell)");
     validation_test_step.dependOn(&run_crlf_memory_tests.step);
     validation_test_step.dependOn(&run_shell_memory_tests.step);
