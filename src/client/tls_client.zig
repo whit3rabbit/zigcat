@@ -27,23 +27,38 @@ const logging = @import("../util/logging.zig");
 const build_options = @import("build_options");
 const dtls_enabled = build_options.enable_tls and (!@hasDecl(build_options, "use_wolfssl") or !build_options.use_wolfssl);
 const dtls = if (dtls_enabled) @import("../tls/dtls/dtls.zig") else struct {
+    /// DTLS stub for wolfSSL builds (DTLS only supported with OpenSSL).
+    /// These methods should never be called because connectDtls() returns an error.
+    /// If called, indicates a logic error in the connection establishment code.
     pub const DtlsConnection = struct {
+        /// SAFETY: Should never be called - connectDtls() returns error first.
+        /// Using unreachable instead of @panic() to signal this is a logic error.
         pub fn deinit(_: *DtlsConnection) void {
-            @panic("DTLS not available with wolfSSL backend");
+            unreachable; // connectDtls() prevents DtlsConnection creation
         }
+
+        /// SAFETY: Should never be called - connectDtls() returns error first.
         pub fn close(_: *DtlsConnection) void {
-            @panic("DTLS not available with wolfSSL backend");
+            unreachable; // connectDtls() prevents DtlsConnection creation
         }
+
+        /// SAFETY: Should never be called - connectDtls() returns error first.
         pub fn read(_: *DtlsConnection, _: []u8) !usize {
-            return error.DtlsNotAvailableWithWolfSSL;
+            unreachable; // connectDtls() prevents DtlsConnection creation
         }
+
+        /// SAFETY: Should never be called - connectDtls() returns error first.
         pub fn write(_: *DtlsConnection, _: []const u8) !usize {
-            return error.DtlsNotAvailableWithWolfSSL;
+            unreachable; // connectDtls() prevents DtlsConnection creation
         }
+
+        /// SAFETY: Should never be called - connectDtls() returns error first.
         pub fn getSocket(_: *DtlsConnection) posix.socket_t {
-            return 0;
+            unreachable; // connectDtls() prevents DtlsConnection creation
         }
     };
+
+    /// DTLS configuration (stub - matches real DtlsConfig for compile-time compatibility).
     pub const DtlsConfig = struct {
         verify_peer: bool = true,
         server_name: ?[]const u8 = null,
@@ -55,7 +70,28 @@ const dtls = if (dtls_enabled) @import("../tls/dtls/dtls.zig") else struct {
         initial_timeout_ms: u32 = 1000,
         replay_window: u64 = 64,
     };
+
+    /// DTLS connection stub - always returns error.DtlsNotAvailableWithWolfSSL.
+    /// This is the primary guard preventing DTLS usage with wolfSSL backend.
     pub fn connectDtls(_: std.mem.Allocator, _: []const u8, _: u16, _: DtlsConfig) !*DtlsConnection {
+        // Print user-friendly error message before returning error
+        std.debug.print("\n", .{});
+        std.debug.print("╔═══════════════════════════════════════════════════════════╗\n", .{});
+        std.debug.print("║  ⚠️  DTLS NOT AVAILABLE                                  ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  DTLS (Datagram TLS) is only supported when zigcat is    ║\n", .{});
+        std.debug.print("║  built with OpenSSL backend.                             ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Current build: wolfSSL backend (DTLS not supported)     ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Solutions:                                               ║\n", .{});
+        std.debug.print("║  • Rebuild with OpenSSL: zig build -Duse-wolfssl=false   ║\n", .{});
+        std.debug.print("║  • Use regular TLS over TCP instead of DTLS over UDP     ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Example (TLS over TCP):                                 ║\n", .{});
+        std.debug.print("║    zigcat --ssl <host> <port>                            ║\n", .{});
+        std.debug.print("╚═══════════════════════════════════════════════════════════╝\n", .{});
+        std.debug.print("\n", .{});
         return error.DtlsNotAvailableWithWolfSSL;
     }
 };
@@ -119,9 +155,9 @@ pub fn establishTlsConnection(
     raw_socket: posix.socket_t,
 ) !TlsConnectionResult {
     // Security warning if certificate verification is disabled
-    if (!cfg.ssl_verify) {
+    if (!cfg.ssl_verify and cfg.insecure) {
         logging.logWarning("⚠️  Certificate verification is DISABLED. Connection is NOT secure!\n", .{});
-        logging.logWarning("⚠️  Use --ssl-verify to enable certificate validation.\n", .{});
+        logging.logWarning("⚠️  Remove --insecure or add --ssl-verify to enable certificate validation.\n", .{});
     }
 
     if (cfg.udp_mode or cfg.dtls) {

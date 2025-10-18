@@ -59,23 +59,23 @@ pub fn runGsocketClient(
         logging.logVerbose(cfg, "  Mode: {s}\n", .{if (cfg.listen_mode) "listen" else "connect"});
     }
 
-    // 1. Establish GSRN tunnel through relay
+    // 1. Establish GSRN tunnel through relay and get the assigned role
     //    Connect to gs.thc.org:443, send GsListen/GsConnect packet,
-    //    wait for GsStart response, return raw TCP tunnel
-    const raw_stream = try gsocket.establishGsrnTunnel(allocator, cfg);
-    defer raw_stream.close();
+    //    wait for GsStart response, return raw TCP tunnel + role from relay
+    const tunnel_result = try gsocket.establishGsrnTunnel(allocator, cfg);
+    defer tunnel_result.stream.close();
 
     // 2. Perform SRP handshake over tunnel
     //    Use -w timeout if set, otherwise connect_timeout
     const timeout_ms = if (cfg.wait_time > 0) cfg.wait_time else cfg.connect_timeout;
 
-    // Role determined by GsStart.flags from relay:
-    //   GS_FL_PROTO_START_SERVER → act as SRP server
-    //   GS_FL_PROTO_START_CLIENT → act as SRP client
-    var srp_conn = if (cfg.listen_mode)
-        try srp.SrpConnection.initServer(allocator, raw_stream, secret, timeout_ms)
-    else
-        try srp.SrpConnection.initClient(allocator, raw_stream, secret, timeout_ms);
+    // *** FIX: Use the role returned from the relay (NOT cfg.listen_mode) ***
+    // This allows both users to run the same command without coordination.
+    // The first peer to connect becomes the server, second becomes client.
+    var srp_conn = switch (tunnel_result.role) {
+        .Server => try srp.SrpConnection.initServer(allocator, tunnel_result.stream, secret, timeout_ms),
+        .Client => try srp.SrpConnection.initClient(allocator, tunnel_result.stream, secret, timeout_ms),
+    };
 
     defer {
         srp_conn.close(); // Send TLS close_notify

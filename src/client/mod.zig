@@ -34,6 +34,7 @@ const tcp_client = @import("./tcp_client.zig");
 const tls_client = @import("./tls_client.zig");
 const adapters = @import("./stream_adapters.zig");
 const TransferContext = @import("./transfer_context.zig").TransferContext;
+const exec_client = @import("./exec_client.zig");
 
 // Protocol support
 const Connection = @import("../net/connection.zig").Connection;
@@ -363,34 +364,13 @@ fn runTelnetTransfer(
 // Exec Mode (Client-Side Command Execution)
 // ============================================================================
 
-/// Execute command with socket connected to stdin/stdout.
-///
-/// This function is a placeholder for Phase 2 implementation.
-/// Client-side exec is less dangerous than server-side but still requires
-/// proper command validation and sanitization.
-///
-/// Planned functionality:
-/// - Fork/exec child process with given command
-/// - Redirect child stdin/stdout to socket
-/// - Bidirectional I/O between socket and child process
-/// - Proper signal handling and cleanup
-///
-/// Security note:
-/// - Client-side exec is less dangerous than server-side
-/// - Still requires proper command validation
-/// - Should sanitize environment variables
 fn executeCommand(
     allocator: std.mem.Allocator,
     socket: posix.socket_t,
     cmd: []const u8,
     cfg: *const config.Config,
 ) !void {
-    _ = allocator;
-    _ = socket;
-    _ = cmd;
-    _ = cfg;
-    logging.logWarning("Command execution not yet implemented\n", .{});
-    return error.NotImplemented;
+    try exec_client.executeCommand(allocator, socket, cmd, cfg);
 }
 
 // ============================================================================

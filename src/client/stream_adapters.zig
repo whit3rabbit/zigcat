@@ -244,36 +244,46 @@ pub fn dtlsConnectionToStream(dtls_conn: *dtls.DtlsConnection) stream.Stream {
 ///
 /// This adapter is used for unencrypted TCP/UDP connections.
 ///
+/// **CRITICAL FIX**: Previous implementation stored a pointer to the stack-allocated
+/// net_stream parameter, causing use-after-free bugs. Now stores the socket handle
+/// directly and reconstructs std.net.Stream on each call.
+///
 /// Parameters:
-///   net_stream: std.net.Stream (must be stack-allocated by caller)
+///   net_stream: std.net.Stream (value, not pointer - extracts handle)
 ///
 /// Returns: stream.Stream with vtable pointing to socket methods
 pub fn netStreamToStream(net_stream: std.net.Stream) stream.Stream {
+    // Store the socket handle directly (not a pointer to the struct)
+    const sock_fd = net_stream.handle;
+
     return stream.Stream{
-        .context = @ptrCast(@constCast(&net_stream)),
+        .context = @ptrFromInt(@as(usize, @intCast(sock_fd))),
         .readFn = struct {
             fn read(context: *anyopaque, buffer: []u8) anyerror!usize {
-                const s = contextToPtr(std.net.Stream, context);
+                const fd: posix.socket_t = @intCast(@intFromPtr(context));
+                const s = std.net.Stream{ .handle = fd };
                 return s.read(buffer);
             }
         }.read,
         .writeFn = struct {
             fn write(context: *anyopaque, data: []const u8) anyerror!usize {
-                const s = contextToPtr(std.net.Stream, context);
+                const fd: posix.socket_t = @intCast(@intFromPtr(context));
+                const s = std.net.Stream{ .handle = fd };
                 return s.write(data);
             }
         }.write,
         .closeFn = struct {
             fn close(context: *anyopaque) void {
-                const s = contextToPtr(std.net.Stream, context);
+                const fd: posix.socket_t = @intCast(@intFromPtr(context));
+                const s = std.net.Stream{ .handle = fd };
                 s.close();
             }
         }.close,
         .handleFn = struct {
-            fn handle(context: *anyopaque) std.posix.socket_t {
-                const s = contextToPtr(std.net.Stream, context);
-                return s.handle;
+            fn getHandle(context: *anyopaque) std.posix.socket_t {
+                const fd: posix.socket_t = @intCast(@intFromPtr(context));
+                return fd;
             }
-        }.handle,
+        }.getHandle,
     };
 }

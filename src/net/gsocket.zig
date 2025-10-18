@@ -183,6 +183,25 @@ pub fn deriveSrpPassword(secret: []const u8) SrpPassword {
 }
 
 // ============================================================================
+// SRP Role Enumeration
+// ============================================================================
+
+/// SRP role assigned by GSRN relay
+///
+/// The relay determines which peer acts as the SRP server/client based on
+/// connection order. The first peer to register becomes the server.
+pub const GsocketRole = enum {
+    Server,
+    Client,
+};
+
+/// Result structure containing both the tunnel stream and assigned role
+pub const GsrnTunnelResult = struct {
+    stream: std.net.Stream,
+    role: GsocketRole,
+};
+
+// ============================================================================
 // GSRN Handshake
 // ============================================================================
 
@@ -193,17 +212,17 @@ pub fn deriveSrpPassword(secret: []const u8) SrpPassword {
 /// 2. Derives GS-Address from the secret
 /// 3. Sends GsListen (server mode) or GsConnect (client mode) packet
 /// 4. Waits for GsStart response from relay
-/// 5. Returns the raw TCP stream (tunnel to peer)
+/// 5. Returns the raw TCP stream (tunnel to peer) AND assigned role
 ///
 /// After this function returns, the caller should perform an SRP handshake
-/// to establish end-to-end encryption.
+/// using the role returned by the relay (NOT cfg.listen_mode).
 ///
 /// Args:
 ///     allocator: Memory allocator
 ///     cfg: Configuration containing gsocket_secret and listen_mode
 ///
 /// Returns:
-///     std.net.Stream: Raw TCP tunnel through GSRN relay
+///     GsrnTunnelResult: Raw TCP tunnel and assigned SRP role
 ///
 /// Errors:
 ///     - MissingSecret: cfg.gsocket_secret is null
@@ -212,11 +231,34 @@ pub fn deriveSrpPassword(secret: []const u8) SrpPassword {
 pub fn establishGsrnTunnel(
     allocator: std.mem.Allocator,
     cfg: *const config.Config,
-) !std.net.Stream {
+) !GsrnTunnelResult {
     _ = allocator; // Reserved for future use
 
-    const gsrn_host = GSRN_DEFAULT_HOST;
-    const gsrn_port = GSRN_DEFAULT_PORT;
+    // *** FIX: Use custom relay if provided, otherwise default ***
+    // Define relay configuration structure
+    const RelayConfig = struct {
+        host: []const u8,
+        port: u16,
+    };
+
+    const relay_config = if (cfg.gsocket_relay) |relay_str| blk: {
+        // Parse "host:port" from the custom relay string
+        const colon_pos = std.mem.lastIndexOf(u8, relay_str, ":") orelse {
+            logging.logError(error.InvalidGsRelayFormat, "Custom gsocket relay must be in host:port format");
+            return error.InvalidGsRelayFormat;
+        };
+
+        const host = relay_str[0..colon_pos];
+        const port = std.fmt.parseInt(u16, relay_str[colon_pos + 1 ..], 10) catch {
+            logging.logError(error.InvalidGsRelayFormat, "Invalid port number in relay address");
+            return error.InvalidGsRelayFormat;
+        };
+
+        break :blk RelayConfig{ .host = host, .port = port };
+    } else RelayConfig{ .host = GSRN_DEFAULT_HOST, .port = GSRN_DEFAULT_PORT };
+
+    const gsrn_host = relay_config.host;
+    const gsrn_port = relay_config.port;
 
     logging.logNormal(cfg, "Connecting to GSRN relay at {s}:{d}...\n", .{ gsrn_host, gsrn_port });
 
@@ -270,19 +312,20 @@ pub fn establishGsrnTunnel(
         return error.InvalidGsStartPacket;
     }
 
-    // Log connection establishment
+    // *** FIX: Determine role from relay flags (CRITICAL for protocol compliance) ***
     const role = if (start_pkt.flags & GS_FL_PROTO_START_SERVER != 0)
-        "server"
-    else if (start_pkt.flags & GS_FL_PROTO_START_CLIENT != 0)
-        "client"
+        GsocketRole.Server
     else
-        "unknown";
+        GsocketRole.Client;
 
-    logging.logNormal(cfg, "GSRN tunnel established (role: {s})\n", .{role});
+    logging.logNormal(cfg, "GSRN tunnel established (assigned role: {s})\n", .{@tagName(role)});
     logging.logVerbose(cfg, "GsStart flags: 0x{x:0>2}\n", .{start_pkt.flags});
 
-    // Return the raw TCP stream (tunnel is now established)
-    return stream;
+    // Return the raw TCP stream AND the assigned role
+    return GsrnTunnelResult{
+        .stream = stream,
+        .role = role,
+    };
 }
 
 // ============================================================================

@@ -16,6 +16,7 @@ const cli = @import("cli.zig");
 const network = @import("network.zig");
 const tls = @import("tls.zig");
 const security_cfg = @import("security.zig");
+const logging = @import("../util/logging.zig");
 
 /// Comprehensive configuration validation including I/O, TLS, Unix sockets,
 /// exec mode checks, broker/chat enforcement, and basic conflict detection.
@@ -80,6 +81,12 @@ pub fn validate(cfg: *const Config) !void {
         }
         // In connect mode, gsocket doesn't use host/port args (uses secret instead)
         if (!cfg.listen_mode and cfg.positional_args.len > 0) {
+            return error.ConflictingOptions;
+        }
+    } else {
+        // *** FIX: Validate that --relay is only used with --gs-secret ***
+        if (cfg.gsocket_relay != null) {
+            logging.logError(error.ConflictingOptions, "--relay can only be used with --gs-secret");
             return error.ConflictingOptions;
         }
     }

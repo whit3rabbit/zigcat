@@ -36,12 +36,8 @@ zigcat \- Concatenate and redirect sockets
 .BR --help " | " --version " | " --version-all
 .br
 .B zigcat
-.BR -l " | " --listen
 .BR --gs-secret " " \fIsecret\fR
-[\fIoptions\fR]
-.br
-.B zigcat
-.BR --gs-secret " " \fIsecret\fR
+[\fB-R\fR \fIrelay\fR]
 [\fIoptions\fR]
 .SH DESCRIPTION
 .B zigcat
@@ -180,10 +176,22 @@ Set initial DTLS retransmission timeout in milliseconds (default: 1000). OpenSSL
 Verify the server certificate. This is the default.
 .TP
 .B --no-ssl-verify
-Do not verify the server certificate.
+Do not verify the server certificate. Requires the
+.B --insecure
+flag to acknowledge security risks.
 .TP
 .B --ssl-verify=false
-Alternate form to disable certificate verification.
+Alternate form to disable certificate verification. Requires the
+.B --insecure
+flag to acknowledge security risks.
+.TP
+.B --insecure
+.B REQUIRED
+flag to allow insecure TLS connections when disabling certificate verification with
+.B --no-ssl-verify
+or
+.BR --ssl-verify=false .
+This flag explicitly acknowledges the security risks of man-in-the-middle attacks and other threats when certificate verification is disabled.
 .TP
 .BR --ssl-cert " <file>"
 The SSL certificate file to use in server mode.
@@ -216,11 +224,13 @@ flag. This allows two peers behind NAT/firewalls to establish a direct connectio
 .IP \(bu 2
 Both peers derive a shared GS-Address from the secret using SHA256
 .IP \(bu 2
-Peers connect to gs.thc.org:443 (GSRN relay server)
+Peers connect to relay server (default: gs.thc.org:443, configurable with \fB-R\fR)
 .IP \(bu 2
-Server sends GsListen packet, client sends GsConnect packet
+First peer sends GsListen or GsConnect packet (both work identically)
 .IP \(bu 2
-Relay matches addresses and establishes raw TCP tunnel
+Second peer sends their packet, relay matches GS-Addresses
+.IP \(bu 2
+Relay assigns SRP server/client roles dynamically (first peer = server, second = client)
 .IP \(bu 2
 SRP (Secure Remote Password) handshake provides end-to-end encryption
 .IP \(bu 2
@@ -273,6 +283,14 @@ Cannot use with SSL/TLS (\fB--ssl\fR) or DTLS (\fB--dtls\fR)
 .TP
 .BR --gs-secret " <secret>"
 Shared secret for GSRN connection. Both peers must use the exact same secret. The secret is used to derive a 128-bit GS-Address (SHA256 hash) for peer matching on the relay server.
+.IP
+.B Important:
+Both peers can run the same command (no need to coordinate who uses \fB-l\fR). The relay server automatically assigns SRP server/client roles based on connection order.
+.TP
+.BR -R ", " --relay " <host:port>"
+Specify a custom GSRN relay server (default: gs.thc.org:443). Enables private relay infrastructure for corporate/internal networks. Both peers must use the same relay server. Must be used with \fB--gs-secret\fR.
+.IP
+Example: \fBzigcat -R private.relay.com:8443 --gs-secret MySecret\fR
 .SS "PROXY OPTIONS"
 .TP
 .BR --proxy " <url>"
@@ -652,21 +670,23 @@ zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem --ssl-verify --ssl-trustf
 .RE
 .SS "Global Socket (NAT traversal)"
 .PP
-Listen via GSRN (wait for peer):
+Basic connection (both peers run same command):
 .RS
 .EX
-zigcat -l --gs-secret MySecret
+Peer 1: zigcat --gs-secret MySecret
+Peer 2: zigcat --gs-secret MySecret
 .EE
 .RE
 .PP
-Connect via GSRN (to listening peer):
+Both peers auto-connect through gs.thc.org relay. The relay assigns roles automatically (first peer = server, second = client). No host/port arguments needed.
+.PP
+Using a custom relay server:
 .RS
 .EX
-zigcat --gs-secret MySecret
+Peer 1: zigcat -R private.relay.com:8443 --gs-secret MySecret
+Peer 2: zigcat -R private.relay.com:8443 --gs-secret MySecret
 .EE
 .RE
-.PP
-Both peers auto-connect through gs.thc.org relay. No host/port arguments needed in connect mode.
 .PP
 File transfer example (receiver):
 .RS
@@ -711,5 +731,16 @@ zigcat -vv --gs-secret MySecret
 .RE
 .SH "SEE ALSO"
 .BR ncat (1)
+.PP
+.B Documentation Files:
+.IP \(bu 2
+.I GSOCKET_CUSTOM_RELAY.md
+\- Comprehensive guide to custom relay servers, security considerations, and relay server setup
+.IP \(bu 2
+.I GSOCKET_IMPLEMENTATION_SUMMARY.md
+\- Technical implementation details, protocol compliance, and architecture
+.IP \(bu 2
+.I USAGE.md
+\- Complete usage guide with examples for all features
 .SH BUGS
 No known bugs.

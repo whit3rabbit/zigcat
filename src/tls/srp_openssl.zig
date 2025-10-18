@@ -168,15 +168,18 @@ pub const SrpConnection = struct {
         ad: [*c]c_int,
         arg: ?*anyopaque,
     ) callconv(std.builtin.CallingConvention.c) c_int {
+        // *** FIX: Use standard OpenSSL error reporting (not -1) ***
         // Validate inputs
         if (ssl == null) {
             logging.logDebug("SRP server callback: null SSL pointer\n", .{});
-            return -1;
+            ad[0] = c.SSL_AD_INTERNAL_ERROR;
+            return c.SSL3_AL_FATAL;
         }
 
         if (arg == null) {
             logging.logDebug("SRP server callback: null arg pointer (SRP_VBASE not initialized)\n", .{});
-            return -1;
+            ad[0] = c.SSL_AD_INTERNAL_ERROR;
+            return c.SSL3_AL_FATAL;
         }
 
         // Cast arg to SRP_VBASE pointer

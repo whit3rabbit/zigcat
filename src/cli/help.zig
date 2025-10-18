@@ -64,7 +64,7 @@ pub fn printHelp() void {
         \\SSL/TLS OPTIONS:
         \\  --ssl                         Enable SSL/TLS
         \\  --ssl-verify                  Enable certificate verification (default)
-        \\  --no-ssl-verify               Disable certificate verification (INSECURE!)
+        \\  --insecure                    Disable certificate verification (explicit acknowledgment)
         \\  --ssl-cert <file>             SSL certificate file (server mode)
         \\  --ssl-key <file>              SSL private key file (server mode)
         \\  --ssl-trustfile <file>        SSL CA certificate bundle
@@ -75,11 +75,13 @@ pub fn printHelp() void {
         \\
         \\GSOCKET OPTIONS:
         \\  --gs-secret <secret>          Connect via Global Socket Relay Network (GSRN)
-        \\                                Uses secret for NAT traversal through gs.thc.org:443
+        \\                                Uses secret for NAT traversal through relay server
         \\                                Both peers must use the same secret for connection
         \\                                Provides SRP-AES-256-CBC-SHA end-to-end encryption
         \\                                (NOTE: Uses SHA-1 MAC for gsocket compatibility)
         \\                                No port forwarding or firewall configuration needed
+        \\  -R, --relay <host:port>       Specify a custom GSRN relay server
+        \\                                (Default: gs.thc.org:443)
         \\
         \\PROXY OPTIONS:
         \\  --proxy <url>                 Proxy URL (http://host:port, socks5://host:port)
