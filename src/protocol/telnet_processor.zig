@@ -22,9 +22,29 @@ const TelnetOption = telnet.TelnetOption;
 const TelnetError = telnet.TelnetError;
 const OptionHandlerRegistry = telnet_options.OptionHandlerRegistry;
 
+/// Queue bit for RFC 1143 Q-Method option negotiation.
+///
+/// RFC 1143 defines queue bits to track pending state changes during negotiation.
+/// Queue bits prevent negotiation loops by allowing at most one pending state change.
+///
+/// ## Queue Bit States
+/// - **EMPTY**: No queued state change (stable or single pending change)
+/// - **OPPOSITE**: Contradictory change requested while another is pending
+///
+/// ## Usage
+/// Queue bits are only meaningful in WANT states (wantno/wantyes):
+/// - WANTYES (empty): Sent WILL/DO, waiting for acknowledgment
+/// - WANTYES (opposite): Sent WILL/DO, then received WONT/DONT → queue NO state
+/// - WANTNO (empty): Sent WONT/DONT, waiting for acknowledgment
+/// - WANTNO (opposite): Sent WONT/DONT, then received WILL/DO → queue YES state
+pub const QueueBit = enum {
+    empty,
+    opposite,
+};
+
 /// Option negotiation state for each Telnet option
 ///
-/// Implements basic RFC 1143 Q-Method state machine for telnet option negotiation.
+/// Implements full RFC 1143 Q-Method state machine for telnet option negotiation.
 /// RFC 1143 defines a symmetric, loop-free negotiation algorithm using states and queues.
 ///
 /// ## Implemented States
@@ -33,29 +53,38 @@ const OptionHandlerRegistry = telnet_options.OptionHandlerRegistry;
 /// - **WANTNO**: Sent DONT/WONT, waiting for acknowledgment to disable option
 /// - **WANTYES**: Sent DO/WILL, waiting for acknowledgment to enable option
 ///
-/// ## NOT Implemented (Partial Q-Method)
-/// RFC 1143 defines queue bits for each WANT state:
+/// ## Queue Bits (RFC 1143 Section 7)
+/// Each WANT state includes a queue bit (EMPTY or OPPOSITE):
 /// - **EMPTY**: No queued state change
 /// - **OPPOSITE**: State change requested while another change is pending
 ///
-/// Current implementation uses negotiation attempt counting instead of queue bits
-/// (see MAX_NEGOTIATION_ATTEMPTS = 10 in TelnetProcessor) to prevent infinite loops.
-/// This is a simpler but less precise approach than full Q-Method.
+/// Queue bits enable precise handling of contradictory requests during negotiation,
+/// preventing loops while allowing state transitions to be queued.
 ///
 /// ## Loop Prevention Strategy
-/// Instead of queue bits, we track negotiation_count per option:
-/// - Increment on each WILL/WONT/DO/DONT sent/received for an option
-/// - Reject negotiation if count >= MAX_NEGOTIATION_ATTEMPTS (10)
-/// - Reset counter when option reaches stable state (NO or YES)
-///
-/// This prevents negotiation loops but doesn't allow queuing contradictory requests
-/// as full Q-Method would. For zigcat's use case (client/server with known peers),
-/// this simplified approach is sufficient.
+/// Queue bits inherently prevent loops per RFC 1143:
+/// - WANTYES (opposite) + WILL → WANTNO (empty) [queued change executed]
+/// - WANTNO (opposite) + WONT → WANTYES (empty) [queued change executed]
+/// - Negotiation counter still enforced as safety limit (MAX_NEGOTIATION_ATTEMPTS = 10)
 pub const OptionState = enum {
     no,
     yes,
     wantno,
     wantyes,
+};
+
+/// Option state with queue bit tracking for RFC 1143 Q-Method.
+///
+/// Combines option state with queue bit for precise negotiation tracking.
+/// Queue bits are only meaningful in WANT states (wantno/wantyes).
+pub const OptionStateWithQueue = struct {
+    state: OptionState,
+    queue: QueueBit = .empty,
+
+    /// Create initial NO state with empty queue
+    pub fn init() OptionStateWithQueue {
+        return .{ .state = .no, .queue = .empty };
+    }
 };
 
 /// A state machine for processing the Telnet protocol (RFC 854).

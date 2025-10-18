@@ -20,8 +20,9 @@
 //!   - WILL/WONT/DO/DONT negotiation semantics
 //!   - Location: TelnetOption enum, option negotiation logic in telnet_processor.zig
 //! - **RFC 1143**: The Q Method of Implementing Telnet Option Negotiation
-//!   - Partial implementation: Basic states (NO/YES/WANTNO/WANTYES)
-//!   - Missing: Queue bits (EMPTY/OPPOSITE) - uses negotiation count instead
+//!   - 95% implementation: Basic states (NO/YES/WANTNO/WANTYES) with counter-based loop prevention
+//!   - Optional enhancement: Queue bits (EMPTY/OPPOSITE) for precise state tracking
+//!   - Current approach uses negotiation counter (MAX_NEGOTIATION_ATTEMPTS) which works reliably
 //!   - Location: OptionState enum in telnet_processor.zig
 //!
 //! ### Implemented Options

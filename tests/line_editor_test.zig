@@ -285,3 +285,206 @@ test "line editor pty integration flushes display" {
     try testing.expect(display.len > 0);
     try testing.expect(std.mem.endsWith(u8, display, "\n"));
 }
+
+test "history buffer add and navigate" {
+    if (builtin.os.tag == .windows) return;
+    var ctx = TestContext.init(testing.allocator);
+    defer ctx.deinit();
+    const stream = makeStream(&ctx);
+
+    const pipe_pair = try makePipe();
+    defer pipe_pair.reader.close();
+    defer pipe_pair.writer.close();
+
+    var editor = try line_editor.LineEditor.init(testing.allocator, pipe_pair.writer, false);
+    defer editor.deinit();
+
+    // Submit multiple lines to build history
+    try processBytes(&editor, stream, "first");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    try processBytes(&editor, stream, "second");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    try processBytes(&editor, stream, "third");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    // Now navigate history with Up arrow
+    try sendEscSequence(&editor, stream, "A"); // Up: should load "third"
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "third\n");
+    resetContext(&ctx);
+
+    try sendEscSequence(&editor, stream, "A"); // Up: should load "second"
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "second\n");
+    resetContext(&ctx);
+
+    try sendEscSequence(&editor, stream, "A"); // Up: should load "first"
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "first\n");
+}
+
+test "history navigation up and down" {
+    if (builtin.os.tag == .windows) return;
+    var ctx = TestContext.init(testing.allocator);
+    defer ctx.deinit();
+    const stream = makeStream(&ctx);
+
+    const pipe_pair = try makePipe();
+    defer pipe_pair.reader.close();
+    defer pipe_pair.writer.close();
+
+    var editor = try line_editor.LineEditor.init(testing.allocator, pipe_pair.writer, false);
+    defer editor.deinit();
+
+    // Build history
+    try processBytes(&editor, stream, "alpha");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    try processBytes(&editor, stream, "beta");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    try processBytes(&editor, stream, "gamma");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    // Navigate up twice, then down once
+    try sendEscSequence(&editor, stream, "A"); // Up: gamma
+    try sendEscSequence(&editor, stream, "A"); // Up: beta
+    try sendEscSequence(&editor, stream, "B"); // Down: gamma
+
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "gamma\n");
+}
+
+test "history preserves current line when navigating" {
+    if (builtin.os.tag == .windows) return;
+    var ctx = TestContext.init(testing.allocator);
+    defer ctx.deinit();
+    const stream = makeStream(&ctx);
+
+    const pipe_pair = try makePipe();
+    defer pipe_pair.reader.close();
+    defer pipe_pair.writer.close();
+
+    var editor = try line_editor.LineEditor.init(testing.allocator, pipe_pair.writer, false);
+    defer editor.deinit();
+
+    // Build history
+    try processBytes(&editor, stream, "old");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    // Start typing new line
+    try processBytes(&editor, stream, "partial");
+
+    // Navigate up to history
+    try sendEscSequence(&editor, stream, "A"); // Up: old
+
+    // Navigate back down to restore "partial"
+    try sendEscSequence(&editor, stream, "B"); // Down: restore
+
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "partial\n");
+}
+
+test "history editing after navigation" {
+    if (builtin.os.tag == .windows) return;
+    var ctx = TestContext.init(testing.allocator);
+    defer ctx.deinit();
+    const stream = makeStream(&ctx);
+
+    const pipe_pair = try makePipe();
+    defer pipe_pair.reader.close();
+    defer pipe_pair.writer.close();
+
+    var editor = try line_editor.LineEditor.init(testing.allocator, pipe_pair.writer, false);
+    defer editor.deinit();
+
+    // Build history
+    try processBytes(&editor, stream, "hello");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    // Navigate up and edit
+    try sendEscSequence(&editor, stream, "A"); // Up: hello
+    try processBytes(&editor, stream, " world");
+
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "hello world\n");
+}
+
+test "history ignores empty lines" {
+    if (builtin.os.tag == .windows) return;
+    var ctx = TestContext.init(testing.allocator);
+    defer ctx.deinit();
+    const stream = makeStream(&ctx);
+
+    const pipe_pair = try makePipe();
+    defer pipe_pair.reader.close();
+    defer pipe_pair.writer.close();
+
+    var editor = try line_editor.LineEditor.init(testing.allocator, pipe_pair.writer, false);
+    defer editor.deinit();
+
+    // Submit non-empty line
+    try processBytes(&editor, stream, "not empty");
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    // Submit empty line (should not be added to history)
+    _ = try editor.processInput(stream, "\r");
+    resetContext(&ctx);
+
+    // Navigate up - should get "not empty", not empty line
+    try sendEscSequence(&editor, stream, "A"); // Up
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "not empty\n");
+}
+
+test "history ring buffer wraps at max size" {
+    if (builtin.os.tag == .windows) return;
+    var ctx = TestContext.init(testing.allocator);
+    defer ctx.deinit();
+    const stream = makeStream(&ctx);
+
+    const pipe_pair = try makePipe();
+    defer pipe_pair.reader.close();
+    defer pipe_pair.writer.close();
+
+    var editor = try line_editor.LineEditor.init(testing.allocator, pipe_pair.writer, false);
+    defer editor.deinit();
+
+    // Add more than max_size (100) entries - let's add 105
+    var i: usize = 0;
+    while (i < 105) : (i += 1) {
+        var buf: [20]u8 = undefined;
+        const line = try std.fmt.bufPrint(&buf, "line{d}", .{i});
+        try processBytes(&editor, stream, line);
+        _ = try editor.processInput(stream, "\r");
+        resetContext(&ctx);
+    }
+
+    // Navigate up - should get "line104" (most recent)
+    try sendEscSequence(&editor, stream, "A"); // Up
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "line104\n");
+    resetContext(&ctx);
+
+    // Verify oldest entries (line0-line4) are gone by navigating to end
+    // We can only navigate back 100 entries max
+    var nav_count: usize = 0;
+    while (nav_count < 100) : (nav_count += 1) {
+        try sendEscSequence(&editor, stream, "A"); // Up
+    }
+
+    // Should be at "line5" (oldest remaining, since line0-4 were evicted)
+    _ = try editor.processInput(stream, "\r");
+    try expectWrites(&ctx, "line5\n");
+}

@@ -10,6 +10,7 @@
 //! - Basic editing: backspace, delete, kill line, erase word
 //! - Cursor movement: arrow keys, Home/End, Ctrl+A/E, Ctrl+B/F
 //! - Word-wise navigation: Ctrl+Left/Right (via CSI modifiers)
+//! - History navigation: Up/Down arrows (readline-style, 100 entry buffer)
 //! - Visual feedback: local echo, cursor positioning
 //! - CRLF/LF handling based on server requirements
 //!
@@ -41,7 +42,94 @@ const std = @import("std");
 
 const Stream = @import("stream.zig").Stream;
 
-/// Local line editor for Telnet client mode
+/// History ring buffer for line editor (readline-style)
+const HistoryBuffer = struct {
+    entries: std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
+    max_size: usize,
+    current_index: ?usize = null,  // null = at current line (not browsing history)
+
+    const DEFAULT_MAX_SIZE = 100;  // Match readline default
+
+    pub fn init(allocator: std.mem.Allocator, max_size: usize) HistoryBuffer {
+        return .{
+            .entries = std.ArrayList([]const u8){},
+            .allocator = allocator,
+            .max_size = max_size,
+        };
+    }
+
+    pub fn deinit(self: *HistoryBuffer) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry);
+        }
+        self.entries.deinit(self.allocator);
+    }
+
+    /// Add a line to history (duplicates allowed, most recent first)
+    pub fn add(self: *HistoryBuffer, line: []const u8) !void {
+        // Don't add empty lines
+        if (line.len == 0) return;
+
+        // Duplicate the line for storage
+        const owned_line = try self.allocator.dupe(u8, line);
+        errdefer self.allocator.free(owned_line);
+
+        // Add to front of history (most recent first)
+        try self.entries.insert(self.allocator, 0, owned_line);
+
+        // Remove oldest if exceeding max size
+        if (self.entries.items.len > self.max_size) {
+            if (self.entries.pop()) |removed| {
+                self.allocator.free(removed);
+            }
+        }
+
+        // Reset navigation index
+        self.current_index = null;
+    }
+
+    /// Navigate up in history (older entries)
+    pub fn navigateUp(self: *HistoryBuffer) ?[]const u8 {
+        if (self.entries.items.len == 0) return null;
+
+        if (self.current_index) |idx| {
+            // Already browsing history, go to next older entry
+            if (idx + 1 < self.entries.items.len) {
+                self.current_index = idx + 1;
+                return self.entries.items[idx + 1];
+            }
+            return null;  // At oldest entry
+        } else {
+            // Start browsing from most recent
+            self.current_index = 0;
+            return self.entries.items[0];
+        }
+    }
+
+    /// Navigate down in history (newer entries)
+    pub fn navigateDown(self: *HistoryBuffer) ?[]const u8 {
+        if (self.current_index) |idx| {
+            if (idx == 0) {
+                // Return to current line (no history entry)
+                self.current_index = null;
+                return null;
+            } else {
+                // Go to next newer entry
+                self.current_index = idx - 1;
+                return self.entries.items[idx - 1];
+            }
+        }
+        return null;  // Already at current line
+    }
+
+    /// Reset navigation state (return to current line)
+    pub fn resetNavigation(self: *HistoryBuffer) void {
+        self.current_index = null;
+    }
+};
+
+/// Local line editor for Telnet client mode with history support
 pub const LineEditor = struct {
     allocator: std.mem.Allocator,
     buffer: std.ArrayList(u8),
@@ -52,6 +140,8 @@ pub const LineEditor = struct {
     escape_state: EscapeState = .none,
     csi_buf: [12]u8 = undefined,
     csi_len: usize = 0,
+    history: HistoryBuffer,
+    saved_line: ?[]const u8 = null,  // Saved current line when browsing history
 
     const EscapeState = enum {
         none,
@@ -65,11 +155,16 @@ pub const LineEditor = struct {
             .buffer = std.ArrayList(u8){},
             .stdout = stdout,
             .crlf = crlf,
+            .history = HistoryBuffer.init(allocator, HistoryBuffer.DEFAULT_MAX_SIZE),
         };
     }
 
     pub fn deinit(self: *LineEditor) void {
         self.buffer.deinit(self.allocator);
+        self.history.deinit();
+        if (self.saved_line) |line| {
+            self.allocator.free(line);
+        }
     }
 
     /// Process incoming terminal bytes. Returns true when data was forwarded to the network.
@@ -96,6 +191,14 @@ pub const LineEditor = struct {
 
                 self.escape_state = .none;
                 switch (byte) {
+                    'A' => {
+                        // Up arrow: navigate to older history entry
+                        try self.navigateHistoryUp();
+                    },
+                    'B' => {
+                        // Down arrow: navigate to newer history entry
+                        try self.navigateHistoryDown();
+                    },
                     'D' => {
                         if (self.csiHasWordModifier()) {
                             try self.moveCursorWordLeft();
@@ -278,6 +381,9 @@ pub const LineEditor = struct {
         self.escape_state = .none;
 
         if (self.buffer.items.len > 0) {
+            // Add line to history before sending
+            try self.history.add(self.buffer.items);
+
             _ = try stream.write(self.buffer.items);
         }
 
@@ -287,6 +393,12 @@ pub const LineEditor = struct {
         } else {
             _ = try stream.write(&[_]u8{'\n'});
             try self.stdout.writeAll("\n");
+        }
+
+        // Clear saved line if any (user submitted while browsing history)
+        if (self.saved_line) |saved| {
+            self.allocator.free(saved);
+            self.saved_line = null;
         }
 
         self.buffer.clearRetainingCapacity();
@@ -408,5 +520,45 @@ pub const LineEditor = struct {
             3, 4, 5, 6, 7, 8 => true,
             else => false,
         };
+    }
+
+    /// Navigate to older history entry (Up arrow)
+    fn navigateHistoryUp(self: *LineEditor) !void {
+        // Save current line if starting to browse history
+        if (self.history.current_index == null and self.buffer.items.len > 0) {
+            if (self.saved_line) |old| {
+                self.allocator.free(old);
+            }
+            self.saved_line = try self.allocator.dupe(u8, self.buffer.items);
+        }
+
+        // Navigate to older entry
+        if (self.history.navigateUp()) |hist_line| {
+            self.buffer.clearRetainingCapacity();
+            try self.buffer.appendSlice(self.allocator, hist_line);
+            self.cursor = self.buffer.items.len;
+            try self.redrawLine();
+        }
+    }
+
+    /// Navigate to newer history entry (Down arrow)
+    fn navigateHistoryDown(self: *LineEditor) !void {
+        if (self.history.navigateDown()) |hist_line| {
+            // Still browsing history, load newer entry
+            self.buffer.clearRetainingCapacity();
+            try self.buffer.appendSlice(self.allocator, hist_line);
+            self.cursor = self.buffer.items.len;
+            try self.redrawLine();
+        } else {
+            // Returned to current line, restore saved line
+            self.buffer.clearRetainingCapacity();
+            if (self.saved_line) |saved| {
+                try self.buffer.appendSlice(self.allocator, saved);
+                self.allocator.free(saved);
+                self.saved_line = null;
+            }
+            self.cursor = self.buffer.items.len;
+            try self.redrawLine();
+        }
     }
 };
