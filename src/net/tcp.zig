@@ -548,7 +548,21 @@ pub fn acceptConnection(listener: socket.Socket, timeout_ms: u32) !socket.Socket
     };
 }
 
-/// Connect to a TLS server
+/// Establishes a TCP connection and then wraps it in a TLS session.
+///
+/// This function is a convenience wrapper that first calls `openTcpClient` to
+/// create a standard TCP connection and then passes the resulting socket to
+/// `tls.connectTls` to perform the TLS handshake.
+///
+/// - `allocator`: Memory allocator for the TLS context.
+/// - `host`: The target hostname or IP address.
+/// - `port`: The target TCP port.
+/// - `timeout_ms`: The timeout for the initial TCP connection.
+/// - `tls_config`: Configuration for the TLS handshake (certificates, etc.).
+/// - `cfg`: The main application configuration.
+///
+/// Returns an initialized `TlsConnection` or an error if either the TCP
+/// connection or the TLS handshake fails.
 pub fn connectTls(
     allocator: std.mem.Allocator,
     host: []const u8,
@@ -568,7 +582,20 @@ pub fn connectTls(
     };
 }
 
-/// Accept a TLS connection
+/// Accepts a new TCP connection and then wraps it in a TLS session.
+///
+/// This function is a server-side convenience wrapper. It first calls
+/// `acceptConnection` to accept an incoming TCP connection from a listening
+/// socket and then passes the new client socket to `tls.acceptTls` to perform
+/// the TLS handshake.
+///
+/// - `allocator`: Memory allocator for the TLS context.
+/// - `listener`: The listening server socket.
+/// - `timeout_ms`: The timeout for accepting the TCP connection.
+/// - `tls_config`: Configuration for the TLS handshake (server certificate, etc.).
+///
+/// Returns an initialized `TlsConnection` for the new client or an error if
+/// either the TCP accept or the TLS handshake fails.
 pub fn acceptTls(
     allocator: std.mem.Allocator,
     listener: socket.Socket,
@@ -586,7 +613,18 @@ pub fn acceptTls(
     };
 }
 
-/// Open a TCP connection through a proxy
+/// Opens a TCP connection to a target host through a configured proxy.
+///
+/// This function acts as a dispatcher, calling the main `proxy.connectThroughProxy`
+/// function, which will in turn select the correct proxy protocol implementation
+/// (HTTP CONNECT, SOCKS4, SOCKS5) based on the application's configuration.
+///
+/// - `allocator`: Memory allocator, passed to the proxy implementation.
+/// - `cfg`: The application configuration, which contains the proxy settings.
+/// - `host`: The final destination hostname or IP address.
+/// - `port`: The final destination TCP port.
+///
+/// Returns a socket connected to the target host through the proxy tunnel.
 pub fn openTcpClientWithProxy(
     allocator: std.mem.Allocator,
     cfg: *const config.Config,

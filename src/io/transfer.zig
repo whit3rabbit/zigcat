@@ -21,6 +21,10 @@ const logging = @import("../util/logging.zig");
 const platform = @import("../util/platform.zig");
 const UringEventLoop = @import("../util/io_uring_wrapper.zig").UringEventLoop;
 
+/// Default buffer size for I/O operations, set to 8KB.
+/// This value is a common choice for network and file I/O, as it often aligns
+/// well with page sizes and provides a good balance between memory usage and
+/// the number of system calls required for large transfers.
 const BUFFER_SIZE = 8192;
 
 const stream_mod = @import("stream.zig");

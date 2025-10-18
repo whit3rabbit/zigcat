@@ -29,7 +29,11 @@ pub fn cleanupTlsTransferResources(
     }
 }
 
-fn cleanupTlsConnection(tls_conn: *tls.TlsConnection, cfg: *const config.Config) void {
+    /// Gracefully closes and deinitializes a TLS connection.
+    ///
+    /// This function first sends a "close_notify" alert to the peer and then
+    /// frees the resources associated with the TLS session.
+    fn cleanupTlsConnection(tls_conn: *tls.TlsConnection, cfg: *const config.Config) void {
     tls_conn.close();
 
     if (cfg.verbose) {
@@ -39,7 +43,11 @@ fn cleanupTlsConnection(tls_conn: *tls.TlsConnection, cfg: *const config.Config)
     tls_conn.deinit();
 }
 
-fn flushOutputs(
+    /// Flushes both the output logger and the hex dumper, if they are enabled.
+    ///
+    /// This is a convenience wrapper that calls the specific flush functions for
+    /// each output mechanism.
+    fn flushOutputs(
     output_logger: ?*output.OutputLogger,
     hex_dumper: ?*hexdump.HexDumper,
     cfg: *const config.Config,
@@ -53,7 +61,12 @@ fn flushOutputs(
     }
 }
 
-fn flushOutputLogger(logger: *output.OutputLogger, cfg: *const config.Config) void {
+    /// Flushes any buffered data from the output logger to its destination file.
+    ///
+    /// This function includes a retry mechanism to handle transient errors like a
+    /// temporarily locked file. It logs critical errors for conditions like a
+    /// full disk or permission issues.
+    fn flushOutputLogger(logger: *output.OutputLogger, cfg: *const config.Config) void {
     var retry_count: u8 = 0;
     const max_retries: u8 = 3;
 
@@ -100,7 +113,12 @@ fn flushOutputLogger(logger: *output.OutputLogger, cfg: *const config.Config) vo
     }
 }
 
-fn flushHexDumper(dumper: *hexdump.HexDumper, cfg: *const config.Config) void {
+    /// Flushes any buffered data from the hex dumper to its destination file.
+    ///
+    /// Similar to `flushOutputLogger`, this function includes a retry mechanism
+    /// to handle transient file errors and ensures that all captured hex dump
+    /// data is written to disk.
+    fn flushHexDumper(dumper: *hexdump.HexDumper, cfg: *const config.Config) void {
     var retry_count: u8 = 0;
     const max_retries: u8 = 3;
 

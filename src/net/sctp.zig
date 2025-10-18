@@ -5,10 +5,31 @@
 // See the LICENSE-MIT file in the root of this repository for details.
 
 
+//! This module provides functions for creating and managing Stream Control
+//! Transmission Protocol (SCTP) sockets. It offers platform-agnostic wrappers
+//! around the low-level POSIX socket APIs for SCTP, handling both client-side
+//! connections and server-side listeners.
+//!
+//! SCTP support is an optional feature and may not be available on all
+//! platforms. The functions here will fail if the underlying OS does not
+//! support the `IPPROTO_SCTP` protocol.
+
 const std = @import("std");
 const net = @import("socket.zig");
 const posix = std.posix;
 
+/// Opens an SCTP client connection to a specified host and port.
+///
+/// This function creates an SCTP socket, resolves the host address, and
+/// establishes a connection. It handles non-blocking connection logic with a
+/// timeout, using `poll` to wait for the connection to complete.
+///
+/// - `host`: The hostname or IP address to connect to.
+/// - `port`: The port number to connect to.
+/// - `timeout`: The connection timeout in milliseconds.
+///
+/// Returns the connected socket descriptor (`net.Socket`) or an error if the
+/// connection fails, times out, or the host cannot be resolved.
 pub fn openSctpClient(host: []const u8, port: u16, timeout: i32) !net.Socket {
     const family = net.detectAddressFamily(host);
     const sock = try net.createSctpSocket(family);
@@ -54,6 +75,17 @@ pub fn openSctpClient(host: []const u8, port: u16, timeout: i32) !net.Socket {
     return sock;
 }
 
+/// Opens an SCTP server socket bound to a specific address and port.
+///
+/// This function creates an SCTP socket, sets standard socket options like
+/// `SO_REUSEADDR` and `SO_REUSEPORT`, binds it to the specified address, and
+/// puts it into listening mode.
+///
+/// - `bind_addr_str`: The IP address or hostname to bind to.
+/// - `port`: The port number to listen on.
+///
+/// Returns the listening socket descriptor (`net.Socket`) or an error if the
+/// socket cannot be created, bound, or set to listen.
 pub fn openSctpServer(bind_addr_str: []const u8, port: u16) !net.Socket {
     const family = net.detectAddressFamily(bind_addr_str);
     const sock = try net.createSctpSocket(family);

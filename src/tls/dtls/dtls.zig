@@ -27,8 +27,18 @@ pub fn isDtlsAvailable() bool {
     return builtin.link_libc and @hasDecl(@import("root"), "c");
 }
 
-/// Connect to DTLS server (client mode)
-/// Creates UDP socket, performs DTLS handshake, returns established connection
+/// Creates a new DTLS client connection.
+///
+/// This function handles the entire client-side setup process: it creates a
+/// UDP socket, resolves the server address, connects the socket, and then
+/// performs the DTLS handshake.
+///
+/// - `allocator`: The memory allocator for the connection object and its backend.
+/// - `host`: The hostname or IP address of the DTLS server.
+/// - `port`: The UDP port of the DTLS server.
+/// - `config`: Configuration for the DTLS session, including ciphers and trust settings.
+///
+/// Returns a pointer to an initialized `DtlsConnection` on success.
 pub fn connectDtls(
     allocator: std.mem.Allocator,
     host: []const u8,
@@ -60,8 +70,19 @@ pub fn connectDtls(
     return conn;
 }
 
-/// Accept DTLS connection from client (server mode)
-/// Performs cookie exchange and DTLS handshake for given client address
+/// Accepts a new DTLS client connection on a listening server socket.
+///
+/// This function is used by a DTLS server to handle an incoming connection from a
+/// specific client. It performs the DTLS cookie exchange and handshake. It assumes
+/// the `listen_socket` is already created and bound.
+///
+/// - `allocator`: The memory allocator for the connection object and its backend.
+/// - `listen_socket`: The server's listening UDP socket.
+/// - `client_addr`: The address of the connecting client.
+/// - `config`: Configuration for the DTLS session, including the server's
+///   certificate and private key.
+///
+/// Returns a pointer to an initialized `DtlsConnection` on success.
 pub fn acceptDtls(
     allocator: std.mem.Allocator,
     listen_socket: posix.socket_t,
@@ -98,8 +119,19 @@ pub fn acceptDtls(
     return conn;
 }
 
-/// Wrap existing UDP socket with DTLS (advanced usage)
-/// Caller must have already created and connected UDP socket
+/// Wraps an existing, connected UDP socket with a DTLS session.
+///
+/// This is an advanced function for scenarios where the UDP socket is managed
+/// externally. It takes an existing socket and a peer address and initiates
+/// the DTLS handshake over it, either as a client or a server.
+///
+/// - `allocator`: The memory allocator for the connection object.
+/// - `socket`: The existing, connected UDP socket descriptor.
+/// - `peer_addr`: The address of the remote peer.
+/// - `config`: Configuration for the DTLS session.
+/// - `is_server`: `true` to perform the handshake as a server, `false` as a client.
+///
+/// Returns a pointer to an initialized `DtlsConnection` on success.
 pub fn wrapSocketDtls(
     allocator: std.mem.Allocator,
     socket: posix.socket_t,

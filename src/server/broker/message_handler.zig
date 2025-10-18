@@ -5,6 +5,16 @@
 // See the LICENSE-MIT file in the root of this repository for details.
 
 
+//! This module implements the protocol logic for the broker and chat server modes.
+//! It is responsible for reading data from client sockets, parsing it according
+//! to the server's operational mode (`broker` or `chat`), and dispatching the
+//! content for relay to other clients.
+//!
+...
+//!   and validating nicknames.
+//! - **Data Framing**: It handles line-based message framing for chat mode,
+//!   extracting complete lines from the incoming byte stream.
+
 const std = @import("std");
 const broker = @import("../broker.zig");
 const ClientPool = @import("client_manager.zig").ClientPool;
@@ -38,8 +48,23 @@ fn sanitizeUtf8(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
     return sanitized_list.toOwnedSlice();
 }
 
-/// Handle incoming data from a client connection
-/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+/// Reads and processes incoming data from a client.
+///
+/// This is the entry point for handling a `POLL.IN` event on a client socket.
+/// It reads available data into the client's read buffer, checks for idle
+/// timeouts and read errors, and then dispatches the buffered data to the
+/// appropriate handler based on the server's mode (`broker` or `chat`).
+///
+/// In broker mode, it immediately relays the raw data. In chat mode, it
+/// calls `processChatData` to handle line-based processing.
+///
+/// - `self`: A pointer to the `BrokerServer` instance.
+/// - `client_id`: The ID of the client whose data is being handled.
+/// - `scratch`: A temporary allocator for intermediate processing.
+///
+/// Returns an error if a non-recoverable issue occurs, such as a client
+/// sending a message that is too long, which typically results in the client
+/// being disconnected.
 pub fn handleClientData(
     self: *broker.BrokerServer,
     client_id: u64,
@@ -109,8 +134,21 @@ pub fn handleClientData(
     }
 }
 
-/// Process chat mode data buffered for a client
-/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+/// Scans the client's read buffer for complete lines and processes them.
+///
+/// This function iterates through the data in a client's read buffer, looking for
+/// newline characters (`\n`). Each complete line is extracted and passed to
+/// `processChatLine` for handling. To prevent the server from being stalled by
+/// a flood of messages, it processes a maximum of `MAX_LINES_PER_TICK` per call.
+///
+/// Any incomplete line data at the end of the buffer is preserved for the next
+/// read event.
+///
+/// - `self`: A pointer to the `BrokerServer` instance.
+/// - `client_id`: The ID of the client whose buffer is being processed.
+/// - `scratch`: A temporary allocator for line processing.
+///
+/// Returns an error if `processChatLine` fails.
 pub fn processChatData(
     self: *broker.BrokerServer,
     client_id: u64,
@@ -164,8 +202,16 @@ pub fn processChatData(
     }
 }
 
-/// Process a single chat line from a client
-/// SECURITY FIX (2025-10-10): Changed client_id from u32 to u64 to match ClientPool
+/// Processes a single, complete line of text from a client in chat mode.
+///
+/// This function contains the core logic for the chat protocol.
+/// - If the client has not yet set a nickname, this line is treated as a
+...
+/// - `line`: The complete line of text to process (without the trailing newline).
+/// - `scratch`: A temporary allocator for generating response messages.
+///
+/// Returns an error if a critical failure occurs, such as a client repeatedly
+/// failing to set a valid nickname.
 pub fn processChatLine(
     self: *broker.BrokerServer,
     client_id: u64,
