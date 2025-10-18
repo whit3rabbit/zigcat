@@ -136,7 +136,25 @@ pub fn bidirectionalTransferWindows(
 
         // Check for stdin data (send to socket)
         if (pollfds[0].revents & poll_wrapper.POLL.IN != 0) {
-            const n = stdin.read(&buffer1) catch 0;
+            const n = stdin.read(&buffer1) catch |err| {
+                // Handle read errors (NotOpenForReading, BrokenPipe, etc.)
+                // Treat all errors as stdin closed to prevent infinite error loops
+                logging.logVerbose(cfg, "stdin read failed: {any}, treating as closed\n", .{err});
+                stdin_closed = true;
+
+                // Handle half-close: shutdown write-half but keep reading (Windows)
+                if (!cfg.no_shutdown) {
+                    poll_wrapper.shutdown(stream.handle(), .send) catch |shutdown_err| {
+                        logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{shutdown_err});
+                    };
+                }
+
+                if (cfg.close_on_eof) {
+                    break;
+                }
+
+                continue;  // Skip to next poll iteration
+            };
 
             if (n == 0) {
                 stdin_closed = true;
@@ -373,7 +391,25 @@ pub fn bidirectionalTransferPosix(
 
         // Check for stdin data (send to socket)
         if (pollfds[0].revents & poll_wrapper.POLL.IN != 0) {
-            const n = stdin.read(&buffer1) catch 0;
+            const n = stdin.read(&buffer1) catch |err| {
+                // Handle read errors (NotOpenForReading, BrokenPipe, etc.)
+                // Treat all errors as stdin closed to prevent infinite error loops
+                logging.logVerbose(cfg, "stdin read failed: {any}, treating as closed\n", .{err});
+                stdin_closed = true;
+
+                // Handle half-close: shutdown write-half but keep reading
+                if (!cfg.no_shutdown) {
+                    posix.shutdown(stream.handle(), .send) catch |shutdown_err| {
+                        logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{shutdown_err});
+                    };
+                }
+
+                if (cfg.close_on_eof) {
+                    break;
+                }
+
+                continue;  // Skip to next poll iteration
+            };
 
             if (n == 0) {
                 stdin_closed = true;
@@ -569,7 +605,7 @@ pub fn bidirectionalTransferIoUring(
     defer ring.deinit();
 
     // Operation identifiers used in completion callbacks
-    const user_data_stdin_poll: u64 = 0;
+    const user_data_stdin_read: u64 = 0;
     const user_data_socket_read: u64 = 1;
     const user_data_write: u64 = 2;
 
@@ -589,6 +625,7 @@ pub fn bidirectionalTransferIoUring(
 
     // Track which operations are pending to avoid double-submitting
     var socket_read_pending = false;
+    var stdin_read_pending = false;
 
     // Initialize Telnet processor if enabled
     var telnet_processor: ?telnet.TelnetProcessor = if (cfg.telnet)
@@ -609,11 +646,10 @@ pub fn bidirectionalTransferIoUring(
         };
     } else null;
 
-    const poll_in_mask: u32 = @as(u32, @intCast(poll_wrapper.POLL.IN | poll_wrapper.POLL.ERR | poll_wrapper.POLL.HUP));
-
     // Submit initial operations for both FDs
     if (!stdin_closed and can_send) {
-        try ring.submitPoll(stdin.handle, poll_in_mask, user_data_stdin_poll);
+        try ring.submitReadFile(stdin.handle, &buffer_stdin, user_data_stdin_read);
+        stdin_read_pending = true;
     }
     if (!socket_closed and can_recv) {
         try ring.submitRead(stream.handle(), &buffer_socket, user_data_socket_read);
@@ -621,7 +657,7 @@ pub fn bidirectionalTransferIoUring(
     }
 
     // Main event loop: process completions until both FDs closed
-    main_loop: while (!stdin_closed or !socket_closed) {
+    while (!stdin_closed or !socket_closed) {
         // Wait for completion with timeout
         const cqe = if (timeout_spec) |ts|
             ring.waitForCompletion(&ts) catch |err| {
@@ -637,69 +673,66 @@ pub fn bidirectionalTransferIoUring(
         // Process completion based on user_data
         switch (cqe.user_data) {
             // stdin readiness via io_uring poll
-            user_data_stdin_poll => {
+            user_data_stdin_read => {
+                stdin_read_pending = false;
+
                 if (cqe.res < 0) {
-                    logging.logError(error.ReadError, "stdin poll error");
+                    // io_uring returns negative errno on error
+                    const errno = -cqe.res;
+                    logging.logVerbose(cfg, "stdin read failed (errno {d}), treating as closed\n", .{errno});
                     stdin_closed = true;
-                } else {
-                    const events = @as(u32, @intCast(cqe.res));
-                    const mask_err = @as(u32, @intCast(poll_wrapper.POLL.ERR));
-                    const mask_nval = @as(u32, @intCast(poll_wrapper.POLL.NVAL));
 
-                    if (events & mask_nval != 0) {
-                        logging.logError(error.ReadError, "stdin descriptor became invalid");
-                        stdin_closed = true;
-                    } else {
-                        if (events & mask_err != 0) {
-                            logging.logVerbose(cfg, "stdin poll reported error events: 0x{x}\n", .{events});
-                        }
-
-                        const n = stdin.read(&buffer_stdin) catch |err| {
-                            logging.logError(err, "stdin read error");
-                            stdin_closed = true;
-                            continue :main_loop;
+                    // Handle half-close: shutdown write-half but keep reading
+                    if (!cfg.no_shutdown) {
+                        posix.shutdown(stream.handle(), .send) catch |shutdown_err| {
+                            logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{shutdown_err});
                         };
-
-                        if (n == 0) {
-                            stdin_closed = true;
-
-                            // Handle half-close: shutdown write-half but keep reading
-                            if (!cfg.no_shutdown) {
-                                posix.shutdown(stream.handle(), .send) catch |err| {
-                                    logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
-                                };
-                            }
-
-                            if (cfg.close_on_eof) {
-                                break;
-                            }
-                        } else {
-                            const input_slice = buffer_stdin[0..n];
-
-                            // Apply CRLF conversion if enabled
-                            const data = if (cfg.crlf)
-                                try linecodec.convertLfToCrlf(allocator, input_slice)
-                            else
-                                input_slice;
-                            defer if (data.ptr != input_slice.ptr) allocator.free(data);
-
-                            // Submit write to socket (user_data=2 for writes)
-                            try ring.submitWrite(stream.handle(), data, user_data_write);
-
-                            // Apply traffic shaping delay after send
-                            if (cfg.delay_ms > 0) {
-                                const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
-                                std.Thread.sleep(delay_ns);
-                            }
-
-                            logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
-                        }
                     }
 
-                    // Resubmit stdin poll (io_uring poll entries are one-shot)
-                    if (!stdin_closed and can_send) {
-                        try ring.submitPoll(stdin.handle, poll_in_mask, user_data_stdin_poll);
+                    if (cfg.close_on_eof) {
+                        break;
                     }
+                    // Don't resubmit stdin read - it's closed
+                } else if (cqe.res == 0) {
+                    stdin_closed = true;
+
+                    // Handle half-close: shutdown write-half but keep reading
+                    if (!cfg.no_shutdown) {
+                        posix.shutdown(stream.handle(), .send) catch |err| {
+                            logging.logVerbose(cfg, "Shutdown send failed: {any}\n", .{err});
+                        };
+                    }
+
+                    if (cfg.close_on_eof) {
+                        break;
+                    }
+                } else {
+                    const n: usize = @intCast(cqe.res);
+                    const input_slice = buffer_stdin[0..n];
+
+                    // Apply CRLF conversion if enabled
+                    const data = if (cfg.crlf)
+                        try linecodec.convertLfToCrlf(allocator, input_slice)
+                    else
+                        input_slice;
+                    defer if (data.ptr != input_slice.ptr) allocator.free(data);
+
+                    // Submit write to socket (user_data=2 for writes)
+                    try ring.submitWrite(stream.handle(), data, user_data_write);
+
+                    // Apply traffic shaping delay after send
+                    if (cfg.delay_ms > 0) {
+                        const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
+                        std.Thread.sleep(delay_ns);
+                    }
+
+                    logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
+                }
+
+                // Resubmit stdin read (io_uring reads are one-shot)
+                if (!stdin_closed and can_send and !stdin_read_pending) {
+                    try ring.submitReadFile(stdin.handle, &buffer_stdin, user_data_stdin_read);
+                    stdin_read_pending = true;
                 }
             },
 

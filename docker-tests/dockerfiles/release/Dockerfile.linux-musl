@@ -19,11 +19,26 @@ RUN apk add --no-cache \
     bash
 
 # Install Zig compiler (architecture-aware)
-RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
-    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
-    tar -xf zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
-    mv zig-linux-${ARCH}-${ZIG_VERSION} /opt/zig && \
-    rm zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz
+# Map machine architecture to Zig download architecture
+# Note: x86 and arm use different naming pattern (zig-ARCH-linux vs zig-linux-ARCH)
+RUN ARCH=$(case "$(uname -m)" in \
+        x86_64) echo "x86_64";; \
+        aarch64) echo "aarch64";; \
+        i686|i386) echo "x86";; \
+        armv7*|armhf) echo "arm";; \
+        *) echo "x86_64";; \
+    esac) && \
+    echo "Detected architecture: $(uname -m), using Zig arch: ${ARCH}" && \
+    if [ "$ARCH" = "x86" ] || [ "$ARCH" = "arm" ]; then \
+        ZIG_FILE="zig-${ARCH}-linux-${ZIG_VERSION}"; \
+    else \
+        ZIG_FILE="zig-linux-${ARCH}-${ZIG_VERSION}"; \
+    fi && \
+    echo "Downloading: ${ZIG_FILE}.tar.xz" && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/${ZIG_FILE}.tar.xz && \
+    tar -xf ${ZIG_FILE}.tar.xz && \
+    mv ${ZIG_FILE} /opt/zig && \
+    rm ${ZIG_FILE}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
@@ -55,14 +70,25 @@ esac\n' > /usr/local/bin/platform-to-zig-target.sh \
 # Static builds have TLS disabled to ensure zero dependencies
 RUN --mount=type=cache,target=/build/.zig-cache \
     --mount=type=cache,target=/tmp/zig-global-cache \
-    echo "Building native musl static binary (NO TLS for portability)" && \
-    zig build -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=false
+    ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
+    echo "Building for target: $ZIG_TARGET (platform: $TARGETPLATFORM)" && \
+    zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=false
 
-# Run unit tests (native, NO TLS, static)
+# Run unit tests (skip for cross-compilation)
 RUN --mount=type=cache,target=/build/.zig-cache \
     --mount=type=cache,target=/tmp/zig-global-cache \
-    echo "Running native tests (NO TLS, static)" && \
-    zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=false
+    ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
+    NATIVE_TARGET=$(case "$(uname -m)" in \
+        x86_64) echo "x86_64-linux-musl";; \
+        aarch64) echo "aarch64-linux-musl";; \
+        *) echo "unknown";; \
+    esac) && \
+    if [ "$ZIG_TARGET" = "$NATIVE_TARGET" ]; then \
+        echo "Running native tests (NO TLS, static)" && \
+        zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=false; \
+    else \
+        echo "Skipping tests for cross-compilation (target: $ZIG_TARGET, native: $NATIVE_TARGET)"; \
+    fi
 
 # Export stage for artifacts
 FROM scratch AS artifacts

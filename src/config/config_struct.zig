@@ -123,6 +123,9 @@ pub const Config = struct {
     ssl_key: ?[]const u8 = null,
     /// Verify the peer's SSL certificate. Controlled by `--ssl-verify`. Default: `true`.
     ssl_verify: bool = true,
+    /// Allow insecure TLS connections (disables certificate verification). Controlled by `--insecure`. Default: `false`.
+    /// SECURITY: This flag must be explicitly set to disable certificate verification.
+    insecure: bool = false,
     /// Path to a file of trusted CA certificates. Controlled by `--ssl-trustfile`. Default: `null`.
     ssl_trustfile: ?[]const u8 = null,
     /// Path to a certificate revocation list file. Controlled by `--ssl-crl`. Default: `null`.
@@ -145,6 +148,12 @@ pub const Config = struct {
     dtls_cookie_secret: ?[]const u8 = null,
     /// Anti-replay window size (number of packets). Controlled by `--dtls-replay-window`. Default: `64`.
     dtls_replay_window: u32 = 64,
+
+    // Global Socket (gsocket)
+    /// Shared secret for gsocket NAT-traversal mode. Controlled by `--gs-secret`. Default: `null`.
+    gsocket_secret: ?[]const u8 = null,
+    /// Custom gsocket relay server (host:port). Controlled by `-R`, `--relay`. Default: `null`.
+    gsocket_relay: ?[]const u8 = null,
 
     // Proxy
     /// Proxy address (`host:port`). Controlled by `-x`, `--proxy`. Default: `null`.

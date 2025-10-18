@@ -215,11 +215,15 @@ build_binary_docker() {
     # Create artifact directory
     mkdir -p "$artifact_dir"
 
-    # Get dockerfile path
+    # Get dockerfile path - check both main and release directories
     local dockerfile_path="$PROJECT_ROOT/docker-tests/dockerfiles/Dockerfile.$platform"
     if [[ ! -f "$dockerfile_path" ]]; then
-        log_error "Dockerfile not found: $dockerfile_path"
-        return 1
+        # Try release directory
+        dockerfile_path="$PROJECT_ROOT/docker-tests/dockerfiles/release/Dockerfile.$platform"
+        if [[ ! -f "$dockerfile_path" ]]; then
+            log_error "Dockerfile not found: Dockerfile.$platform (checked dockerfiles/ and dockerfiles/release/)"
+            return 1
+        fi
     fi
 
     # Map arch to Docker platform
@@ -230,6 +234,12 @@ build_binary_docker() {
             ;;
         arm64|aarch64)
             docker_platform="linux/arm64"
+            ;;
+        x86|i386|i686)
+            docker_platform="linux/386"
+            ;;
+        arm|armv7|armhf)
+            docker_platform="linux/arm/v7"
             ;;
         *)
             log_error "Unsupported architecture for Docker: $arch"
@@ -268,6 +278,7 @@ build_binary_docker() {
 
         if timeout "$BUILD_TIMEOUT" docker build \
             --no-cache \
+            --platform="$docker_platform" \
             $seccomp_opt \
             --file="$dockerfile_path" \
             --target=artifacts \

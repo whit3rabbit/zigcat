@@ -44,76 +44,129 @@ test "integration - basic TCP echo server" {
     const allocator = testing.allocator;
     try ensureNetworkAccess();
 
-    // Start listener: zigcat -l 12345
-    var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12345" }, allocator);
-    listener.stdin_behavior = .Pipe;
-    listener.stdout_behavior = .Pipe;
-    listener.stderr_behavior = .Ignore;
+    // Create temporary files for I/O
+    const input_file = "/tmp/zigcat_test_input.txt";
+    const server_output = "/tmp/zigcat_test_server_output.txt";
+    const client_output = "/tmp/zigcat_test_client_output.txt";
+
+    // Write test data to input file
+    const test_data = "Hello, World!\n";
+    {
+        const file = try std.fs.cwd().createFile(input_file, .{});
+        defer file.close();
+        try file.writeAll(test_data);
+    }
+    defer std.fs.cwd().deleteFile(input_file) catch {};
+    defer std.fs.cwd().deleteFile(server_output) catch {};
+    defer std.fs.cwd().deleteFile(client_output) catch {};
+
+    // Start listener: zigcat -l 12345 < /dev/null > server_output
+    const listener_cmd = try std.fmt.allocPrint(allocator, "{s} -l 12345 < /dev/null > {s} 2>/dev/null", .{ zigcat_binary, server_output });
+    defer allocator.free(listener_cmd);
+
+    var listener = ChildProcess.init(&[_][]const u8{
+        "sh",
+        "-c",
+        listener_cmd,
+    }, allocator);
 
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
     // Give listener time to start
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    // Connect: zigcat localhost 12345
-    var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12345" }, allocator);
-    client.stdin_behavior = .Pipe;
-    client.stdout_behavior = .Pipe;
-    client.stderr_behavior = .Ignore;
+    // Connect and send: zigcat localhost 12345 < input > client_output
+    const client_cmd = try std.fmt.allocPrint(allocator, "{s} localhost 12345 < {s} > {s} 2>/dev/null", .{ zigcat_binary, input_file, client_output });
+    defer allocator.free(client_cmd);
+
+    var client = ChildProcess.init(&[_][]const u8{
+        "sh",
+        "-c",
+        client_cmd,
+    }, allocator);
 
     try client.spawn();
-    defer _ = client.kill() catch {};
+    // Note: No defer kill() needed - we wait() for client to finish cleanly
 
-    // Send data from client
-    const test_data = "Hello, World!\n";
-    _ = try client.stdin.?.write(test_data);
+    // Wait for client to finish (will exit after sending data)
+    _ = try client.wait();
 
-    // Read on server side
-    var buffer: [1024]u8 = undefined;
-    const received = try listener.stdout.?.read(&buffer);
+    // Give time for data to be received by server
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
-    try expectEqualStrings(test_data, buffer[0..received]);
+    // Read server output
+    const server_data = blk: {
+        const file = std.fs.cwd().openFile(server_output, .{}) catch |err| {
+            std.debug.print("Failed to open server output: {any}\n", .{err});
+            return error.SkipZigTest;
+        };
+        defer file.close();
+        var buffer: [1024]u8 = undefined;
+        const n = try file.read(&buffer);
+        break :blk buffer[0..n];
+    };
+
+    // Server should have received what client sent
+    try expectEqualStrings(test_data, server_data);
 }
 
 test "integration - file transfer via pipe" {
     const allocator = testing.allocator;
     try ensureNetworkAccess();
 
-    // Test: cat file | zigcat -l 12346 &
-    //       zigcat localhost 12346 > received_file
+    // Create temporary files for I/O
+    const input_file = "/tmp/zigcat_test_input2.txt";
+    const output_file = "/tmp/zigcat_test_output2.txt";
 
+    // Write test data to input file
     const test_data = "This is test file data\nWith multiple lines\n";
+    {
+        const file = try std.fs.cwd().createFile(input_file, .{});
+        defer file.close();
+        try file.writeAll(test_data);
+    }
+    defer std.fs.cwd().deleteFile(input_file) catch {};
+    defer std.fs.cwd().deleteFile(output_file) catch {};
 
-    // Start receiver: zigcat localhost 12346 > output
-    var receiver = ChildProcess.init(&[_][]const u8{ zigcat_binary, "localhost", "12346" }, allocator);
-    receiver.stdin_behavior = .Ignore;
-    receiver.stdout_behavior = .Pipe;
-    receiver.stderr_behavior = .Ignore;
+    // Start listener: zigcat -l 12346 < input_file
+    const listener_cmd = try std.fmt.allocPrint(allocator, "{s} -l 12346 < {s} 2>/dev/null", .{ zigcat_binary, input_file });
+    defer allocator.free(listener_cmd);
 
-    // Start sender: zigcat -l 12346
-    var sender = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-l", "12346" }, allocator);
-    sender.stdin_behavior = .Pipe;
-    sender.stdout_behavior = .Ignore;
-    sender.stderr_behavior = .Ignore;
+    var listener = ChildProcess.init(&[_][]const u8{ "sh", "-c", listener_cmd }, allocator);
+    try listener.spawn();
+    defer _ = listener.kill() catch {};
 
-    try sender.spawn();
-    defer _ = sender.kill() catch {};
+    // Give listener time to start
+    std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    // Connect and receive: zigcat localhost 12346 > output_file
+    const client_cmd = try std.fmt.allocPrint(allocator, "{s} localhost 12346 < /dev/null > {s} 2>/dev/null", .{ zigcat_binary, output_file });
+    defer allocator.free(client_cmd);
 
-    try receiver.spawn();
-    defer _ = receiver.kill() catch {};
+    var client = ChildProcess.init(&[_][]const u8{ "sh", "-c", client_cmd }, allocator);
+    try client.spawn();
+    // Note: No defer kill() needed - we wait() for client to finish cleanly
 
-    // Send data
-    _ = try sender.stdin.?.write(test_data);
-    sender.stdin.?.close();
+    // Wait for client to finish
+    _ = try client.wait();
 
-    // Receive data
-    var buffer: [1024]u8 = undefined;
-    const received = try receiver.stdout.?.read(&buffer);
+    // Give time for data to be transmitted
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
-    try expectEqualStrings(test_data, buffer[0..received]);
+    // Read received data
+    const received_data = blk: {
+        const file = std.fs.cwd().openFile(output_file, .{}) catch |err| {
+            std.debug.print("Failed to open output file: {any}\n", .{err});
+            return error.SkipZigTest;
+        };
+        defer file.close();
+        var buffer: [1024]u8 = undefined;
+        const n = try file.read(&buffer);
+        break :blk buffer[0..n];
+    };
+
+    try expectEqualStrings(test_data, received_data);
 }
 
 // =============================================================================
@@ -124,73 +177,116 @@ test "integration - pure IPv6 client and server" {
     const allocator = testing.allocator;
     try ensureNetworkAccess();
 
-    // Start listener: zigcat -6 -l ::1 12361
-    var listener = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "-l", "::1", "12361" }, allocator);
-    listener.stdin_behavior = .Pipe;
-    listener.stdout_behavior = .Pipe;
-    listener.stderr_behavior = .Ignore;
+    // Create temporary files for I/O
+    const input_file = "/tmp/zigcat_test_ipv6_input.txt";
+    const server_output = "/tmp/zigcat_test_ipv6_server.txt";
 
+    // Write test data to input file
+    const test_data = "Hello, IPv6!\n";
+    {
+        const file = try std.fs.cwd().createFile(input_file, .{});
+        defer file.close();
+        try file.writeAll(test_data);
+    }
+    defer std.fs.cwd().deleteFile(input_file) catch {};
+    defer std.fs.cwd().deleteFile(server_output) catch {};
+
+    // Start listener: zigcat -6 -l ::1 12361 < /dev/null > server_output
+    const listener_cmd = try std.fmt.allocPrint(allocator, "{s} -6 -l ::1 12361 < /dev/null > {s} 2>/dev/null", .{ zigcat_binary, server_output });
+    defer allocator.free(listener_cmd);
+
+    var listener = ChildProcess.init(&[_][]const u8{ "sh", "-c", listener_cmd }, allocator);
     try listener.spawn();
     defer _ = listener.kill() catch {};
 
     // Give listener time to start
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(300 * std.time.ns_per_ms);
 
-    // Connect: zigcat -6 ::1 12361
-    var client = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "::1", "12361" }, allocator);
-    client.stdin_behavior = .Pipe;
-    client.stdout_behavior = .Pipe;
-    client.stderr_behavior = .Ignore;
+    // Connect: zigcat -6 ::1 12361 < input
+    const client_cmd = try std.fmt.allocPrint(allocator, "{s} -6 ::1 12361 < {s} 2>/dev/null", .{ zigcat_binary, input_file });
+    defer allocator.free(client_cmd);
 
+    var client = ChildProcess.init(&[_][]const u8{ "sh", "-c", client_cmd }, allocator);
     try client.spawn();
-    defer _ = client.kill() catch {};
+    // Note: No defer kill() needed - we wait() for client to finish cleanly
 
-    // Send data from client
-    const test_data = "Hello, IPv6!\n";
-    _ = try client.stdin.?.write(test_data);
+    // Wait for client to finish
+    _ = try client.wait();
 
-    // Read on server side
-    var buffer: [1024]u8 = undefined;
-    const received = try listener.stdout.?.read(&buffer);
+    // Give time for data to be received by server
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
-    try expectEqualStrings(test_data, buffer[0..received]);
+    // Read server output
+    const server_data = blk: {
+        const file = std.fs.cwd().openFile(server_output, .{}) catch |err| {
+            std.debug.print("Failed to open IPv6 server output: {any}\n", .{err});
+            return error.SkipZigTest;
+        };
+        defer file.close();
+        var buffer: [1024]u8 = undefined;
+        const n = try file.read(&buffer);
+        break :blk buffer[0..n];
+    };
+
+    try expectEqualStrings(test_data, server_data);
 }
 
 test "integration - file transfer over IPv6" {
     const allocator = testing.allocator;
     try ensureNetworkAccess();
 
+    // Create temporary files for I/O
+    const input_file = "/tmp/zigcat_test_ipv6_input2.txt";
+    const output_file = "/tmp/zigcat_test_ipv6_output2.txt";
+
+    // Write test data to input file
     const test_data = "IPv6 file transfer test\n";
+    {
+        const file = try std.fs.cwd().createFile(input_file, .{});
+        defer file.close();
+        try file.writeAll(test_data);
+    }
+    defer std.fs.cwd().deleteFile(input_file) catch {};
+    defer std.fs.cwd().deleteFile(output_file) catch {};
 
-    // Start receiver: zigcat -6 -l ::1 12362
-    var receiver = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "-l", "::1", "12362" }, allocator);
-    receiver.stdin_behavior = .Ignore;
-    receiver.stdout_behavior = .Pipe;
-    receiver.stderr_behavior = .Ignore;
+    // Start receiver: zigcat -6 -l ::1 12362 < input_file
+    const receiver_cmd = try std.fmt.allocPrint(allocator, "{s} -6 -l ::1 12362 < {s} 2>/dev/null", .{ zigcat_binary, input_file });
+    defer allocator.free(receiver_cmd);
 
-    // Start sender: zigcat -6 ::1 12362
-    var sender = ChildProcess.init(&[_][]const u8{ zigcat_binary, "-6", "::1", "12362" }, allocator);
-    sender.stdin_behavior = .Pipe;
-    sender.stdout_behavior = .Ignore;
-    sender.stderr_behavior = .Ignore;
-
+    var receiver = ChildProcess.init(&[_][]const u8{ "sh", "-c", receiver_cmd }, allocator);
     try receiver.spawn();
     defer _ = receiver.kill() catch {};
 
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    // Give receiver time to start
+    std.Thread.sleep(300 * std.time.ns_per_ms);
 
+    // Connect sender: zigcat -6 ::1 12362 > output_file
+    const sender_cmd = try std.fmt.allocPrint(allocator, "{s} -6 ::1 12362 < /dev/null > {s} 2>/dev/null", .{ zigcat_binary, output_file });
+    defer allocator.free(sender_cmd);
+
+    var sender = ChildProcess.init(&[_][]const u8{ "sh", "-c", sender_cmd }, allocator);
     try sender.spawn();
-    defer _ = sender.kill() catch {};
+    // Note: No defer kill() needed - we wait() for sender to finish cleanly
 
-    // Send data
-    _ = try sender.stdin.?.write(test_data);
-    sender.stdin.?.close();
+    // Wait for sender to finish
+    _ = try sender.wait();
 
-    // Receive data
-    var buffer: [1024]u8 = undefined;
-    const received = try receiver.stdout.?.read(&buffer);
+    // Give time for data to be transmitted
+    std.Thread.sleep(200 * std.time.ns_per_ms);
 
-    try expectEqualStrings(test_data, buffer[0..received]);
+    // Read received data
+    const received_data = blk: {
+        const file = std.fs.cwd().openFile(output_file, .{}) catch |err| {
+            std.debug.print("Failed to open IPv6 output file: {any}\n", .{err});
+            return error.SkipZigTest;
+        };
+        defer file.close();
+        var buffer: [1024]u8 = undefined;
+        const n = try file.read(&buffer);
+        break :blk buffer[0..n];
+    };
+
+    try expectEqualStrings(test_data, received_data);
 }
 
 

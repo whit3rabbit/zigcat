@@ -26,6 +26,7 @@ pub const TLSConfigError = error{
     TlsCertificateInvalid,
     TlsKeyInvalid,
     TlsCertificateKeyMismatch,
+    InsecureFlagRequired,
 
     // TLS feature conflicts
     ConflictingTlsAndUnixSocket,
@@ -68,6 +69,29 @@ fn validateTlsConflicts(cfg: *const Config) TLSConfigError!void {
 
     if (cfg.udp_mode) {
         return TLSConfigError.ConflictingTlsAndUdp;
+    }
+
+    // SECURITY: Require explicit --insecure flag to disable certificate verification
+    if (!cfg.ssl_verify and !cfg.insecure) {
+        std.debug.print("\n", .{});
+        std.debug.print("╔═══════════════════════════════════════════════════════════╗\n", .{});
+        std.debug.print("║  ⚠️  SECURITY ERROR: Insecure TLS Configuration          ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Certificate verification is disabled, but the           ║\n", .{});
+        std.debug.print("║  --insecure flag was not explicitly provided.            ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Disabling certificate verification makes connections    ║\n", .{});
+        std.debug.print("║  vulnerable to man-in-the-middle attacks.                ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Solutions:                                               ║\n", .{});
+        std.debug.print("║  • Re-enable certificate verification (recommended)       ║\n", .{});
+        std.debug.print("║  • Add --insecure to explicitly allow insecure TLS        ║\n", .{});
+        std.debug.print("║                                                           ║\n", .{});
+        std.debug.print("║  Example:                                                 ║\n", .{});
+        std.debug.print("║    zigcat --ssl --insecure <host> <port>                  ║\n", .{});
+        std.debug.print("╚═══════════════════════════════════════════════════════════╝\n", .{});
+        std.debug.print("\n", .{});
+        return TLSConfigError.InsecureFlagRequired;
     }
 
     if (cfg.ssl_verify and cfg.ssl_trustfile == null and cfg.ssl_cert == null) {

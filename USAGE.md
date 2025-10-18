@@ -354,8 +354,9 @@ All TLS flags work with both backends. DTLS flags only work with OpenSSL backend
 - `--dtls-version <version>` *(enum: 1.0|1.2|1.3)* - set DTLS protocol version (default: 1.2, OpenSSL backend only). Example: `zigcat --dtls --dtls-version 1.3 example.com 4433`
 - `--dtls-timeout <ms>` *(u32 milliseconds)* - set initial DTLS retransmission timeout (default: 1000ms, OpenSSL backend only). Example: `zigcat --dtls --dtls-timeout 2000 example.com 4433`
 - `--ssl-verify` *(flag)* - force certificate verification (explicit opt-in). Example: `zigcat --ssl --ssl-verify example.com 443`
-- `--no-ssl-verify` *(flag)* - disable certificate verification (insecure). Example: `zigcat --ssl --no-ssl-verify example.com 443`
-- `--ssl-verify=false` *(flag)* - alternate form to disable verification. Example: `zigcat --ssl --ssl-verify=false example.com 443`
+- `--no-ssl-verify` *(flag)* - disable certificate verification (insecure, requires `--insecure`). Example: `zigcat --ssl --insecure --no-ssl-verify example.com 443`
+- `--ssl-verify=false` *(flag)* - alternate form to disable verification (requires `--insecure`). Example: `zigcat --ssl --insecure --ssl-verify=false example.com 443`
+- `--insecure` *(flag)* - **REQUIRED** to allow insecure TLS connections when disabling certificate verification. This flag explicitly acknowledges the security risks of man-in-the-middle attacks and other threats. Example: `zigcat --ssl --insecure --no-ssl-verify example.com 443`
 - `--ssl-cert <file>` *(string path)* - server certificate file. Example: `zigcat -l 8443 --ssl --ssl-cert certs/server.crt`
 - `--ssl-key <file>` *(string path)* - server private key. Example: `zigcat -l 8443 --ssl --ssl-key certs/server.key`
 - `--ssl-trustfile <file>` *(string path)* - CA bundle for client verification. Example: `zigcat --ssl --ssl-trustfile /etc/ssl/certs/ca-bundle.crt example.com 443`
@@ -404,6 +405,184 @@ zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem --ssl-verify --ssl-trustf
 - Built-in retransmission for handshake packets
 - MTU awareness to avoid IP fragmentation
 - Cookie exchange for DoS protection (server mode)
+
+## Global Socket (NAT Traversal)
+
+**Global Socket Relay Network (GSRN)** enables two peers behind NAT/firewalls to establish a direct encrypted connection without port forwarding or VPN configuration. Uses gs.thc.org:443 relay server by default with end-to-end SRP-AES-256-CBC-SHA encryption.
+
+- `--gs-secret <secret>` *(string)* - shared secret for GSRN connection. Both peers must use the exact same secret for connection establishment. The secret is hashed (SHA256) to derive a 128-bit GS-Address for relay server matching. Example: `zigcat --gs-secret MySecret`
+- `-R, --relay <host:port>` *(string)* - specify a custom GSRN relay server (default: gs.thc.org:443). Enables private relay infrastructure for corporate/internal networks. Example: `zigcat -R private.relay.com:8443 --gs-secret MySecret`
+
+### Protocol Overview
+
+1. **Secret Derivation**: Both peers derive shared GS-Address from secret using SHA256
+2. **Relay Connection**: Peers connect to gs.thc.org:443 (GSRN relay)
+3. **Packet Exchange**: Server sends GsListen, client sends GsConnect packet
+4. **Tunnel Establishment**: Relay matches addresses and creates raw TCP tunnel
+5. **SRP Handshake**: Secure Remote Password (SRP) handshake provides end-to-end encryption
+6. **Encrypted Stream**: SRP-AES-256-CBC-SHA cipher (compatible with gs-netcat)
+
+### Security Characteristics
+
+- ✅ **Mutual Authentication**: SRP provides password-based auth without X.509 certificates
+- ✅ **End-to-End Encryption**: AES-256-CBC encryption independent of relay server
+- ✅ **No Port Forwarding**: Both peers can be behind NAT/firewall
+- ⚠️ **SHA-1 MAC**: Uses SHA-1 HMAC (weak, but required for gs-netcat compatibility)
+- ⚠️ **Secret Strength**: Security depends on passphrase strength (use 32+ chars)
+
+### Incompatibilities
+
+GSRN mode cannot be combined with:
+- ❌ UDP mode (`-u`) or SCTP (`--sctp`) - TCP only
+- ❌ Unix sockets (`-U`) - network transport only
+- ❌ Proxies (`--proxy`) - has its own NAT traversal
+- ❌ SSL/TLS (`--ssl`) or DTLS (`--dtls`) - has its own encryption
+
+### Basic Usage
+
+**Automatic Role Assignment (Recommended):**
+```bash
+# Both peers run the same command - relay assigns roles automatically
+# First peer to connect becomes server, second becomes client
+Peer 1: zigcat --gs-secret MySecret
+Peer 2: zigcat --gs-secret MySecret
+
+# With verbose logging to see role assignment
+zigcat --gs-secret MySecret -vv
+# Output: "GSRN tunnel established (assigned role: Server)" or "...Client"
+```
+
+**Manual Mode Selection (Optional):**
+```bash
+# Explicitly register as listener (sends GsListen packet)
+zigcat -l --gs-secret MySecret
+
+# Explicitly register as connector (sends GsConnect packet)
+zigcat --gs-secret MySecret
+
+# Note: Actual SRP server/client role is still assigned by relay, not by -l flag
+```
+
+**Custom Relay Server:**
+```bash
+# Both peers must use the same custom relay
+zigcat -R private.relay.com:8443 --gs-secret MySecret
+zigcat -R private.relay.com:8443 --gs-secret MySecret
+```
+
+### File Transfer Examples
+
+**Receiver (listen mode):**
+```bash
+# Receive file through GSRN tunnel
+zigcat -l --gs-secret "file-transfer-secret" > received-file.tar.gz
+
+# With progress output
+zigcat -l --gs-secret "file-transfer-secret" -v > received-file.tar.gz
+```
+
+**Sender (connect mode):**
+```bash
+# Send file through GSRN tunnel
+cat myfile.tar.gz | zigcat --gs-secret "file-transfer-secret"
+
+# With hex dump for debugging
+cat myfile.tar.gz | zigcat --gs-secret "file-transfer-secret" -x transfer.hex
+```
+
+### Remote Shell Examples
+
+**Server (listen mode with exec):**
+```bash
+# REQUIRES --allow flag for remote shell
+zigcat -l --gs-secret "shell-secret" -e /bin/sh --allow
+
+# With IP restrictions (if connecting through known egress IP)
+zigcat -l --gs-secret "shell-secret" -e /bin/sh --allow --allow-ip 203.0.113.0/24
+```
+
+**Client (connect mode):**
+```bash
+# Connect to remote shell through GSRN
+zigcat --gs-secret "shell-secret"
+```
+
+### Timeout Configuration
+
+**Custom Handshake Timeout:**
+```bash
+# Set 60 second timeout for slow networks (applies to SRP handshake)
+zigcat -l --gs-secret MySecret -w 60
+
+# Quick timeout for fast networks
+zigcat -l --gs-secret MySecret -w 5
+```
+
+**Idle Timeout:**
+```bash
+# Close connection after 120 seconds of inactivity
+zigcat -l --gs-secret MySecret -i 120
+```
+
+### Troubleshooting
+
+**Problem:** Connection times out during handshake
+
+**Solution:** Increase connect timeout with `-w` flag (default 30s):
+```bash
+zigcat -l --gs-secret MySecret -w 60
+```
+
+**Problem:** Can't see peer connection status
+
+**Solution:** Enable verbose logging to see GSRN tunnel and SRP handshake:
+```bash
+zigcat -l --gs-secret MySecret -vv
+```
+
+**Problem:** Connection works but data corrupted
+
+**Solution:** Ensure both peers use EXACT same secret (case-sensitive):
+```bash
+# Both must use identical secret
+zigcat -l --gs-secret "Correct-Secret-2025"
+zigcat --gs-secret "Correct-Secret-2025"
+```
+
+**Problem:** Error: ConflictingOptions with UDP/TLS/Proxy
+
+**Solution:** GSRN is TCP-only with built-in encryption. Remove incompatible flags:
+```bash
+# ❌ Wrong: --gs-secret with --ssl
+zigcat --gs-secret MySecret --ssl
+
+# ✅ Correct: --gs-secret alone provides encryption
+zigcat --gs-secret MySecret
+```
+
+**Problem:** Error: --relay can only be used with --gs-secret
+
+**Solution:** The `-R` flag requires `--gs-secret` for GSRN mode:
+```bash
+# ❌ Wrong: --relay without --gs-secret
+zigcat -R relay.com:443 example.com 80
+
+# ✅ Correct: --relay with --gs-secret
+zigcat -R relay.com:443 --gs-secret MySecret
+```
+
+**Problem:** Error: Custom gsocket relay must be in host:port format
+
+**Solution:** Ensure relay address includes both hostname and port:
+```bash
+# ❌ Wrong: missing port
+zigcat -R relay.example.com --gs-secret MySecret
+
+# ✅ Correct: host:port format
+zigcat -R relay.example.com:443 --gs-secret MySecret
+```
+
+For comprehensive GSRN documentation including protocol details, security analysis, custom relay setup, and advanced configuration, see **[GSOCKET_CUSTOM_RELAY.md](GSOCKET_CUSTOM_RELAY.md)** and **[GSOCKET_IMPLEMENTATION_SUMMARY.md](GSOCKET_IMPLEMENTATION_SUMMARY.md)**.
 
 ## Proxy Support
 - `--proxy <target>` *(string)* - proxy address (e.g. `socks5://host:port` or `http://host:port`). Example: `zigcat --proxy socks5://127.0.0.1:1080 example.com 80`
