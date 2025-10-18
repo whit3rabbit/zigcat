@@ -301,7 +301,7 @@ fn handleUnixSocketClient(
 
     if (cfg.telnet) {
         const connection = Connection.fromSocket(stream.handle);
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null, false);
         defer telnet_conn.deinit();
 
         try telnet_conn.performServerNegotiation();

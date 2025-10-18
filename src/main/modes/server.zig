@@ -165,23 +165,23 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     const final_bind_addr_str = if (bind_addr_str) |s| s else if (cfg.ipv6_only) "::" else "0.0.0.0";
 
     const bind_addr = if (@import("builtin").os.tag == .freebsd) blk: {
-    var addresses = try std.net.getAddressList(allocator, final_bind_addr_str, port);
-    defer addresses.deinit();
-    var ipv4_addr: ?std.net.Address = null;
-    for (addresses.addrs) |addr| {
-        if (addr.any.family == std.posix.AF.INET) {
-            ipv4_addr = addr;
-            break;
+        var addresses = try std.net.getAddressList(allocator, final_bind_addr_str, port);
+        defer addresses.deinit();
+        var ipv4_addr: ?std.net.Address = null;
+        for (addresses.addrs) |addr| {
+            if (addr.any.family == std.posix.AF.INET) {
+                ipv4_addr = addr;
+                break;
+            }
         }
-    }
-    if (ipv4_addr) |addr| {
-        break :blk addr;
-    } else {
-        return error.NoIpv4AddressFound;
-    }
-} else blk: {
-    break :blk try std.net.Address.resolveIp(final_bind_addr_str, port);
-};
+        if (ipv4_addr) |addr| {
+            break :blk addr;
+        } else {
+            return error.NoIpv4AddressFound;
+        }
+    } else blk: {
+        break :blk try std.net.Address.resolveIp(final_bind_addr_str, port);
+    };
 
     const should_drop_privileges = cfg.drop_privileges_user != null;
     const is_privileged_port = port < 1024;
@@ -381,7 +381,7 @@ fn handleClient(
 
         if (cfg.telnet) {
             const connection = Connection.fromSocket(stream.handle);
-            var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
+            var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null, false);
             defer telnet_conn.deinit();
 
             if (cfg.verbose) {
@@ -448,7 +448,7 @@ fn handleClient(
 
             if (cfg.telnet) {
                 const telnet_connection = Connection.fromTls(tls_conn);
-                var telnet_conn = try TelnetConnection.init(telnet_connection, allocator, null, null, null, null);
+                var telnet_conn = try TelnetConnection.init(telnet_connection, allocator, null, null, null, null, false);
                 defer telnet_conn.deinit();
 
                 try telnet_conn.performServerNegotiation();
@@ -467,7 +467,7 @@ fn handleClient(
 
     if (cfg.telnet) {
         const connection = Connection.fromSocket(stream.handle);
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null, false);
         defer telnet_conn.deinit();
 
         try telnet_conn.performServerNegotiation();

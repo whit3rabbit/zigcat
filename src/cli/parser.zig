@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Command-line argument parser for zigcat.
 //!
 //! This module handles parsing command-line arguments into a Config structure.
@@ -145,6 +144,22 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             cfg.ssl = true;
         } else if (std.mem.eql(u8, arg, "-t") or std.mem.eql(u8, arg, "--telnet")) {
             cfg.telnet = true;
+        } else if (std.mem.eql(u8, arg, "--telnet-signal-mode")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.telnet_signal_mode = parseTelnetSignalMode(args[i]) catch {
+                logging.logError(error.InvalidTelnetSignalMode, "Invalid Telnet signal mode");
+                logging.logWarning("  Supported values: local, remote\n", .{});
+                return CliError.UnknownOption;
+            };
+        } else if (std.mem.eql(u8, arg, "--telnet-edit-mode")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.telnet_edit_mode = parseTelnetEditMode(args[i]) catch {
+                logging.logError(error.InvalidTelnetEditMode, "Invalid Telnet edit mode");
+                logging.logWarning("  Supported values: remote, local\n", .{});
+                return CliError.UnknownOption;
+            };
         } else if (std.mem.eql(u8, arg, "--append")) {
             cfg.append_output = true;
         } else if (std.mem.eql(u8, arg, "--append-output")) {
@@ -503,6 +518,23 @@ fn parseProxyDns(s: []const u8) !config.ProxyDns {
     if (std.mem.eql(u8, s, "remote")) return .remote;
     if (std.mem.eql(u8, s, "both")) return .both;
     return error.InvalidProxyDns;
+}
+
+/// Parse Telnet signal mode string into TelnetSignalMode enum.
+///
+/// Supported values:
+/// - "local": Ctrl-C/Ctrl-Z control the local client (default)
+/// - "remote": Translate Ctrl-C/Ctrl-Z into Telnet IP/SUSP
+fn parseTelnetSignalMode(s: []const u8) !config.TelnetSignalMode {
+    if (std.mem.eql(u8, s, "local")) return .local;
+    if (std.mem.eql(u8, s, "remote")) return .remote;
+    return error.InvalidTelnetSignalMode;
+}
+
+fn parseTelnetEditMode(s: []const u8) !config.TelnetEditMode {
+    if (std.mem.eql(u8, s, "remote")) return .remote;
+    if (std.mem.eql(u8, s, "local")) return .local;
+    return error.InvalidTelnetEditMode;
 }
 
 /// Parse comma-separated list and add to ArrayList.

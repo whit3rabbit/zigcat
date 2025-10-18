@@ -748,6 +748,26 @@ test "Integration - CLI to Config to HexDumper" {
     try dumper.flush();
 }
 
+test "CLI parses telnet signal mode" {
+    var args = [_][:0]const u8{ "zigcat", "--telnet", "--telnet-signal-mode", "remote", "example.com", "23" };
+
+    const cfg = try cli.parseArgs(testing.allocator, &args);
+    defer cfg.deinit(testing.allocator);
+
+    try expect(cfg.telnet);
+    try expectEqual(config.TelnetSignalMode.remote, cfg.telnet_signal_mode);
+}
+
+test "CLI parses telnet edit mode" {
+    var args = [_][:0]const u8{ "zigcat", "--telnet", "--telnet-edit-mode", "local", "example.com", "23" };
+
+    const cfg = try cli.parseArgs(testing.allocator, &args);
+    defer cfg.deinit(testing.allocator);
+
+    try expect(cfg.telnet);
+    try expectEqual(config.TelnetEditMode.local, cfg.telnet_edit_mode);
+}
+
 test "Integration - conflicting flags end-to-end" {
     var args = [_][:0]const u8{ "zigcat", "--send-only", "--recv-only", "example.com", "80" };
 

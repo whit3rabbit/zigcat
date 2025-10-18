@@ -82,6 +82,8 @@ const Connection = @import("net/connection.zig").Connection;
 const TelnetConnection = @import("protocol/telnet_connection.zig").TelnetConnection;
 const tty_state = @import("terminal").tty_state;
 const tty_control = @import("terminal").tty_control;
+const signal_handler = @import("terminal").signal_handler;
+const signal_translation = @import("terminal").signal_translation;
 
 inline fn contextToPtr(comptime T: type, context: *anyopaque) *T {
     const aligned_ctx: *align(@alignOf(T)) anyopaque = @alignCast(context);
@@ -385,6 +387,15 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             }
         }
 
+        var signal_translation_active = false;
+        defer {
+            if (signal_translation_active) {
+                signal_translation.teardown() catch |err| {
+                    logging.logVerbose(cfg, "Failed to restore signal handlers: {any}\n", .{err});
+                };
+            }
+        }
+
         // Create Connection wrapper for the underlying socket/TLS connection
         const connection = if (tls_connection) |*conn|
             Connection.fromTls(conn.*)
@@ -393,8 +404,58 @@ pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
 
         const local_tty_ptr: ?*tty_state.TtyState = if (local_tty_state) |*state| state else null;
 
+        if (cfg.telnet_signal_mode == .remote) {
+            if (local_tty_ptr) |tty_ptr| {
+                if (!signal_translation.supportsSignalTranslation()) {
+                    logging.logWarning("Telnet signal translation is not supported on this platform; using local signals\n", .{});
+                } else {
+                    tty_control.setSignalProcessing(tty_ptr, true) catch |err| {
+                        logging.logWarning("Failed to re-enable terminal signal processing: {any}\n", .{err});
+                    };
+
+                    var install_success = true;
+                    signal_translation.install(signal_translation.SignalMode.remote) catch |err| {
+                        logging.logWarning("Failed to install Telnet signal handlers: {any}\n", .{err});
+                        install_success = false;
+                    };
+                    if (install_success) {
+                        signal_translation_active = true;
+                    }
+                }
+            } else {
+                logging.logVerbose(cfg, "Telnet signal translation requires a TTY; falling back to local behavior\n", .{});
+            }
+        }
+
+        var window_width: ?u16 = null;
+        var window_height: ?u16 = null;
+
+        if (local_tty_ptr) |tty_ptr| {
+            if (signal_handler.supportsSigwinch()) {
+                signal_handler.setupSigwinchHandler() catch |err| {
+                    if (err != error.UnsupportedPlatform) {
+                        logging.logVerbose(cfg, "Failed to install SIGWINCH handler: {any}\n", .{err});
+                    }
+                };
+
+                if (signal_handler.isSigwinchEnabled()) {
+                    const size = signal_handler.getWindowSizeForFd(tty_ptr.fd) catch |err| size_blk: {
+                        logging.logVerbose(cfg, "Unable to read terminal window size: {any}\n", .{err});
+                        break :size_blk null;
+                    };
+
+                    if (size) |ws| {
+                        if (ws.ws_col != 0 and ws.ws_row != 0) {
+                            window_width = @intCast(ws.ws_col);
+                            window_height = @intCast(ws.ws_row);
+                        }
+                    }
+                }
+            }
+        }
+
         // Wrap with TelnetConnection for protocol processing
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, local_tty_ptr);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, window_width, window_height, local_tty_ptr, signal_translation_active);
         defer telnet_conn.deinit();
 
         if (cfg.verbose) {
@@ -453,6 +514,12 @@ pub fn telnetConnectionToStream(telnet_conn: *TelnetConnection) stream.Stream {
                 return c.getSocket();
             }
         }.handle,
+        .maintenanceFn = struct {
+            fn maintain(context: *anyopaque) anyerror!void {
+                const c = contextToPtr(TelnetConnection, context);
+                try c.handleMaintenance();
+            }
+        }.maintain,
     };
 }
 
@@ -712,7 +779,7 @@ fn runUnixSocketClient(allocator: std.mem.Allocator, cfg: *const config.Config, 
         const connection = Connection.fromUnixSocket(unix_client.getSocket(), null);
 
         // Wrap with TelnetConnection for protocol processing
-        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null);
+        var telnet_conn = try TelnetConnection.init(connection, allocator, null, null, null, null, false);
         defer telnet_conn.deinit();
 
         if (cfg.verbose) {

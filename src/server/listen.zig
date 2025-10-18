@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Server connection acceptance with IP-based access control.
 //!
 //! This module provides server-side utilities for:
@@ -276,29 +275,8 @@ pub fn acceptWithAccessControlIoUring(
         const client_fd = @as(posix.socket_t, @intCast(cqe.res));
         const client_stream = std.net.Stream{ .handle = client_fd };
 
-        // Parse client address from sockaddr storage
-        const client_address = blk: {
-            const family = @as(*const posix.sockaddr, @ptrCast(&client_addr_storage)).family;
-            if (family == posix.AF.INET) {
-                const addr4 = @as(*const posix.sockaddr.in, @ptrCast(&client_addr_storage));
-                break :blk std.net.Address.initIp4(
-                    @bitCast(addr4.addr),
-                    @byteSwap(addr4.port),
-                );
-            } else if (family == posix.AF.INET6) {
-                const addr6 = @as(*const posix.sockaddr.in6, @ptrCast(&client_addr_storage));
-                break :blk std.net.Address.initIp6(
-                    addr6.addr,
-                    @byteSwap(addr6.port),
-                    addr6.flowinfo,
-                    addr6.scope_id,
-                );
-            } else {
-                // Unknown address family, close and retry
-                posix.close(client_fd);
-                continue;
-            }
-        };
+        // Parse client address from sockaddr storage using stdlib function
+        const client_address = std.net.Address.initPosix(@alignCast(@as(*const posix.sockaddr, @ptrCast(&client_addr_storage))));
 
         const conn = std.net.Server.Connection{
             .stream = client_stream,

@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Shared configuration types for zigcat.
 //!
 //! This module defines enums that are used across multiple
@@ -46,4 +45,20 @@ pub const ProxyDns = enum {
     remote,
     /// Support both local and remote resolution
     both,
+};
+
+/// Telnet signal handling mode.
+///
+/// Determines how zigcat reacts to local terminal signals while in Telnet mode.
+/// - `local`: behave like netcat, let SIGINT/SIGTSTP control the local client
+/// - `remote`: translate Ctrl-C / Ctrl-Z into Telnet IP/SUSP without killing the client
+pub const TelnetSignalMode = enum {
+    local,
+    remote,
+};
+
+/// Telnet editing strategy.
+pub const TelnetEditMode = enum {
+    remote,
+    local,
 };

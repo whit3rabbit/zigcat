@@ -34,6 +34,8 @@ test "telnet command validation" {
     try testing.expect(telnet.isValidCommand(@intFromEnum(TelnetCommand.iac)));
     try testing.expect(telnet.isValidCommand(@intFromEnum(TelnetCommand.will)));
     try testing.expect(telnet.isValidCommand(@intFromEnum(TelnetCommand.se)));
+    try testing.expect(telnet.isValidCommand(@intFromEnum(TelnetCommand.susp)));
+    try testing.expect(telnet.isValidCommand(@intFromEnum(TelnetCommand.eof)));
     try testing.expect(!telnet.isValidCommand(100));
     try testing.expect(!telnet.isValidCommand(200));
 }

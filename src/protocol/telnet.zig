@@ -4,10 +4,40 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Core Telnet enums, helpers, and validation utilities shared by the protocol
 //! processor. These definitions mirror RFC 854/855 terminology so the event
 //! loop can reason about commands, options, and legal state transitions.
+//!
+//! ## RFC Compliance Reference
+//!
+//! This implementation follows these Telnet protocol specifications:
+//!
+//! ### Core Protocol
+//! - **RFC 854**: Telnet Protocol Specification
+//!   - Command codes (236-255), IAC byte escaping, state machine
+//!   - Location: TelnetCommand enum, validateStateTransition()
+//! - **RFC 855**: Telnet Option Specification
+//!   - WILL/WONT/DO/DONT negotiation semantics
+//!   - Location: TelnetOption enum, option negotiation logic in telnet_processor.zig
+//! - **RFC 1143**: The Q Method of Implementing Telnet Option Negotiation
+//!   - Partial implementation: Basic states (NO/YES/WANTNO/WANTYES)
+//!   - Missing: Queue bits (EMPTY/OPPOSITE) - uses negotiation count instead
+//!   - Location: OptionState enum in telnet_processor.zig
+//!
+//! ### Implemented Options
+//! - **RFC 857**: ECHO Option - Server/client echo control
+//! - **RFC 858**: SUPPRESS-GO-AHEAD Option - Disable half-duplex mode
+//! - **RFC 1091**: TERMINAL-TYPE Option - Terminal identification
+//! - **RFC 1073**: NAWS (Negotiate About Window Size) - Dynamic window updates
+//! - **RFC 1572**: NEW-ENVIRON Option - Environment variable exchange
+//! - **RFC 1184**: LINEMODE Option - Line editing and SLC (Special Line Characters)
+//!   - Partial: MODE/FORWARDMASK supported, SLC constants defined but handlers TODO
+//!
+//! ### Security Considerations
+//! - NEW-ENVIRON uses allowlist (TERM, USER, LANG, etc.) - never sends credentials
+//! - IAC byte escaping prevents command injection in data streams
+//! - Negotiation loop prevention via MAX_NEGOTIATION_ATTEMPTS (10)
+//! - Subnegotiation length limit: 1024 bytes
 const std = @import("std");
 
 /// Telnet protocol state machine states
@@ -23,8 +53,13 @@ pub const TelnetState = enum {
     sb_iac, // IAC in subnegotiation
 };
 
-/// Telnet protocol commands as defined in RFC 854
+/// Telnet protocol commands as defined in RFC 854 Section 4
+/// All commands are in the range 236-255 and must follow IAC (255)
 pub const TelnetCommand = enum(u8) {
+    eof = 236, // End of file
+    susp = 237, // Suspend process
+    abort = 238, // Abort process
+    eor = 239, // End of record
     se = 240, // End of subnegotiation
     nop = 241, // No operation
     dm = 242, // Data mark
@@ -45,7 +80,7 @@ pub const TelnetCommand = enum(u8) {
     /// Convert byte to TelnetCommand if valid
     pub fn fromByte(byte: u8) ?TelnetCommand {
         return switch (byte) {
-            240...255 => @enumFromInt(byte),
+            236...255 => @enumFromInt(byte),
             else => null,
         };
     }
@@ -62,7 +97,8 @@ pub const TelnetOption = enum(u8) {
     terminal_speed = 32, // Terminal speed (RFC 1079)
     flow_control = 33, // Remote flow control (RFC 1372)
     linemode = 34, // Linemode (RFC 1184)
-    environ = 36, // Environment variables (RFC 1408)
+    environ = 36, // (Obsolete) Environment variables (RFC 1408)
+    new_environ = 39, // Enhanced environment variables (RFC 1572)
 
     /// Convert byte to TelnetOption if recognized
     pub fn fromByte(byte: u8) ?TelnetOption {
@@ -77,6 +113,7 @@ pub const TelnetOption = enum(u8) {
             33 => .flow_control,
             34 => .linemode,
             36 => .environ,
+            39 => .new_environ,
             else => null,
         };
     }
@@ -107,7 +144,7 @@ pub fn validateStateTransition(current: TelnetState, next: TelnetState, input: u
             @intFromEnum(TelnetCommand.dont) => next == .dont,
             @intFromEnum(TelnetCommand.sb) => next == .sb,
             @intFromEnum(TelnetCommand.iac) => next == .data, // Escaped IAC
-            @intFromEnum(TelnetCommand.se), @intFromEnum(TelnetCommand.nop), @intFromEnum(TelnetCommand.dm), @intFromEnum(TelnetCommand.brk), @intFromEnum(TelnetCommand.ip), @intFromEnum(TelnetCommand.ao), @intFromEnum(TelnetCommand.ayt), @intFromEnum(TelnetCommand.ec), @intFromEnum(TelnetCommand.el), @intFromEnum(TelnetCommand.ga) => next == .data,
+            @intFromEnum(TelnetCommand.se), @intFromEnum(TelnetCommand.nop), @intFromEnum(TelnetCommand.dm), @intFromEnum(TelnetCommand.brk), @intFromEnum(TelnetCommand.ip), @intFromEnum(TelnetCommand.ao), @intFromEnum(TelnetCommand.ayt), @intFromEnum(TelnetCommand.ec), @intFromEnum(TelnetCommand.el), @intFromEnum(TelnetCommand.ga), @intFromEnum(TelnetCommand.eor), @intFromEnum(TelnetCommand.abort), @intFromEnum(TelnetCommand.susp), @intFromEnum(TelnetCommand.eof) => next == .data,
             else => false,
         },
         .will, .wont, .do, .dont => next == .data, // Option byte follows, then back to data

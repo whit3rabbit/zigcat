@@ -16,6 +16,8 @@ const Connection = @import("../net/connection.zig").Connection;
 const TelnetProcessor = @import("telnet_processor.zig").TelnetProcessor;
 const telnet = @import("telnet.zig");
 const tty_state = @import("terminal").tty_state;
+const signal_handler = @import("terminal").signal_handler;
+const signal_translation = @import("terminal").signal_translation;
 
 const TelnetCommand = telnet.TelnetCommand;
 const TelnetOption = telnet.TelnetOption;
@@ -30,6 +32,9 @@ pub const TelnetConnection = struct {
     allocator: std.mem.Allocator,
     pending_data: std.ArrayList(u8),
     pending_response: std.ArrayList(u8),
+    local_tty: ?*tty_state.TtyState,
+    dynamic_window_tracking: bool,
+    signal_translation_enabled: bool,
 
     const BUFFER_SIZE = 4096;
 
@@ -42,6 +47,7 @@ pub const TelnetConnection = struct {
         window_width: ?u16,
         window_height: ?u16,
         local_tty: ?*tty_state.TtyState,
+        enable_signal_translation: bool,
     ) !TelnetConnection {
         const term_type = terminal_type orelse "UNKNOWN";
         const width = window_width orelse 80;
@@ -55,6 +61,9 @@ pub const TelnetConnection = struct {
             .allocator = allocator,
             .pending_data = try std.ArrayList(u8).initCapacity(allocator, BUFFER_SIZE),
             .pending_response = try std.ArrayList(u8).initCapacity(allocator, BUFFER_SIZE),
+            .local_tty = local_tty,
+            .dynamic_window_tracking = local_tty != null and signal_handler.isSigwinchEnabled(),
+            .signal_translation_enabled = enable_signal_translation,
         };
     }
 
@@ -71,6 +80,7 @@ pub const TelnetConnection = struct {
     /// Read application data, filtering out Telnet protocol sequences.
     /// Returns number of bytes read (0 indicates EOF).
     pub fn read(self: *TelnetConnection, buffer: []u8) !usize {
+        try self.handleMaintenance();
         // Return pending application data first
         if (self.pending_data.items.len > 0) {
             const bytes_to_copy = @min(buffer.len, self.pending_data.items.len);
@@ -122,6 +132,7 @@ pub const TelnetConnection = struct {
     /// Write application data, escaping IAC bytes as needed.
     /// Returns number of application bytes written.
     pub fn write(self: *TelnetConnection, data: []const u8) !usize {
+        try self.handleMaintenance();
         try self.flushPendingResponses();
 
         const processed_data = try self.processor.processOutput(data, null);
@@ -142,6 +153,61 @@ pub const TelnetConnection = struct {
     pub fn close(self: *TelnetConnection) void {
         self.flushPendingResponses() catch {};
         self.inner.close();
+    }
+
+    pub fn handleMaintenance(self: *TelnetConnection) !void {
+        try self.handleWindowResize();
+        try self.handleSignalEvents();
+    }
+
+    fn handleWindowResize(self: *TelnetConnection) !void {
+        if (!self.dynamic_window_tracking) {
+            return;
+        }
+        if (!signal_handler.checkWindowSizeChanged()) {
+            return;
+        }
+
+        const tty = self.local_tty orelse {
+            self.dynamic_window_tracking = false;
+            return;
+        };
+
+        const ws = signal_handler.getWindowSizeForFd(tty.fd) catch {
+            self.dynamic_window_tracking = false;
+            return;
+        };
+
+        const width_raw = ws.col;
+        const height_raw = ws.row;
+
+        if (width_raw == 0 or height_raw == 0) {
+            return;
+        }
+
+        const width: u16 = @intCast(width_raw);
+        const height: u16 = @intCast(height_raw);
+
+        _ = try self.updateWindowSize(width, height);
+    }
+
+    fn handleSignalEvents(self: *TelnetConnection) !void {
+        if (!self.signal_translation_enabled) {
+            return;
+        }
+
+        const events = signal_translation.pollEvents();
+        if (!events.any()) {
+            return;
+        }
+
+        if (events.ctrl_c) {
+            _ = self.sendCommand(.ip, null) catch {};
+        }
+
+        if (events.ctrl_z) {
+            _ = self.sendCommand(.susp, null) catch {};
+        }
     }
 
     /// Get underlying socket descriptor for poll() or setsockopt().
@@ -200,6 +266,7 @@ pub const TelnetConnection = struct {
         try self.sendCommand(.do, .suppress_ga); // Request server suppress go-ahead
         try self.sendCommand(.will, .terminal_type); // Offer to provide terminal type
         try self.sendCommand(.will, .naws); // Offer to provide window size
+        try self.sendCommand(.will, .new_environ); // Offer to provide environment variables
     }
 
     /// Perform initial Telnet negotiation for server mode.
@@ -216,6 +283,7 @@ pub const TelnetConnection = struct {
         try self.sendCommand(.will, .suppress_ga); // Announce server suppresses go-ahead
         try self.sendCommand(.do, .terminal_type); // Request client terminal type
         try self.sendCommand(.do, .naws); // Request client window size
+        try self.sendCommand(.do, .new_environ); // Request client environment variables
     }
 
     /// Reset Telnet negotiation state to initial conditions.
@@ -236,7 +304,7 @@ pub const TelnetConnection = struct {
 
 /// Create TelnetConnection with default settings.
 pub fn fromConnection(connection: Connection, allocator: std.mem.Allocator) !TelnetConnection {
-    return TelnetConnection.init(connection, allocator, null, null, null, null);
+    return TelnetConnection.init(connection, allocator, null, null, null, null, false);
 }
 
 /// Create TelnetConnection with custom terminal configuration.
@@ -247,5 +315,5 @@ pub fn fromConnectionWithConfig(
     window_width: u16,
     window_height: u16,
 ) !TelnetConnection {
-    return TelnetConnection.init(connection, allocator, terminal_type, window_width, window_height, null);
+    return TelnetConnection.init(connection, allocator, terminal_type, window_width, window_height, null, false);
 }

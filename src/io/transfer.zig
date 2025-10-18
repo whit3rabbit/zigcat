@@ -13,6 +13,7 @@ const std = @import("std");
 const posix = std.posix;
 const config = @import("../config.zig");
 const linecodec = @import("linecodec.zig");
+const line_editor = @import("line_editor.zig");
 const output = @import("output.zig");
 const hexdump = @import("hexdump.zig");
 const poll_wrapper = @import("../util/poll_wrapper.zig");
@@ -43,8 +44,10 @@ pub fn bidirectionalTransfer(
     output_logger: ?*output.OutputLoggerAuto,
     hex_dumper: ?*hexdump.HexDumperAuto,
 ) !void {
+    const prefer_local_editor = cfg.telnet and cfg.telnet_edit_mode == .local;
+
     // Try io_uring on Linux 5.1+ (10-50x lower CPU usage for bidirectional I/O)
-    if (platform.isIoUringSupported()) {
+    if (platform.isIoUringSupported() and !prefer_local_editor) {
         logging.logVerbose(cfg, "Using io_uring for bidirectional I/O\n", .{});
         return bidirectionalTransferIoUring(allocator, stream, cfg, output_logger, hex_dumper) catch |err| {
             // Fall back to poll on io_uring errors
@@ -88,6 +91,16 @@ pub fn bidirectionalTransferWindows(
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
 
+    const enable_local_edit = cfg.telnet and cfg.telnet_edit_mode == .local and stdin.isTty();
+    var editor_opt: ?line_editor.LineEditor = null;
+    if (enable_local_edit) {
+        editor_opt = line_editor.LineEditor.init(allocator, stdout, cfg.crlf) catch |err| blk: {
+            logging.logWarning("Telnet local editing disabled: {any}\n", .{err});
+            break :blk null;
+        };
+    }
+    defer if (editor_opt) |*editor| editor.deinit();
+
     // Use poll-based event loop for timeout support and concurrent I/O
     var pollfds = [_]poll_wrapper.pollfd{
         .{ .fd = stdin.handle, .events = poll_wrapper.POLL.IN, .revents = 0 },
@@ -118,6 +131,10 @@ pub fn bidirectionalTransferWindows(
     while (!stdin_closed or !socket_closed) {
         defer _ = arena_state.reset(.retain_capacity);
         const scratch = arena_state.allocator();
+
+        stream.maintain() catch |err| {
+            logging.logVerbose(cfg, "Stream maintenance failed: {any}\n", .{err});
+        };
 
         // Set poll events based on what's still open and direction flags
         pollfds[0].events = if (!stdin_closed and can_send) poll_wrapper.POLL.IN else 0;
@@ -152,23 +169,32 @@ pub fn bidirectionalTransferWindows(
                     break;
                 }
             } else {
-                const input_slice = buffer1[0..n];
-                const data = if (cfg.crlf)
-                    // CRLF conversion has to allocate when translations occur; we keep
-                    // zero-copy behavior for the common path where no conversion is required.
-                    try linecodec.convertLfToCrlf(scratch, input_slice)
-                else
-                    input_slice;
+                if (editor_opt) |*editor| {
+                    const sent = try editor.processInput(stream, buffer1[0..n]);
+                    if (sent and cfg.delay_ms > 0) {
+                        const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
+                        std.Thread.sleep(delay_ns);
+                    }
+                    logging.logVerbose(cfg, "Processed {any} bytes via local editor\n", .{n});
+                } else {
+                    const input_slice = buffer1[0..n];
+                    const data = if (cfg.crlf)
+                        // CRLF conversion has to allocate when translations occur; we keep
+                        // zero-copy behavior for the common path where no conversion is required.
+                        try linecodec.convertLfToCrlf(scratch, input_slice)
+                    else
+                        input_slice;
 
-                _ = try stream.write(data);
+                    _ = try stream.write(data);
 
-                // Apply traffic shaping delay after send (Windows)
-                if (cfg.delay_ms > 0) {
-                    const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
-                    std.Thread.sleep(delay_ns);
+                    // Apply traffic shaping delay after send (Windows)
+                    if (cfg.delay_ms > 0) {
+                        const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
+                        std.Thread.sleep(delay_ns);
+                    }
+
+                    logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
                 }
-
-                logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
             }
         }
 
@@ -326,6 +352,16 @@ pub fn bidirectionalTransferPosix(
     const stdin = std.fs.File.stdin();
     const stdout = std.fs.File.stdout();
 
+    const posix_local_edit = cfg.telnet and cfg.telnet_edit_mode == .local and stdin.isTty();
+    var posix_editor: ?line_editor.LineEditor = null;
+    if (posix_local_edit) {
+        posix_editor = line_editor.LineEditor.init(allocator, stdout, cfg.crlf) catch |err| blk: {
+            logging.logWarning("Telnet local editing disabled: {any}\n", .{err});
+            break :blk null;
+        };
+    }
+    defer if (posix_editor) |*editor| editor.deinit();
+
     var pollfds = [_]poll_wrapper.pollfd{
         .{ .fd = stdin.handle, .events = poll_wrapper.POLL.IN, .revents = 0 },
         .{ .fd = stream.handle(), .events = poll_wrapper.POLL.IN, .revents = 0 },
@@ -355,6 +391,10 @@ pub fn bidirectionalTransferPosix(
     while (!stdin_closed or !socket_closed) {
         defer _ = arena_state.reset(.retain_capacity);
         const scratch = arena_state.allocator();
+
+        stream.maintain() catch |err| {
+            logging.logVerbose(cfg, "Stream maintenance failed: {any}\n", .{err});
+        };
 
         // Set poll events based on what's still open
         pollfds[0].events = if (!stdin_closed and can_send) poll_wrapper.POLL.IN else 0;
@@ -389,23 +429,32 @@ pub fn bidirectionalTransferPosix(
                     break;
                 }
             } else {
-                const input_slice = buffer1[0..n];
-                const data = if (cfg.crlf)
-                    // CRLF translation allocates only when new bytes are needed; otherwise
-                    // we reuse the original slice to keep the hot path zero-copy.
-                    try linecodec.convertLfToCrlf(scratch, input_slice)
-                else
-                    input_slice;
+                if (posix_editor) |*editor| {
+                    const sent = try editor.processInput(stream, buffer1[0..n]);
+                    if (sent and cfg.delay_ms > 0) {
+                        const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
+                        std.Thread.sleep(delay_ns);
+                    }
+                    logging.logVerbose(cfg, "Processed {any} bytes via local editor\n", .{n});
+                } else {
+                    const input_slice = buffer1[0..n];
+                    const data = if (cfg.crlf)
+                        // CRLF translation allocates only when new bytes are needed; otherwise
+                        // we reuse the original slice to keep the hot path zero-copy.
+                        try linecodec.convertLfToCrlf(scratch, input_slice)
+                    else
+                        input_slice;
 
-                _ = try stream.write(data);
+                    _ = try stream.write(data);
 
-                // Apply traffic shaping delay after send
-                if (cfg.delay_ms > 0) {
-                    const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
-                    std.Thread.sleep(delay_ns);
+                    // Apply traffic shaping delay after send
+                    if (cfg.delay_ms > 0) {
+                        const delay_ns = cfg.delay_ms * std.time.ns_per_ms;
+                        std.Thread.sleep(delay_ns);
+                    }
+
+                    logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
                 }
-
-                logging.logVerbose(cfg, "Sent {any} bytes\n", .{data.len});
             }
         }
 
@@ -622,6 +671,10 @@ pub fn bidirectionalTransferIoUring(
 
     // Main event loop: process completions until both FDs closed
     main_loop: while (!stdin_closed or !socket_closed) {
+        stream.maintain() catch |err| {
+            logging.logVerbose(cfg, "Stream maintenance failed: {any}\n", .{err});
+        };
+
         // Wait for completion with timeout
         const cqe = if (timeout_spec) |ts|
             ring.waitForCompletion(&ts) catch |err| {

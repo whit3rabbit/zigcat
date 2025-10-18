@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Core configuration structure for zigcat.
 //!
 //! This module owns the central `Config` type that aggregates
@@ -61,6 +60,10 @@ pub const Config = struct {
     crlf: bool = false,
     /// Interpret Telnet commands. Controlled by `--telnet`. Default: `false`.
     telnet: bool = false,
+    /// Telnet signal handling behavior. Controlled by `--telnet-signal-mode`. Default: `.local`.
+    telnet_signal_mode: types.TelnetSignalMode = .local,
+    /// Telnet editing behavior. Controlled by `--telnet-edit-mode`. Default: `.remote`.
+    telnet_edit_mode: types.TelnetEditMode = .remote,
 
     // Server options
     /// Keep listening for new connections after the current one finishes. Controlled by `-k`, `--keep-listening`. Default: `false`.

@@ -23,6 +23,34 @@ const TelnetError = telnet.TelnetError;
 const OptionHandlerRegistry = telnet_options.OptionHandlerRegistry;
 
 /// Option negotiation state for each Telnet option
+///
+/// Implements basic RFC 1143 Q-Method state machine for telnet option negotiation.
+/// RFC 1143 defines a symmetric, loop-free negotiation algorithm using states and queues.
+///
+/// ## Implemented States
+/// - **NO**: Option is disabled
+/// - **YES**: Option is enabled
+/// - **WANTNO**: Sent DONT/WONT, waiting for acknowledgment to disable option
+/// - **WANTYES**: Sent DO/WILL, waiting for acknowledgment to enable option
+///
+/// ## NOT Implemented (Partial Q-Method)
+/// RFC 1143 defines queue bits for each WANT state:
+/// - **EMPTY**: No queued state change
+/// - **OPPOSITE**: State change requested while another change is pending
+///
+/// Current implementation uses negotiation attempt counting instead of queue bits
+/// (see MAX_NEGOTIATION_ATTEMPTS = 10 in TelnetProcessor) to prevent infinite loops.
+/// This is a simpler but less precise approach than full Q-Method.
+///
+/// ## Loop Prevention Strategy
+/// Instead of queue bits, we track negotiation_count per option:
+/// - Increment on each WILL/WONT/DO/DONT sent/received for an option
+/// - Reject negotiation if count >= MAX_NEGOTIATION_ATTEMPTS (10)
+/// - Reset counter when option reaches stable state (NO or YES)
+///
+/// This prevents negotiation loops but doesn't allow queuing contradictory requests
+/// as full Q-Method would. For zigcat's use case (client/server with known peers),
+/// this simplified approach is sufficient.
 pub const OptionState = enum {
     no,
     yes,
@@ -515,6 +543,7 @@ pub const TelnetProcessor = struct {
             .terminal_type => true,
             .naws => true,
             .linemode => true,
+            .new_environ => true,
             else => false,
         };
     }

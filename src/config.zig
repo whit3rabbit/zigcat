@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! zigcat configuration primitives.
 //!
 //! This module now acts as a thin facade that re-exports focused
@@ -22,6 +21,7 @@ const timeout = @import("config/timeout.zig");
 pub const VerbosityLevel = types.VerbosityLevel;
 pub const ProxyType = types.ProxyType;
 pub const ProxyDns = types.ProxyDns;
+pub const TelnetSignalMode = types.TelnetSignalMode;
 
 pub const Config = config_struct.Config;
 pub const buildExecSessionConfig = config_struct.buildExecSessionConfig;

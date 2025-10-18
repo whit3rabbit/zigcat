@@ -4,7 +4,6 @@
 // This file is part of zigcat and is licensed under the MIT license.
 // See the LICENSE-MIT file in the root of this repository for details.
 
-
 //! Help and version display functions for zigcat CLI.
 //!
 //! This module provides user-facing output for:
@@ -58,6 +57,8 @@ pub fn printHelp() void {
         \\  --recv-only                   Only receive data (close write)
         \\  -C, --crlf                    Convert LF to CRLF
         \\  -t, --telnet                  Telnet protocol mode (process IAC sequences)
+        \\  --telnet-signal-mode <mode>    Telnet signal behavior (local|remote)
+        \\  --telnet-edit-mode <mode>      Telnet editing (remote|local)
         \\  --no-shutdown                 Keep socket write-half open after stdin EOF
         \\  -d, --delay <ms>              Traffic shaping delay in milliseconds
         \\
@@ -78,9 +79,9 @@ pub fn printHelp() void {
         \\  --proxy-type <type>           Proxy type (http, socks4, socks5)
         \\  --proxy-auth <user:pass>      Proxy authentication credentials
         \\                                WARNING: Credentials sent in Base64 (NOT encrypted).
-        \\                                Only use with HTTPS proxy URLs to protect credentials.
-        \\                                Plain HTTP connections expose username/password to
-        \\                                network attackers who can easily decode Base64.
+        \\                                EXTREMELY INSECURE: http:// proxy URLs leak your password
+        \\                                exactly like plain text. Assume compromise if intercepted.
+        \\                                Only use with HTTPS proxy URLs you fully trust.
         \\  --proxy-dns <mode>            DNS resolution mode (local, remote, both)
         \\
         \\EXECUTION OPTIONS:

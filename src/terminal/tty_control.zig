@@ -92,6 +92,19 @@ pub fn setLocalEcho(state: *tty_state.TtyState, enable: bool) TtyError!void {
     try state.ops.tcsetattr(state.fd, .NOW, term);
 }
 
+pub fn setSignalProcessing(state: *tty_state.TtyState, enable: bool) TtyError!void {
+    if (!has_termios) {
+        return error.UnsupportedPlatform;
+    }
+
+    _ = state.original_termios orelse return error.TermiosNotSaved;
+
+    var term = try state.ops.tcgetattr(state.fd);
+    setBoolFlag(&term.lflag, "ISIG", enable);
+
+    try state.ops.tcsetattr(state.fd, .NOW, term);
+}
+
 fn setBoolFlag(ptr: anytype, comptime name: []const u8, value: bool) void {
     if (@hasField(@TypeOf(ptr.*), name)) {
         @field(ptr.*, name) = value;

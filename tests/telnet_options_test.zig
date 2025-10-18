@@ -3,6 +3,9 @@ const testing = std.testing;
 const protocol = @import("protocol");
 const telnet = protocol.telnet;
 const telnet_options = protocol.telnet_options;
+const telnet_environ = protocol.telnet_environ;
+const tty_state = protocol.tty_state;
+const posix = std.posix;
 
 const TelnetCommand = telnet.TelnetCommand;
 const TelnetOption = telnet.TelnetOption;
@@ -12,6 +15,35 @@ const NAWSHandler = telnet_options.NAWSHandler;
 const SuppressGoAheadHandler = telnet_options.SuppressGoAheadHandler;
 const LinemodeHandler = telnet_options.LinemodeHandler;
 const OptionHandlerRegistry = telnet_options.OptionHandlerRegistry;
+const NewEnvironHandler = telnet_options.NewEnvironHandler;
+
+test "NewEnviron buildIsResponse encodes variables" {
+    var value = try testing.allocator.dupe(u8, "ansi");
+    defer testing.allocator.free(value);
+
+    var entries = [_]telnet_environ.OwnedEntry{
+        .{ .name = "TERM", .value = value, .kind = .variable },
+    };
+
+    const payload = try telnet_environ.buildIsResponse(testing.allocator, &entries);
+    defer testing.allocator.free(payload);
+
+    const expected = [_]u8{
+        telnet_environ.NewEnviron.IS,
+        telnet_environ.NewEnviron.VAR,
+        'T',
+        'E',
+        'R',
+        'M',
+        telnet_environ.NewEnviron.VALUE,
+        'a',
+        'n',
+        's',
+        'i',
+    };
+
+    try testing.expectEqualSlices(u8, &expected, payload);
+}
 
 test "EchoHandler - handle WILL echo" {
     var response = std.ArrayList(u8).init(testing.allocator);
@@ -246,36 +278,120 @@ test "LinemodeHandler - handle DO linemode" {
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 
-    try try LinemodeHandler.handleDo(testing.allocator, &response);
+    var handler = LinemodeHandler.init(null);
+    try handler.handleDo(testing.allocator, &response);
 
-    // Should respond with WILL and then send linemode settings
     const expected_will = [_]u8{
         @intFromEnum(TelnetCommand.iac),
         @intFromEnum(TelnetCommand.will),
         @intFromEnum(TelnetOption.linemode),
     };
 
-    const expected_mode = [_]u8{
+    try testing.expectEqualSlices(u8, &expected_will, response.items);
+}
+
+fn buildFakeTty() tty_state.TtyState {
+    const ops = tty_state.Ops{
+        .isatty = struct {
+            fn f(_: posix.fd_t) bool {
+                return true;
+            }
+        }.f,
+        .tcgetattr = struct {
+            fn f(_: posix.fd_t) posix.TermiosGetError!posix.termios {
+                return fakeTermios;
+            }
+        }.f,
+        .tcsetattr = struct {
+            fn f(_: posix.fd_t, _: posix.TCSA, _: posix.termios) posix.TermiosSetError!void {
+                return;
+            }
+        }.f,
+    };
+
+    return tty_state.initWithOps(0, ops);
+}
+
+var fakeTermios = std.mem.zeroInit(posix.termios, .{});
+
+test "LinemodeHandler - send settings emits SLC table" {
+    // Populate fake termios with representative control characters
+    if (@hasField(posix.V, "INTR")) {
+        fakeTermios.cc[@intFromEnum(@field(posix.V, "INTR"))] = 3;
+    }
+    if (@hasField(posix.V, "ERASE")) {
+        fakeTermios.cc[@intFromEnum(@field(posix.V, "ERASE"))] = 0x7F;
+    }
+
+    var tty = buildFakeTty();
+    var handler = LinemodeHandler.init(&tty);
+
+    var response = std.ArrayList(u8).init(testing.allocator);
+    defer response.deinit();
+
+    try handler.sendLinemodeSettings(testing.allocator, &response);
+
+    // The MODE subnegotiation should appear first
+    try testing.expectEqual(@as(u8, @intFromEnum(TelnetCommand.iac)), response.items[0]);
+    try testing.expectEqual(@as(u8, @intFromEnum(TelnetCommand.sb)), response.items[1]);
+    try testing.expectEqual(@as(u8, @intFromEnum(TelnetOption.linemode)), response.items[2]);
+    try testing.expectEqual(@as(u8, 1), response.items[3]);
+    try testing.expectEqual(@as(u8, 0x03), response.items[4]); // MODE_EDIT | MODE_TRAPSIG
+    try testing.expectEqual(@as(u8, @intFromEnum(TelnetCommand.iac)), response.items[5]);
+    try testing.expectEqual(@as(u8, @intFromEnum(TelnetCommand.se)), response.items[6]);
+
+    // Locate the SLC subnegotiation
+    const slc_pattern = [_]u8{
         @intFromEnum(TelnetCommand.iac),
         @intFromEnum(TelnetCommand.sb),
         @intFromEnum(TelnetOption.linemode),
-        1, // MODE command
-        3, // MODE_EDIT | MODE_TRAPSIG
-        @intFromEnum(TelnetCommand.iac),
-        @intFromEnum(TelnetCommand.se),
+        3,
+    };
+    const slc_offset = std.mem.indexOf(u8, response.items, &slc_pattern) orelse unreachable;
+    const slc_slice = blk: {
+        const after = response.items[slc_offset + slc_pattern.len ..];
+        const iac_index = std.mem.indexOfScalar(u8, after, @intFromEnum(TelnetCommand.iac)) orelse unreachable;
+        break :blk after[0..iac_index];
     };
 
-    try testing.expect(response.items.len >= expected_will.len + expected_mode.len);
-    try testing.expectEqualSlices(u8, &expected_will, response.items[0..expected_will.len]);
-    try testing.expectEqualSlices(u8, &expected_mode, response.items[expected_will.len..]);
+    var found_intr = false;
+    var found_erase = false;
+    var i: usize = 0;
+    while (i + 2 <= slc_slice.len) : (i += 3) {
+        const func = slc_slice[i];
+        const flags = slc_slice[i + 1];
+        const value = slc_slice[i + 2];
+
+        switch (func) {
+            3 => { // SLC_IP
+                found_intr = true;
+                try testing.expect(flags & 0x02 != 0);
+                if (@hasField(posix.V, "INTR")) {
+                    try testing.expectEqual(@as(u8, 3), value);
+                }
+            },
+            10 => { // SLC_EC
+                found_erase = true;
+                if (@hasField(posix.V, "ERASE")) {
+                    try testing.expectEqual(@as(u8, 0x7F), value);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try testing.expect(found_intr);
+    try testing.expect(found_erase or !@hasField(posix.V, "ERASE"));
 }
 
 test "LinemodeHandler - handle MODE subnegotiation" {
     var response = std.ArrayList(u8).init(testing.allocator);
     defer response.deinit();
 
+    var handler = LinemodeHandler.init(null);
+
     const mode_data = [_]u8{ 1, 5 }; // MODE command with EDIT and LIT_ECHO
-    try LinemodeHandler.handleSubnegotiation(testing.allocator, &mode_data, &response);
+    try handler.handleSubnegotiation(testing.allocator, &mode_data, &response);
 
     const expected = [_]u8{
         @intFromEnum(TelnetCommand.iac),
@@ -323,6 +439,50 @@ test "OptionHandlerRegistry - handle supported option negotiation" {
     };
 
     try testing.expectEqualSlices(u8, &expected, response.items);
+}
+
+test "OptionHandlerRegistry - DO linemode emits SLC" {
+    // Reuse fake termios populated with representative characters
+    fakeTermios = std.mem.zeroInit(posix.termios, .{});
+    if (@hasField(posix.V, "INTR")) {
+        fakeTermios.cc[@intFromEnum(@field(posix.V, "INTR"))] = 3;
+    }
+
+    var tty = buildFakeTty();
+    var registry = OptionHandlerRegistry.init("xterm", 80, 24, &tty);
+
+    var response = std.ArrayList(u8).init(testing.allocator);
+    defer response.deinit();
+
+    try registry.handleNegotiation(testing.allocator, .do, .linemode, &response);
+
+    const pattern = [_]u8{
+        @intFromEnum(TelnetCommand.iac),
+        @intFromEnum(TelnetCommand.sb),
+        @intFromEnum(TelnetOption.linemode),
+        3,
+    };
+    const offset = std.mem.indexOf(u8, response.items, &pattern) orelse unreachable;
+    const triplets = blk: {
+        const after = response.items[offset + pattern.len ..];
+        const iac_idx = std.mem.indexOfScalar(u8, after, @intFromEnum(TelnetCommand.iac)) orelse unreachable;
+        break :blk after[0..iac_idx];
+    };
+
+    try testing.expect(triplets.len >= 3);
+    try testing.expect(registry.linemode_handler.slc_values[LinemodeHandler.SLC_IP] == 3 or !@hasField(posix.V, "INTR"));
+}
+
+test "LinemodeHandler parses SLC reply" {
+    var handler = LinemodeHandler.init(null);
+    var response = std.ArrayList(u8).init(testing.allocator);
+    defer response.deinit();
+
+    const slc_payload = [_]u8{ LinemodeHandler.SLC, LinemodeHandler.SLC_IP, LinemodeHandler.SLC_VALUE, 0x05, LinemodeHandler.SLC_EC, LinemodeHandler.SLC_NOSUPPORT, 0 };
+    try handler.handleSubnegotiation(testing.allocator, &slc_payload, &response);
+
+    try testing.expectEqual(@as(u8, 0x05), handler.slc_values[LinemodeHandler.SLC_IP]);
+    try testing.expectEqual(@as(u8, 0xFF), handler.slc_values[LinemodeHandler.SLC_EC]);
 }
 
 test "OptionHandlerRegistry - handle unsupported option negotiation" {
@@ -399,4 +559,52 @@ test "OptionHandlerRegistry - update window size" {
     };
 
     try testing.expectEqualSlices(u8, &expected, response.items);
+}
+
+test "OptionHandlerRegistry - respond to NEW-ENVIRON SEND" {
+    var registry = OptionHandlerRegistry.init("xterm", 80, 24, null);
+    registry.new_environ_handler.fetch_fn = testFetchEnv;
+
+    var response = std.ArrayList(u8).init(testing.allocator);
+    defer response.deinit();
+
+    const request = [_]u8{telnet_environ.NewEnviron.SEND};
+    try registry.handleSubnegotiation(testing.allocator, .new_environ, &request, &response);
+
+    const expected = [_]u8{
+        @intFromEnum(TelnetCommand.iac),
+        @intFromEnum(TelnetCommand.sb),
+        @intFromEnum(TelnetOption.new_environ),
+        telnet_environ.NewEnviron.IS,
+        telnet_environ.NewEnviron.VAR,
+        'T',
+        'E',
+        'R',
+        'M',
+        telnet_environ.NewEnviron.VALUE,
+        'a',
+        'n',
+        's',
+        'i',
+        @intFromEnum(TelnetCommand.iac),
+        @intFromEnum(TelnetCommand.se),
+    };
+
+    try testing.expectEqualSlices(u8, &expected, response.items);
+}
+
+fn testFetchEnv(
+    allocator: std.mem.Allocator,
+    requested: []const []const u8,
+) NewEnvironHandler.FetchError!telnet_environ.Collection {
+    _ = requested;
+
+    var collection = telnet_environ.Collection.init(allocator);
+    errdefer collection.deinit();
+
+    const value = try allocator.dupe(u8, "ansi");
+    errdefer allocator.free(value);
+    try collection.entries.append(allocator, .{ .name = "TERM", .value = value, .kind = .variable });
+
+    return collection;
 }
