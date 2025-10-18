@@ -123,8 +123,13 @@ pub fn connect(
     return proxy_sock;
 }
 
-/// Connect to proxy server
-fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socket.Socket {
+    /// Establishes a TCP connection to the proxy server.
+    ///
+    /// This function resolves the proxy's hostname, iterates through the available
+    /// addresses, and attempts to connect to each one until a connection succeeds.
+    /// It respects the `--ipv4-only` and `--ipv6-only` flags and uses the
+    /// configured connection timeout.
+    fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socket.Socket {
     const addr_list = try std.net.getAddressList(
         std.heap.page_allocator,
         host,
@@ -162,8 +167,12 @@ fn connectToProxy(host: []const u8, port: u16, cfg: *const config.Config) !socke
     return last_error orelse error.ConnectionFailed;
 }
 
-/// Send HTTP CONNECT request
-fn sendConnectRequest(
+    /// Constructs and sends the `CONNECT` request to the proxy server.
+    ///
+    /// This function builds the HTTP `CONNECT` request string, including the
+    /// `Host` header and an optional `Proxy-Authorization` header for Basic
+    /// authentication. It then sends the complete request over the socket.
+    fn sendConnectRequest(
     allocator: std.mem.Allocator,
     sock: socket.Socket,
     target_host: []const u8,

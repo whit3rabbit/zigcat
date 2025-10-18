@@ -234,12 +234,35 @@ pub const TelnetConnection = struct {
     }
 };
 
-/// Create TelnetConnection with default settings.
+/// A factory function to create a `TelnetConnection` from a raw `Connection`
+/// with default terminal settings.
+///
+/// This is a convenience wrapper around `TelnetConnection.init` that uses
+/// default values for terminal type ("UNKNOWN"), window size (80x24), and does
+/// not link to a local TTY.
+///
+/// - `connection`: The underlying network connection to wrap.
+/// - `allocator`: The memory allocator for internal buffers.
+///
+/// Returns an initialized `TelnetConnection`.
 pub fn fromConnection(connection: Connection, allocator: std.mem.Allocator) !TelnetConnection {
     return TelnetConnection.init(connection, allocator, null, null, null, null);
 }
 
-/// Create TelnetConnection with custom terminal configuration.
+/// A factory function to create a `TelnetConnection` from a raw `Connection`
+/// with specific terminal properties.
+///
+/// This wrapper around `TelnetConnection.init` is useful when the application
+/// has explicit information about the terminal, such as its type (e.g., "xterm-256color")
+/// or dimensions, which can be used in Telnet negotiations (e.g., `NAWS`).
+///
+/// - `connection`: The underlying network connection to wrap.
+/// - `allocator`: The memory allocator for internal buffers.
+/// - `terminal_type`: The client's terminal type (e.g., "vt100").
+/// - `window_width`: The width of the terminal window in characters.
+/// - `window_height`: The height of the terminal window in characters.
+///
+/// Returns an initialized `TelnetConnection`.
 pub fn fromConnectionWithConfig(
     connection: Connection,
     allocator: std.mem.Allocator,

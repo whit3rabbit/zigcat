@@ -52,7 +52,16 @@ const Iocp = @import("../../util/iocp_windows.zig").Iocp;
 const IocpOperation = @import("../../util/iocp_windows.zig").IocpOperation;
 const CompletionPacket = @import("../../util/iocp_windows.zig").CompletionPacket;
 
-/// IOCP-based exec session implementation.
+/// Implements the exec session I/O loop using Windows I/O Completion Ports (IOCP).
+///
+/// This struct manages the entire lifecycle of an exec session on Windows,
+/// including the network socket, the child process's standard I/O handles
+/// (stdin, stdout, stderr), and the IOCP event loop. It uses a non-blocking,
+/// single-threaded model to efficiently handle bidirectional data transfer.
+///
+/// The session uses `IoRingBuffer`s to hold in-flight data and a `FlowState`
+/// manager to apply backpressure, preventing excessive memory usage when one
+/// side of the I/O pipe is faster than the other.
 pub const IocpSession = struct {
     // User data constants for IOCP operation tracking
     const USER_DATA_SOCKET_READ: u64 = 1;
@@ -282,12 +291,17 @@ pub const IocpSession = struct {
         self.maybeShutdownSocketWrite();
     }
 
+    /// Calculates the total number of bytes currently held in all I/O buffers.
     fn totalBuffered(self: *const IocpSession) usize {
         return self.stdin_buffer.availableRead() +
             self.stdout_buffer.availableRead() +
             self.stderr_buffer.availableRead();
     }
 
+    /// Updates the flow control state based on the current buffer usage.
+    ///
+    /// This function checks the total buffered bytes against the configured
+    /// thresholds and updates the `flow_state` to either pause or resume reads.
     fn updateFlow(self: *IocpSession) !void {
         const total = self.totalBuffered();
         if (self.flow_enabled and total > self.max_total_buffer_bytes) {
@@ -299,6 +313,11 @@ pub const IocpSession = struct {
         }
     }
 
+    /// Calculates the appropriate timeout for the `GetQueuedCompletionStatus` call.
+    ///
+    /// The timeout is determined by the `TimeoutTracker`, which considers the
+    /// execution, idle, and connection timeouts. This ensures the event loop
+    /// wakes up in time to enforce timeouts.
     fn computeIocpTimeout(self: *IocpSession) u32 {
         const next = self.tracker.nextPollTimeout(null);
         if (next) |ms| {
@@ -311,6 +330,10 @@ pub const IocpSession = struct {
         return 0xFFFFFFFF; // INFINITE
     }
 
+    /// Checks for and handles any expired timers.
+    ///
+    /// If a timeout (execution, idle, or connection) has occurred, this function
+    /// kills the child process and returns the corresponding timeout error.
     fn checkTimeouts(self: *IocpSession) !void {
         switch (self.tracker.check()) {
             .none => {},
@@ -329,6 +352,13 @@ pub const IocpSession = struct {
         }
     }
 
+    /// Determines whether the main I/O event loop should continue running.
+    ///
+    /// The loop continues as long as there is potential work to be done, such as:
+    /// - Data in stdout/stderr buffers that needs to be written to the socket.
+    /// - The child process's stdout or stderr is still open.
+    /// - Data in the stdin buffer that needs to be written to the child process.
+    /// - The network socket is still open for reading and the child's stdin is open.
     fn shouldContinue(self: *const IocpSession) bool {
         // Same logic as uring_backend.zig
         if (!self.socket_write_closed and (self.stdout_buffer.availableRead() > 0 or self.stderr_buffer.availableRead() > 0)) return true;
@@ -338,6 +368,12 @@ pub const IocpSession = struct {
         return false;
     }
 
+    /// Submits asynchronous read operations to the IOCP for all active sources.
+    ///
+    /// This function checks the state of the socket, child stdout, and child stderr.
+    /// If a source is open, not currently under a pending read operation, has
+    /// available buffer space, and is not paused by flow control, it submits a
+    /// new `ReadFile` operation to the IOCP.
     fn submitIocpReads(self: *IocpSession) !void {
         const pause_reads = self.flow_enabled and self.flow_state.shouldPause();
 
@@ -378,6 +414,12 @@ pub const IocpSession = struct {
         try self.submitIocpWrites();
     }
 
+    /// Submits asynchronous write operations to the IOCP for all active destinations.
+    ///
+    /// This function checks for buffered data destined for the socket (from stdout/stderr)
+    /// or for the child's stdin (from the socket). If there is data to write and no
+    /// write operation is currently pending for that destination, it submits a new
+    /// `WriteFile` operation to the IOCP.
     fn submitIocpWrites(self: *IocpSession) !void {
         // Submit socket write if we have stdout/stderr data
         if (!self.socket_write_closed and !self.socket_write_pending) {
@@ -409,6 +451,11 @@ pub const IocpSession = struct {
         }
     }
 
+    /// Dispatches a completed IOCP operation to its specific handler.
+    ///
+    /// This function acts as a router. It examines the `user_data` field of the
+    /// completion packet to identify the operation that has finished and calls the
+    /// corresponding `handle...` function (e.g., `handleSocketRead`).
     fn handleIocpCompletion(self: *IocpSession, cqe: CompletionPacket) !void {
         switch (cqe.user_data) {
             USER_DATA_SOCKET_READ => {
@@ -435,6 +482,11 @@ pub const IocpSession = struct {
         }
     }
 
+    /// Handles the completion of a socket read operation.
+    ///
+    /// If the read was successful, it commits the received data to the stdin
+    /// buffer, updates flow control, and resubmits new I/O operations. If an
+    /// error or EOF occurred, it closes the socket's read side.
     fn handleSocketRead(self: *IocpSession, cqe: CompletionPacket) !void {
         if (cqe.error_code != 0) {
             // Error occurred - close socket read
@@ -457,6 +509,12 @@ pub const IocpSession = struct {
         try self.submitIocpReads();
     }
 
+    /// Handles the completion of a socket write operation.
+    ///
+    /// If the write was successful, it consumes the written data from the
+    /// appropriate buffer (stdout or stderr), updates flow control, and
+    /// resubmits new write operations if more data is pending. If an error
+    /// occurred, it closes the socket's write side.
     fn handleSocketWrite(self: *IocpSession, cqe: CompletionPacket) !void {
         if (cqe.error_code != 0) {
             // Error occurred - close socket write
@@ -484,6 +542,12 @@ pub const IocpSession = struct {
         try self.submitIocpWrites();
     }
 
+    /// Handles the completion of a write operation to the child's stdin.
+    ///
+    /// If the write was successful, it consumes the written data from the stdin
+    /// buffer and resubmits new writes if more data is available. If the socket
+    /// has been closed and the buffer is now empty, it closes the child's stdin.
+    /// If an error occurred, it closes the child's stdin immediately.
     fn handleStdinWrite(self: *IocpSession, cqe: CompletionPacket) !void {
         if (cqe.error_code != 0) {
             // Error occurred - child stdin closed
@@ -505,6 +569,11 @@ pub const IocpSession = struct {
         try self.submitIocpWrites();
     }
 
+    /// Handles the completion of a read operation from the child's stdout.
+    ///
+    /// If the read was successful, it commits the data to the stdout buffer and
+    /// triggers new I/O submissions to forward the data to the socket. If an
+    /// error or EOF occurred, it closes the child's stdout pipe.
     fn handleStdoutRead(self: *IocpSession, cqe: CompletionPacket) !void {
         if (cqe.error_code != 0) {
             // Error occurred - close child stdout
@@ -528,6 +597,11 @@ pub const IocpSession = struct {
         try self.submitIocpWrites();
     }
 
+    /// Handles the completion of a read operation from the child's stderr.
+    ///
+    /// If the read was successful, it commits the data to the stderr buffer and
+    /// triggers new I/O submissions to forward the data to the socket. If an
+    /// error or EOF occurred, it closes the child's stderr pipe.
     fn handleStderrRead(self: *IocpSession, cqe: CompletionPacket) !void {
         if (cqe.error_code != 0) {
             // Error occurred - close child stderr
@@ -551,6 +625,12 @@ pub const IocpSession = struct {
         try self.submitIocpWrites();
     }
 
+    /// Attempts to flush any remaining data in the stdout/stderr buffers to the socket.
+    ///
+    /// This function is called at the end of the `run` loop to ensure that any
+    /// data received from the child process just before it exited is sent to the
+    /// client. It performs a short, blocking-like loop to write data and wait for
+    /// completions.
     fn flushIocpBuffers(self: *IocpSession) !void {
         // Attempt to flush any remaining buffered data
         while (!self.socket_write_closed and
@@ -569,6 +649,7 @@ pub const IocpSession = struct {
         }
     }
 
+    /// Closes the child process's stdout pipe and marks it as closed.
     fn closeChildStdout(self: *IocpSession) void {
         if (self.child_stdout_closed) return;
         if (self.child.stdout) |file| {
@@ -578,6 +659,7 @@ pub const IocpSession = struct {
         self.child_stdout_closed = true;
     }
 
+    /// Closes the child process's stderr pipe and marks it as closed.
     fn closeChildStderr(self: *IocpSession) void {
         if (self.child_stderr_closed) return;
         if (self.child.stderr) |file| {
@@ -587,6 +669,7 @@ pub const IocpSession = struct {
         self.child_stderr_closed = true;
     }
 
+    /// Closes the child process's stdin pipe and marks it as closed.
     fn closeChildStdin(self: *IocpSession) void {
         if (self.child_stdin_closed) return;
         if (self.child.stdin) |file| {
@@ -596,6 +679,11 @@ pub const IocpSession = struct {
         self.child_stdin_closed = true;
     }
 
+    /// Checks if the socket's write side can be shut down and marks it as closed if so.
+    ///
+    /// The socket write side is considered safe to close when both of the child's
+    /// output pipes (stdout and stderr) have been closed and there is no more
+    /// data in their respective buffers to be written.
     fn maybeShutdownSocketWrite(self: *IocpSession) void {
         if (self.socket_write_closed) return;
         if (self.stdout_buffer.availableRead() > 0 or self.stderr_buffer.availableRead() > 0) return;

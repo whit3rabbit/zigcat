@@ -14,6 +14,19 @@ const logging = @import("../../util/logging.zig");
 const allowlist = @import("../../net/allowlist.zig");
 const broker = @import("../../server/broker.zig");
 
+/// Initializes and runs the broker or chat server.
+///
+/// This function sets up the `BrokerServer` instance, logs the initial configuration,
+/// and starts the main event loop. It handles initialization errors and gracefully
+...
+/// logs server shutdown.
+///
+/// - `allocator`: The memory allocator for all dynamic allocations.
+/// - `listen_socket`: The pre-configured socket descriptor for accepting client connections.
+/// - `cfg`: A pointer to the application's global configuration.
+/// - `access_list`: A pointer to the initialized IP/CIDR access control list.
+///
+/// Returns an error if server initialization or the main event loop fails critically.
 pub fn runBrokerServer(
     allocator: std.mem.Allocator,
     listen_socket: std.posix.socket_t,

@@ -32,6 +32,7 @@ pub const ShellCommand = struct {
     args: []const []const u8,
     allocator: std.mem.Allocator,
 
+    /// Frees the memory allocated for the command's arguments.
     pub fn deinit(self: *ShellCommand) void {
         self.allocator.free(self.args);
         self.args = &.{};

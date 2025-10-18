@@ -73,13 +73,17 @@ const IORING_CQE_BUFFER_SHIFT = io_uring_wrapper.IORING_CQE_BUFFER_SHIFT;
 const FlowState = @import("./flow_control.zig").FlowState;
 const computeThresholdBytes = @import("./flow_control.zig").computeThresholdBytes;
 
-/// io_uring-based exec session with provided buffers (kernel 5.7+).
+/// Implements the exec session I/O loop using `io_uring` with provided buffers.
 ///
-/// This backend achieves the highest performance by:
-/// - Pre-registering buffer pools with the kernel (one-time cost)
-/// - Letting the kernel automatically select buffers for reads
-/// - Avoiding per-operation buffer address translation
-/// - Reducing syscall overhead through batched operations
+/// This is the highest-performance backend, available on Linux kernels 5.7 and
+/// newer. It builds upon the standard `io_uring` model by pre-registering a
+/// set of I/O buffers with the kernel. This allows the kernel to select a buffer
+/// for a read operation and return its ID in the completion event, avoiding
+/// the overhead of passing buffer pointers in every submission queue entry.
+///
+/// The session manages three distinct buffer pools, one for each direction of
+/// data flow (socket->stdin, stdout->socket, stderr->socket), each identified
+/// by a unique Buffer Group ID (BGID).
 pub const UringProvidedSession = struct {
     // ========================================================================
     // Constants
@@ -357,15 +361,14 @@ pub const UringProvidedSession = struct {
     // Event Loop
     // ========================================================================
 
-    /// Run the I/O event loop until completion.
+    /// Runs the main I/O event loop for the session.
     ///
-    /// This is the main entry point that:
-    /// 1. Submits initial read operations
-    /// 2. Enters event loop waiting for completions
-    /// 3. Dispatches completions to handlers
-    /// 4. Resubmits operations as needed
-    /// 5. Handles timeouts and errors
-    /// 6. Performs final buffer flush
+    /// This function orchestrates the entire I/O process. It begins by submitting
+    /// initial read requests for all sources. It then enters a loop, waiting for
+    /// I/O completion events from the kernel. Each completion is dispatched to a
+    /// handler, which processes the result and may trigger new I/O submissions.
+    /// The loop continues until all I/O streams are closed or an error occurs.
+    /// A final flush is performed to ensure all buffered data is sent.
     pub fn run(self: *UringProvidedSession) !void {
         // Submit initial read operations
         try self.submitInitialReads();
@@ -415,7 +418,12 @@ pub const UringProvidedSession = struct {
         try self.flushBuffers();
     }
 
-    /// Submit initial read operations for socket, stdout, and stderr.
+    /// Submits the initial set of read operations to the `io_uring`.
+    ///
+    /// This function is called once at the start of the `run` loop to kick off
+    /// the I/O process. It submits a read request for the socket, the child's
+    /// stdout, and the child's stderr, each configured to use its respective
+    /// group of provided buffers.
     fn submitInitialReads(self: *UringProvidedSession) !void {
         // Submit socket read (uses provided buffers from BGID_STDIN)
         if (!self.socket_read_closed) {
@@ -436,7 +444,11 @@ pub const UringProvidedSession = struct {
         }
     }
 
-    /// Dispatch completion event to appropriate handler.
+    /// Dispatches a completed `io_uring` operation to its specific handler.
+    ///
+    /// This function acts as a router, examining the `user_data` of the completion
+    /// event to determine which operation finished and calling the corresponding
+    /// `handle...` function to process the result.
     fn handleCompletion(self: *UringProvidedSession, cqe: CompletionResult) !void {
         switch (cqe.user_data) {
             USER_DATA_SOCKET_READ => try self.handleSocketRead(cqe),
@@ -456,9 +468,12 @@ pub const UringProvidedSession = struct {
         }
     }
 
-    /// Handle socket read completion.
+    /// Handles the completion of a socket read operation.
     ///
-    /// Extracts buffer_id from CQE flags and adds the buffer to stdin_stream.
+    /// On a successful read, it extracts the buffer ID from the completion event's
+    /// flags, finds the corresponding buffer in the `stdin_pool`, and adds it to
+    /// the `stdin_stream` to be written to the child process. It closes the
+    /// socket's read side on an error or EOF.
     fn handleSocketRead(self: *UringProvidedSession, cqe: CompletionResult) !void {
         self.socket_read_pending = false;
 
@@ -492,9 +507,12 @@ pub const UringProvidedSession = struct {
         self.tracker.markActivity();
     }
 
-    /// Handle socket write completion.
+    /// Handles the completion of a socket write operation.
     ///
-    /// Updates socket_write_pending flag and checks for errors.
+    /// This function primarily serves to update the `socket_write_pending` flag
+    /// and check for errors. The actual consumption of data from the source
+    /// stream (stdout or stderr) happens before the write is submitted. It
+    /// closes the socket's write side on an error.
     fn handleSocketWrite(self: *UringProvidedSession, cqe: CompletionResult) !void {
         self.socket_write_pending = false;
 
@@ -508,9 +526,13 @@ pub const UringProvidedSession = struct {
         self.tracker.markActivity();
     }
 
-    /// Handle child stdin write completion.
+    /// Handles the completion of a write to the child's stdin.
     ///
-    /// Consumes written bytes from stdin_stream and returns buffers to pool.
+    /// After a successful write, it consumes the corresponding number of bytes
+    /// from the `stdin_stream`. Consuming the stream automatically returns the
+    /// used buffers to the `stdin_pool`, making them available for new socket
+    /// reads. It then replenishes the kernel's buffer group with these freed
+    /// buffers.
     fn handleStdinWrite(self: *UringProvidedSession, cqe: CompletionResult) !void {
         self.stdin_write_pending = false;
 
@@ -532,9 +554,12 @@ pub const UringProvidedSession = struct {
         self.tracker.markActivity();
     }
 
-    /// Handle child stdout read completion.
+    /// Handles the completion of a read from the child's stdout.
     ///
-    /// Extracts buffer_id from CQE flags and adds the buffer to stdout_stream.
+    /// On a successful read, it extracts the buffer ID and adds the corresponding
+    /// buffer from the `stdout_pool` to the `stdout_stream`, making its data
+    /// available to be written to the socket. It closes the stdout pipe on an
+    /// error or EOF.
     fn handleStdoutRead(self: *UringProvidedSession, cqe: CompletionResult) !void {
         self.stdout_read_pending = false;
 
@@ -567,9 +592,12 @@ pub const UringProvidedSession = struct {
         self.tracker.markActivity();
     }
 
-    /// Handle child stderr read completion.
+    /// Handles the completion of a read from the child's stderr.
     ///
-    /// Extracts buffer_id from CQE flags and adds the buffer to stderr_stream.
+    /// On a successful read, it extracts the buffer ID and adds the corresponding
+    /// buffer from the `stderr_pool` to the `stderr_stream`, making its data
+    /// available to be written to the socket. It closes the stderr pipe on an
+    /// error or EOF.
     fn handleStderrRead(self: *UringProvidedSession, cqe: CompletionResult) !void {
         self.stderr_read_pending = false;
 
@@ -602,7 +630,12 @@ pub const UringProvidedSession = struct {
         self.tracker.markActivity();
     }
 
-    /// Resubmit operations based on current state.
+    /// Submits new `io_uring` operations based on the current session state.
+    ///
+    /// This function is called after a completion is handled. It checks the state
+    /// of all streams and submits new read or write operations where appropriate.
+    /// For example, if a socket read just completed, this function will likely
+    /// resubmit a new socket read request to continue listening for data.
     fn resubmitOperations(self: *UringProvidedSession) !void {
         var submitted: bool = false;
 
@@ -663,7 +696,13 @@ pub const UringProvidedSession = struct {
         }
     }
 
-    /// Replenish a buffer pool by returning available buffers to the kernel.
+    /// Returns freed buffers to the specified kernel buffer group.
+    ///
+    /// After data has been written from a stream (e.g., from `stdin_stream` to
+    /// the child process), the underlying buffers are returned to their pool. This
+    /// function takes those freed buffers and submits a `PROVIDE_BUFFERS` operation
+    /// to the `io_uring`, making them available for the kernel to use for new
+    /// read operations.
     fn replenishBufferPool(self: *UringProvidedSession, bgid: u16) !void {
         const pool = switch (bgid) {
             BGID_STDIN => &self.stdin_pool,
@@ -700,7 +739,12 @@ pub const UringProvidedSession = struct {
         _ = user_data; // Mark as used
     }
 
-    /// Final buffer flush - drain all remaining data.
+    /// Attempts to flush all remaining buffered data at the end of the session.
+    ///
+    /// This function is called before the session terminates to ensure that any
+    /// data lingering in the `stdout_stream` or `stderr_stream` is written to
+    /// the socket, and any data in the `stdin_stream` is written to the child.
+    /// It uses a blocking-like loop to submit and wait for writes to complete.
     fn flushBuffers(self: *UringProvidedSession) !void {
         // Flush stdout and stderr streams to socket
         while (self.stdout_stream.availableRead() > 0 or self.stderr_stream.availableRead() > 0) {
@@ -753,14 +797,14 @@ pub const UringProvidedSession = struct {
     // Helper Functions
     // ========================================================================
 
-    /// Calculate total bytes buffered across all streams.
+    /// Calculates the total number of bytes currently held across all I/O streams.
     fn totalBuffered(self: *const UringProvidedSession) usize {
         return self.stdin_stream.availableRead() +
             self.stdout_stream.availableRead() +
             self.stderr_stream.availableRead();
     }
 
-    /// Update flow control state based on buffer usage.
+    /// Updates the flow control state based on the current total buffer usage.
     fn updateFlow(self: *UringProvidedSession) !void {
         const total = self.totalBuffered();
         if (self.flow_enabled and total > self.max_total_buffer_bytes) {
@@ -772,7 +816,7 @@ pub const UringProvidedSession = struct {
         }
     }
 
-    /// Compute timeout for io_uring wait.
+    /// Calculates the appropriate timeout for the `io_uring_enter` call.
     fn computeUringTimeout(self: *UringProvidedSession) i32 {
         const next = self.tracker.nextPollTimeout(null);
         if (next) |ms| {
@@ -785,7 +829,7 @@ pub const UringProvidedSession = struct {
         return -1; // Infinite timeout
     }
 
-    /// Check for timeout expirations.
+    /// Checks for and handles any expired session timers.
     fn checkTimeouts(self: *UringProvidedSession) !void {
         switch (self.tracker.check()) {
             .none => {},
@@ -804,7 +848,7 @@ pub const UringProvidedSession = struct {
         }
     }
 
-    /// Check if the event loop should continue.
+    /// Determines whether the main I/O event loop should continue running.
     fn shouldContinue(self: *const UringProvidedSession) bool {
         // Continue if we have data to write
         if (!self.socket_write_closed and (self.stdout_stream.availableRead() > 0 or self.stderr_stream.availableRead() > 0)) return true;
@@ -821,7 +865,7 @@ pub const UringProvidedSession = struct {
         return false;
     }
 
-    /// Close child stdin pipe.
+    /// Closes the child process's stdin pipe and marks it as closed.
     fn closeChildStdin(self: *UringProvidedSession) void {
         if (self.child_stdin_closed) return;
         if (self.child.stdin) |file| {
@@ -831,7 +875,7 @@ pub const UringProvidedSession = struct {
         self.child_stdin_closed = true;
     }
 
-    /// Close child stdout pipe.
+    /// Closes the child process's stdout pipe and marks it as closed.
     fn closeChildStdout(self: *UringProvidedSession) void {
         if (self.child_stdout_closed) return;
         if (self.child.stdout) |file| {
@@ -841,7 +885,7 @@ pub const UringProvidedSession = struct {
         self.child_stdout_closed = true;
     }
 
-    /// Close child stderr pipe.
+    /// Closes the child process's stderr pipe and marks it as closed.
     fn closeChildStderr(self: *UringProvidedSession) void {
         if (self.child_stderr_closed) return;
         if (self.child.stderr) |file| {
@@ -851,7 +895,7 @@ pub const UringProvidedSession = struct {
         self.child_stderr_closed = true;
     }
 
-    /// Shutdown socket write side if all output is sent.
+    /// Checks if the socket's write side can be shut down and does so if appropriate.
     fn maybeShutdownSocketWrite(self: *UringProvidedSession) void {
         if (self.socket_write_closed) return;
         if (self.stdout_stream.availableRead() > 0 or self.stderr_stream.availableRead() > 0) return;

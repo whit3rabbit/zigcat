@@ -19,6 +19,15 @@ const logging = @import("../util/logging.zig");
 const common = @import("common.zig");
 const server_mode = @import("modes/server.zig");
 
+/// The main application entry point, responsible for the entire program lifecycle.
+///
+/// This function orchestrates the application's execution by:
+/// 1. Initializing the memory allocator and networking stack.
+/// 2. Parsing command-line arguments into a `Config` struct.
+/// 3. Handling special flags like `--help` and `--version`.
+/// 4. Validating the final configuration.
+/// 5. Dispatching control to either the server (`runServer`) or client (`runClient`)
+///    logic based on the `-l` (`--listen`) flag.
 pub fn run() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

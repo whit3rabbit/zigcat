@@ -13,6 +13,10 @@ pub const gsocket = @import("net/gsocket.zig");
 pub const srp_openssl = @import("tls/srp_openssl.zig");
 pub const build_options = @import("build_options");
 
+/// The executable's main entry point.
+///
+/// This function serves as a thin wrapper that calls the primary application
+/// logic in `app.run()`.
 pub fn main() !void {
     try app.run();
 }

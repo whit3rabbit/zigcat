@@ -27,6 +27,20 @@ const TelnetConnection = @import("../../protocol/telnet_connection.zig").TelnetC
 
 const broker_mode = @import("broker.zig");
 
+/// Initializes and runs a Unix domain socket server.
+///
+/// This function handles the full lifecycle of a Unix domain socket server. It
+/// validates the socket path, drops privileges if configured, creates and binds
+/// the socket, and then enters an accept loop. It supports multiple operational
+...
+/// (`--max-conns`), and graceful shutdown.
+///
+/// - `allocator`: The memory allocator for all dynamic allocations.
+/// - `cfg`: A pointer to the application's global configuration.
+/// - `socket_path`: The file system path for the Unix domain socket.
+///
+/// Returns an error if the platform doesn't support Unix sockets, or if socket
+/// creation, binding, or handling fails.
 pub fn runUnixSocketServer(allocator: std.mem.Allocator, cfg: *const config.Config, socket_path: []const u8) !void {
     if (!unixsock.unix_socket_supported) {
         logging.logError(error.UnixSocketsNotSupported, "Unix domain sockets not supported on this platform");
@@ -192,6 +206,13 @@ const UnixThreadContext = struct {
     connection_id: u32,
 };
 
+/// A thread entry point for handling a single Unix socket client connection.
+///
+/// This function is spawned in a new thread when the server is configured for
+/// multithreading (`--max-conns > 0`). It calls the main `handleUnixSocketClient`
+/// logic and ensures the connection's resources are cleaned up afterward.
+///
+/// - `ctx`: A pointer to `UnixThreadContext`, containing the connection and config.
 fn handleUnixClientThread(ctx: *UnixThreadContext) void {
     defer ctx.allocator.destroy(ctx);
     defer ctx.conn.close();
@@ -207,6 +228,18 @@ fn handleUnixClientThread(ctx: *UnixThreadContext) void {
     };
 }
 
+/// Accepts a new Unix socket connection with a configurable timeout.
+///
+/// This helper function wraps the `accept` call with a `poll`-based timeout.
+/// It uses the `--accept-timeout` or `--idle-timeout` from the configuration
+/// to wait for an incoming connection. This prevents the server from blocking
+/// indefinitely and allows for graceful shutdown.
+///
+/// - `unix_server`: A pointer to the listening `UnixSocket` server instance.
+/// - `cfg`: A pointer to the application's global configuration.
+///
+/// Returns the accepted `UnixSocket` connection or an error, such as
+/// `AcceptTimeout` if no connection arrives in time.
 fn acceptUnixSocketWithTimeout(unix_server: *unixsock.UnixSocket, cfg: *const config.Config) !unixsock.UnixSocket {
     const socket = unix_server.getSocket();
 
@@ -246,6 +279,20 @@ fn acceptUnixSocketWithTimeout(unix_server: *unixsock.UnixSocket, cfg: *const co
     return unix_server.accept();
 }
 
+/// Handles a single accepted Unix domain socket client connection.
+///
+/// This function is the core logic for a Unix socket connection. It dispatches
+/// to the appropriate handler based on the configuration (e.g., exec mode,
+/// bidirectional transfer). It sets up I/O logging and hex dumping.
+///
+/// - `allocator`: The memory allocator.
+/// - `stream`: The network stream for the connected client.
+/// - `client_address`: The address of the client (for consistency, though less
+///   relevant for Unix sockets).
+/// - `cfg`: A pointer to the application's global configuration.
+/// - `connection_id`: A unique identifier for logging purposes.
+///
+/// Returns an error if any part of the handling process fails.
 fn handleUnixSocketClient(
     allocator: std.mem.Allocator,
     stream: std.net.Stream,

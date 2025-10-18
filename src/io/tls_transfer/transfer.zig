@@ -29,6 +29,8 @@ const errors = @import("errors.zig");
 const cleanup = @import("cleanup.zig");
 const tls_uring = @import("uring.zig");
 
+/// Default buffer size for I/O operations, set to 8KB.
+/// See `io/transfer.zig` for details.
 pub const BUFFER_SIZE = 8192;
 
 /// TLS-aware bidirectional data transfer between stdin/stdout and TLS connection.
