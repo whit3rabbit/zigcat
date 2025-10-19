@@ -137,6 +137,11 @@ pub const Config = struct {
     ssl_crl: ?[]const u8 = null,
     /// Colon-separated list of SSL ciphers to use. Controlled by `--ssl-ciphers`. Default: `null`.
     ssl_ciphers: ?[]const u8 = null,
+    /// SSL/TLS cipher suite profile: modern (default), intermediate, compatible. Controlled by `--ssl-profile`. Default: `"modern"`.
+    /// - modern: AEAD-only, ECDHE-only, TLS 1.2+ (high security)
+    /// - intermediate: AEAD-only, ECDHE+DHE, TLS 1.2+ (balanced)
+    /// - compatible: Includes CBC ciphers for legacy clients (lower security)
+    ssl_profile: []const u8 = "modern",
     /// Server Name Indication for TLS. Controlled by `--ssl-servername`. Default: `null`.
     ssl_servername: ?[]const u8 = null,
     /// Application-Layer Protocol Negotiation string. Controlled by `--ssl-alpn`. Default: `null`.

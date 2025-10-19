@@ -67,11 +67,19 @@ pub fn printHelp() void {
         \\  --ssl                         Enable SSL/TLS
         \\  --ssl-verify                  Enable certificate verification (default)
         \\  --insecure                    Disable certificate verification (explicit acknowledgment)
-        \\  --ssl-cert <file>             SSL certificate file (server mode)
-        \\  --ssl-key <file>              SSL private key file (server mode)
+        \\  --ssl-cert <file>             SSL certificate file (optional in server mode)
+        \\                                Auto-generated if omitted (matches ncat behavior)
+        \\  --ssl-key <file>              SSL private key file (optional in server mode)
+        \\                                Auto-generated if omitted (matches ncat behavior)
+        \\  --ssl-profile <profile>       Cipher suite security profile
+        \\                                Smart defaults: modern (server), compatible (client)
+        \\                                Automatically warns when less secure ciphers negotiated
+        \\                                  modern:       AEAD-only, ECDHE-only, TLS 1.2+ (highest security)
+        \\                                  intermediate: AEAD-only, ECDHE+DHE, TLS 1.2+ (balanced)
+        \\                                  compatible:   Includes CBC-SHA256 for legacy clients
         \\  --ssl-trustfile <file>        SSL CA certificate bundle
         \\  --ssl-crl <file>              Certificate Revocation List (CRL) file
-        \\  --ssl-ciphers <ciphers>       SSL cipher suite list
+        \\  --ssl-ciphers <ciphers>       SSL cipher suite list (overrides --ssl-profile)
         \\  --ssl-servername <name>       SNI server name (for virtual hosting)
         \\  --ssl-alpn <protocols>        ALPN protocol list (e.g., "h2,http/1.1")
         \\

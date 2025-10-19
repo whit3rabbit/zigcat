@@ -267,6 +267,9 @@ pub const TlsConfig = struct {
     /// Cipher suites (comma-separated)
     cipher_suites: ?[]const u8 = null,
 
+    /// Cipher suite security profile (modern/intermediate/compatible)
+    ssl_profile: []const u8 = "modern",
+
     /// Minimum TLS version
     min_version: TlsVersion = .tls_1_2,
 

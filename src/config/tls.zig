@@ -168,11 +168,28 @@ fn displayTlsConfigurationError(err: TLSConfigError, file_path: []const u8) void
 /// Validate TLS certificate and key configuration.
 fn validateTlsCertificates(cfg: *const Config) TLSConfigError!void {
     if (cfg.listen_mode) {
-        if (cfg.ssl_cert == null) {
-            return TLSConfigError.TlsCertificateRequired;
-        }
-        if (cfg.ssl_key == null) {
-            return TLSConfigError.TlsKeyRequired;
+        // Certificate and key are now OPTIONAL in server mode
+        // If not provided, a temporary certificate will be auto-generated (matches ncat behavior)
+        // If one is provided, both must be provided
+        if ((cfg.ssl_cert != null and cfg.ssl_key == null) or
+            (cfg.ssl_cert == null and cfg.ssl_key != null))
+        {
+            std.debug.print("\n", .{});
+            std.debug.print("╔═══════════════════════════════════════════════════════════╗\n", .{});
+            std.debug.print("║  ⚠️  TLS CONFIGURATION ERROR                             ║\n", .{});
+            std.debug.print("║                                                           ║\n", .{});
+            std.debug.print("║  Both --ssl-cert and --ssl-key must be provided together.║\n", .{});
+            std.debug.print("║                                                           ║\n", .{});
+            std.debug.print("║  Options:                                                 ║\n", .{});
+            std.debug.print("║  1. Provide both --ssl-cert and --ssl-key                ║\n", .{});
+            std.debug.print("║  2. Omit both for automatic temporary certificate         ║\n", .{});
+            std.debug.print("╚═══════════════════════════════════════════════════════════╝\n", .{});
+            std.debug.print("\n", .{});
+            if (cfg.ssl_cert == null) {
+                return TLSConfigError.TlsCertificateRequired;
+            } else {
+                return TLSConfigError.TlsKeyRequired;
+            }
         }
 
         if (cfg.ssl_cert) |cert_path| {

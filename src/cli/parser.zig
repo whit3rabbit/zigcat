@@ -47,6 +47,8 @@ pub const CliError = error{
     ShowVersion,
     /// Timeout flag value exceeds supported range
     TimeoutTooLarge,
+    /// Invalid argument value provided
+    InvalidArgument,
 };
 
 /// Parse command-line arguments into a Config structure.
@@ -278,6 +280,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
             cfg.ssl_ciphers = args[i];
+        } else if (std.mem.eql(u8, arg, "--ssl-profile")) {
+            i += 1;
+            if (i >= args.len) return CliError.MissingValue;
+            cfg.ssl_profile = args[i];
+            // Validate profile name
+            if (!std.mem.eql(u8, args[i], "modern") and
+                !std.mem.eql(u8, args[i], "intermediate") and
+                !std.mem.eql(u8, args[i], "compatible"))
+            {
+                std.debug.print("Error: Invalid --ssl-profile value: {s}\n", .{args[i]});
+                std.debug.print("Valid profiles: modern, intermediate, compatible\n", .{});
+                return CliError.InvalidArgument;
+            }
         } else if (std.mem.eql(u8, arg, "--ssl-servername")) {
             i += 1;
             if (i >= args.len) return CliError.MissingValue;
@@ -387,6 +402,41 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const [:0]const u8) !conf
             else => .trace, // 3 or more -> trace
         };
         // verbosity enum is now the only source of truth
+    }
+
+    // Apply mode-aware SSL profile defaults if user didn't explicitly set --ssl-profile
+    // Note: We detect if user explicitly set profile by comparing against the default "modern" value
+    // This is safe because:
+    // 1. config.Config.init() sets ssl_profile = "modern" by default
+    // 2. --ssl-profile flag validation (line 288-295) ensures only valid values are set
+    // 3. If user sets --ssl-profile modern explicitly, no harm done (same result)
+    if (cfg.ssl and std.mem.eql(u8, cfg.ssl_profile, "modern")) {
+        // Check if --ssl-profile was explicitly provided by the user
+        var user_set_profile = false;
+        var j: usize = 1;
+        while (j < args.len) : (j += 1) {
+            if (std.mem.eql(u8, args[j], "--ssl-profile")) {
+                user_set_profile = true;
+                break;
+            }
+        }
+
+        // Apply smart defaults only if user didn't explicitly set profile
+        if (!user_set_profile) {
+            if (cfg.listen_mode) {
+                // Server mode: Default to "modern" (most secure)
+                cfg.ssl_profile = "modern";
+                if (cfg.verbosity != .quiet) {
+                    logging.logWarning("SSL server mode: Using 'modern' cipher profile (highest security)\n", .{});
+                }
+            } else {
+                // Client mode: Default to "compatible" (broad compatibility)
+                cfg.ssl_profile = "compatible";
+                if (cfg.verbosity != .quiet) {
+                    logging.logWarning("SSL client mode: Using 'compatible' cipher profile (adapts to server)\n", .{});
+                }
+            }
+        }
     }
 
     // Validate I/O control flags

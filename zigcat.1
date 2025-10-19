@@ -207,10 +207,64 @@ or
 This flag explicitly acknowledges the security risks of man-in-the-middle attacks and other threats when certificate verification is disabled.
 .TP
 .BR --ssl-cert " <file>"
-The SSL certificate file to use in server mode.
+The SSL certificate file to use in server mode (optional).
+.br
+If omitted in server mode, a temporary 2048-bit RSA certificate is auto-generated (matches ncat behavior).
 .TP
 .BR --ssl-key " <file>"
-The SSL private key file to use in server mode.
+The SSL private key file to use in server mode (optional).
+.br
+If omitted in server mode, a temporary private key is auto-generated (matches ncat behavior).
+.br
+Both
+.B --ssl-cert
+and
+.B --ssl-key
+must be provided together or both omitted.
+.TP
+.BR --ssl-profile " <profile>"
+Cipher suite security profile. Accepted values: modern, intermediate, compatible.
+.br
+.B Smart defaults:
+Server mode (-l) defaults to
+.I modern
+(highest security),
+.br
+Client mode defaults to
+.I compatible
+(adapts to server capabilities).
+.PP
+.RS
+.B modern
+(AEAD-only, ECDHE-only, TLS 1.2+):
+.br
+Cipher suites: ECDHE-ECDSA-AES128-GCM-SHA256, ECDHE-RSA-AES128-GCM-SHA256, ECDHE-ECDSA-AES256-GCM-SHA384, ECDHE-RSA-AES256-GCM-SHA384, ECDHE-ECDSA-CHACHA20-POLY1305, ECDHE-RSA-CHACHA20-POLY1305
+.br
+Security: Highest (AEAD authentication, perfect forward secrecy)
+.br
+Compatibility: Modern TLS clients/servers only (fails against legacy systems)
+.PP
+.B intermediate
+(AEAD-only, ECDHE+DHE, TLS 1.2+):
+.br
+Cipher suites: Modern profile + DHE-RSA-AES128-GCM-SHA256, DHE-RSA-AES256-GCM-SHA384, DHE-RSA-CHACHA20-POLY1305
+.br
+Security: High (AEAD authentication, perfect forward secrecy)
+.br
+Compatibility: Broad (supports older clients that lack ECDHE)
+.PP
+.B compatible
+(includes CBC-SHA256, TLS 1.2+):
+.br
+Cipher suites: Intermediate profile + ECDHE-ECDSA-AES128-SHA256, ECDHE-RSA-AES128-SHA256, ECDHE-ECDSA-AES256-SHA384, ECDHE-RSA-AES256-SHA384, DHE-RSA-AES128-SHA256, DHE-RSA-AES256-SHA384
+.br
+Security: Moderate (vulnerable to padding oracle attacks: Lucky13, BEAST)
+.br
+Compatibility: Maximum (supports legacy clients, ncat compatibility)
+.br
+.B Warning:
+zigcat automatically logs warnings when CBC ciphers are negotiated.
+.RE
 .TP
 .BR --ssl-trustfile " <file>"
 The SSL CA certificate bundle.
@@ -219,7 +273,7 @@ The SSL CA certificate bundle.
 The Certificate Revocation List (CRL) file.
 .TP
 .BR --ssl-ciphers " <ciphers>"
-The SSL cipher suite list.
+The SSL cipher suite list (overrides --ssl-profile).
 .TP
 .BR --ssl-servername " <name>"
 The SNI server name for virtual hosting.

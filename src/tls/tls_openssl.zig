@@ -38,6 +38,7 @@ const TlsVersion = tls_iface.TlsVersion;
 const posix = std.posix;
 const logging = @import("../util/logging.zig");
 const build_options = @import("build_options");
+const temp_cert = @import("temp_cert.zig");
 
 // C FFI bindings for OpenSSL
 const c = @cImport({
@@ -71,6 +72,8 @@ pub const OpenSslTls = struct {
     ssl: ?*c.SSL,
     state: ConnectionState,
     is_client: bool,
+    /// Temporary certificate (auto-generated when cert_file/key_file not provided)
+    temp_certificate: ?temp_cert.TemporaryCertificate,
 
     const ConnectionState = enum {
         initial,
@@ -89,6 +92,37 @@ pub const OpenSslTls = struct {
     pub fn initOpenSsl() void {
         // OpenSSL 1.1.0+ auto-initializes, but explicit call is safe
         _ = c.OPENSSL_init_ssl(0, null);
+    }
+
+    /// Get TLS 1.2 cipher list for the specified security profile.
+    ///
+    /// **Profiles:**
+    /// - modern: AEAD-only, ECDHE-only (highest security)
+    /// - intermediate: AEAD-only, ECDHE+DHE (balanced)
+    /// - compatible: Includes limited CBC ciphers (legacy support)
+    fn getCipherListForProfile(profile: []const u8) []const u8 {
+        if (std.mem.eql(u8, profile, "intermediate")) {
+            // Intermediate: Add DHE for broader compatibility, still AEAD-only
+            return "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:" ++
+                "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:" ++
+                "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:" ++
+                "DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305";
+        } else if (std.mem.eql(u8, profile, "compatible")) {
+            // Compatible: Add CBC-SHA256 for legacy clients (but still no 3DES, no RSA-KX, no weak ciphers)
+            // More secure than ncat's default while maintaining broad compatibility
+            return "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:" ++
+                "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:" ++
+                "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:" ++
+                "DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:" ++
+                "ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:" ++
+                "ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:" ++
+                "DHE-RSA-AES128-SHA256:DHE-RSA-AES256-SHA384";
+        } else {
+            // Modern (default): AEAD-only, ECDHE-only, maximum security
+            return "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:" ++
+                "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:" ++
+                "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305";
+        }
     }
 
     /// Create a client-side TLS connection and perform handshake.
@@ -141,6 +175,7 @@ pub const OpenSslTls = struct {
             .ssl = null,
             .state = .initial,
             .is_client = true,
+            .temp_certificate = null,
         };
 
         // Ensure OpenSSL is initialized
@@ -195,6 +230,9 @@ pub const OpenSslTls = struct {
 
         // Perform TLS handshake
         try self.doHandshake();
+
+        // Log cipher negotiation warnings (helps users understand security posture)
+        self.logNegotiatedCipherWarnings();
 
         // Verify hostname if verification enabled
         if (config.verify_peer) {
@@ -253,6 +291,7 @@ pub const OpenSslTls = struct {
             .ssl = null,
             .state = .initial,
             .is_client = false,
+            .temp_certificate = null,
         };
 
         // Ensure OpenSSL is initialized
@@ -292,6 +331,9 @@ pub const OpenSslTls = struct {
         // Perform TLS handshake
         try self.doHandshake();
 
+        // Log cipher negotiation warnings (helps users understand security posture)
+        self.logNegotiatedCipherWarnings();
+
         self.state = .connected;
         return self;
     }
@@ -326,13 +368,12 @@ pub const OpenSslTls = struct {
             return TlsError.HandshakeFailed;
         }
 
-        // Configure cipher suites (2025 security best practices - AEAD-only)
-        // TLS 1.2 cipher list: Only ECDHE with AEAD ciphers (AES-GCM, ChaCha20-Poly1305)
-        // This eliminates CBC ciphers (Lucky13), 3DES (Sweet32), and non-forward-secret ciphers
+        // Configure cipher suites based on profile (modern/intermediate/compatible)
+        // User can override with --ssl-ciphers, otherwise use profile-based defaults
         const cipher_list = if (self.config.cipher_suites) |cs|
             cs
         else
-            "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256";
+            getCipherListForProfile(self.config.ssl_profile);
 
         var cipher_buf: [512]u8 = undefined;
         if (cipher_list.len >= cipher_buf.len) {
@@ -435,8 +476,10 @@ pub const OpenSslTls = struct {
             return TlsError.HandshakeFailed;
         }
 
-        // Load server certificate (REQUIRED for server mode)
+        // Load server certificate and private key
+        // If not provided, generate temporary certificate (matches ncat behavior)
         if (self.config.cert_file) |cert_file| {
+            // Use provided certificate file
             var cert_buf: [512]u8 = undefined;
             if (cert_file.len >= cert_buf.len) {
                 return TlsError.CertificateInvalid;
@@ -448,27 +491,75 @@ pub const OpenSslTls = struct {
                 logging.logDebug("Failed to load server certificate\n", .{});
                 return TlsError.CertificateInvalid;
             }
-        } else {
-            logging.logDebug("Server certificate not provided\n", .{});
-            return TlsError.CertificateInvalid;
-        }
 
-        // Load server private key (REQUIRED for server mode)
-        if (self.config.key_file) |key_file| {
-            var key_buf: [512]u8 = undefined;
-            if (key_file.len >= key_buf.len) {
-                return TlsError.CertificateInvalid;
-            }
-            @memcpy(key_buf[0..key_file.len], key_file);
-            key_buf[key_file.len] = 0;
+            // Load provided private key file
+            if (self.config.key_file) |key_file| {
+                var key_buf: [512]u8 = undefined;
+                if (key_file.len >= key_buf.len) {
+                    return TlsError.CertificateInvalid;
+                }
+                @memcpy(key_buf[0..key_file.len], key_file);
+                key_buf[key_file.len] = 0;
 
-            if (c.SSL_CTX_use_PrivateKey_file(ctx, &key_buf, c.SSL_FILETYPE_PEM) != 1) {
-                logging.logDebug("Failed to load server private key\n", .{});
-                return TlsError.CertificateInvalid;
+                if (c.SSL_CTX_use_PrivateKey_file(ctx, &key_buf, c.SSL_FILETYPE_PEM) != 1) {
+                    logging.logDebug("Failed to load server private key\n", .{});
+                    return TlsError.CertificateInvalid;
+                }
             }
         } else {
-            logging.logDebug("Server private key not provided\n", .{});
-            return TlsError.CertificateInvalid;
+            // Generate temporary certificate (ncat-compatible behavior)
+            logging.logWarning("Generating temporary certificate for SSL server mode...\n", .{});
+
+            const temp_certificate = temp_cert.generateTemporaryCertificate(
+                self.allocator,
+                self.config.ssl_profile,
+            ) catch |err| {
+                logging.logDebug("Failed to generate temporary certificate: {any}\n", .{err});
+                return TlsError.CertificateInvalid;
+            };
+            self.temp_certificate = temp_certificate;
+
+            // Load temporary certificate from memory
+            const cert_bio = c.BIO_new_mem_buf(temp_certificate.cert_pem.ptr, @intCast(temp_certificate.cert_pem.len));
+            if (cert_bio == null) {
+                logging.logDebug("Failed to create BIO for temporary certificate\n", .{});
+                return TlsError.CertificateInvalid;
+            }
+            defer _ = c.BIO_free(cert_bio);
+
+            const x509 = c.PEM_read_bio_X509(cert_bio, null, null, null);
+            if (x509 == null) {
+                logging.logDebug("Failed to parse temporary certificate PEM\n", .{});
+                return TlsError.CertificateInvalid;
+            }
+            defer c.X509_free(x509);
+
+            if (c.SSL_CTX_use_certificate(ctx, x509) != 1) {
+                logging.logDebug("Failed to use temporary certificate\n", .{});
+                return TlsError.CertificateInvalid;
+            }
+
+            // Load temporary private key from memory
+            const key_bio = c.BIO_new_mem_buf(temp_certificate.key_pem.ptr, @intCast(temp_certificate.key_pem.len));
+            if (key_bio == null) {
+                logging.logDebug("Failed to create BIO for temporary private key\n", .{});
+                return TlsError.CertificateInvalid;
+            }
+            defer _ = c.BIO_free(key_bio);
+
+            const pkey = c.PEM_read_bio_PrivateKey(key_bio, null, null, null);
+            if (pkey == null) {
+                logging.logDebug("Failed to parse temporary private key PEM\n", .{});
+                return TlsError.CertificateInvalid;
+            }
+            defer c.EVP_PKEY_free(pkey);
+
+            if (c.SSL_CTX_use_PrivateKey(ctx, pkey) != 1) {
+                logging.logDebug("Failed to use temporary private key\n", .{});
+                return TlsError.CertificateInvalid;
+            }
+
+            logging.logWarning("Temporary certificate generated successfully.\n", .{});
         }
 
         // Verify that certificate and key match
@@ -477,13 +568,12 @@ pub const OpenSslTls = struct {
             return TlsError.CertificateInvalid;
         }
 
-        // Configure cipher suites (2025 security best practices - AEAD-only)
-        // TLS 1.2 cipher list: Only ECDHE with AEAD ciphers (AES-GCM, ChaCha20-Poly1305)
-        // This eliminates CBC ciphers (Lucky13), 3DES (Sweet32), and non-forward-secret ciphers
+        // Configure cipher suites based on profile (modern/intermediate/compatible)
+        // User can override with --ssl-ciphers, otherwise use profile-based defaults
         const cipher_list = if (self.config.cipher_suites) |cs|
             cs
         else
-            "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256";
+            getCipherListForProfile(self.config.ssl_profile);
 
         var cipher_buf: [512]u8 = undefined;
         if (cipher_list.len >= cipher_buf.len) {
@@ -600,6 +690,83 @@ pub const OpenSslTls = struct {
         if (!handshake_complete) {
             logging.logDebug("TLS handshake timeout after {d} retries\n", .{retry_count});
             return TlsError.HandshakeFailed;
+        }
+    }
+
+    /// Log warnings about negotiated cipher suite security.
+    ///
+    /// **Purpose:**
+    /// Analyzes the cipher suite negotiated during TLS handshake and logs
+    /// warnings if less secure options were selected. This helps users understand
+    /// their current security posture.
+    ///
+    /// **Cipher Security Levels:**
+    /// - ✅ AEAD ciphers (GCM, ChaCha20-Poly1305): Secure, authenticated encryption
+    /// - ⚠️  CBC ciphers (CBC-SHA256): Legacy, vulnerable to padding oracle attacks
+    ///
+    /// **Behavior:**
+    /// - Server mode: Warns if client forced connection with weak cipher
+    /// - Client mode: Warns if server only supports legacy ciphers
+    /// - Always displays negotiated cipher name and TLS version
+    ///
+    /// **Called after:** `doHandshake()` completes successfully
+    fn logNegotiatedCipherWarnings(self: *OpenSslTls) void {
+        const ssl = self.ssl orelse return;
+
+        // Get negotiated cipher
+        const cipher = c.SSL_get_current_cipher(ssl);
+        if (cipher == null) {
+            logging.logWarning("⚠️  WARNING: Unable to determine negotiated cipher suite\n", .{});
+            return;
+        }
+
+        // Get cipher name
+        const cipher_name = c.SSL_CIPHER_get_name(cipher);
+        if (cipher_name == null) {
+            logging.logWarning("⚠️  WARNING: Cipher name is null\n", .{});
+            return;
+        }
+
+        // Convert C string to Zig slice for analysis
+        const cipher_name_len = std.mem.len(cipher_name);
+        const cipher_name_slice = cipher_name[0..cipher_name_len];
+
+        // Get TLS version
+        const version_str = c.SSL_get_version(ssl);
+        const version_len = std.mem.len(version_str);
+        const version_slice = version_str[0..version_len];
+
+        // Check if cipher is AEAD (secure) or CBC (legacy)
+        const is_aead = std.mem.indexOf(u8, cipher_name_slice, "GCM") != null or
+            std.mem.indexOf(u8, cipher_name_slice, "CHACHA20") != null or
+            std.mem.indexOf(u8, cipher_name_slice, "POLY1305") != null;
+
+        const is_cbc = std.mem.indexOf(u8, cipher_name_slice, "CBC") != null;
+
+        // Log cipher information
+        if (is_aead) {
+            // Secure AEAD cipher negotiated
+            logging.logWarning("✅ TLS connection established with {s} using {s} (secure AEAD cipher)\n", .{ version_slice, cipher_name_slice });
+        } else if (is_cbc) {
+            // Legacy CBC cipher - warn user
+            if (self.is_client) {
+                // Client mode: Server only supports legacy ciphers
+                logging.logWarning("⚠️  WARNING: Connected to server using legacy CBC cipher: {s}\n", .{cipher_name_slice});
+                logging.logWarning("   TLS version: {s}\n", .{version_slice});
+                logging.logWarning("   This cipher is vulnerable to padding oracle attacks (Lucky13, BEAST)\n", .{});
+                logging.logWarning("   Recommendation: Upgrade server to support modern AEAD ciphers (GCM, ChaCha20-Poly1305)\n", .{});
+                logging.logWarning("   Use --ssl-profile modern on both client and server for maximum security\n", .{});
+            } else {
+                // Server mode: Client forced connection with weak cipher
+                logging.logWarning("⚠️  WARNING: Client connected using legacy CBC cipher: {s}\n", .{cipher_name_slice});
+                logging.logWarning("   TLS version: {s}\n", .{version_slice});
+                logging.logWarning("   This cipher is vulnerable to padding oracle attacks (Lucky13, BEAST)\n", .{});
+                logging.logWarning("   Recommendation: Client should upgrade to support modern AEAD ciphers\n", .{});
+                logging.logWarning("   Server is using 'modern' profile - client may be using legacy software\n", .{});
+            }
+        } else {
+            // Unknown cipher type - display info but no specific warning
+            logging.logWarning("ℹ️  TLS connection established with {s} using {s}\n", .{ version_slice, cipher_name_slice });
         }
     }
 
@@ -750,6 +917,13 @@ pub const OpenSslTls = struct {
         if (self.ssl_ctx) |ctx| {
             c.SSL_CTX_free(ctx);
             self.ssl_ctx = null;
+        }
+
+        // Clean up temporary certificate if generated
+        if (self.temp_certificate) |*cert| {
+            var cert_mut = cert.*;
+            cert_mut.deinit(self.allocator);
+            self.temp_certificate = null;
         }
     }
 

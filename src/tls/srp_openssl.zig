@@ -40,7 +40,44 @@ pub const c = @cImport({
     @cInclude("openssl/err.h");
     @cInclude("openssl/srp.h");
     @cInclude("openssl/bn.h"); // BIGNUM operations for SRP verifier
+    @cInclude("openssl/safestack.h"); // STACK operations for OpenSSL 1.1.1 compatibility
 });
+
+// OpenSSL version detection for API compatibility
+// OpenSSL 3.0.0+ has public SRP_user_pwd_new() API
+// OpenSSL 1.1.1 requires manual struct population (internal API)
+const OPENSSL_VERSION_3_0_0: c_long = 0x30000000;
+const has_srp_user_pwd_api = c.OPENSSL_VERSION_NUMBER >= OPENSSL_VERSION_3_0_0;
+
+// ============================================================================
+// OpenSSL 1.1.1 Compatibility Structures
+// ============================================================================
+// NOTE: These structures are INTERNAL in OpenSSL 1.1.1 but we need them for
+// backward compatibility. In OpenSSL 3.0+, use the public API instead.
+//
+// Structure layout verified from OpenSSL 1.1.1 source:
+// https://github.com/openssl/openssl/blob/OpenSSL_1_1_1-stable/include/openssl/srp.h
+
+/// SRP_gN_cache structure (RFC 5054 group parameters)
+const SRP_gN_cache = extern struct {
+    b64_bn_N: [*c]u8,  // Base64-encoded N (modulus)
+    b64_bn_g: [*c]u8,  // Base64-encoded g (generator)
+    bn_N: ?*c.BIGNUM,  // Decoded N
+    bn_g: ?*c.BIGNUM,  // Decoded g
+};
+
+/// SRP_user_pwd structure (user verifier record)
+/// Memory ownership:
+/// - id, info, s, v: Owned by this struct (must be allocated/freed)
+/// - g, N: Not owned (point to external SRP_gN_cache data)
+const SRP_user_pwd_compat = extern struct {
+    id: [*c]u8,           // Username (owned, must be freed)
+    s: ?*c.BIGNUM,        // Salt (owned)
+    v: ?*c.BIGNUM,        // Verifier (owned)
+    g: ?*const c.BIGNUM,  // Generator (not owned, points to gN cache)
+    N: ?*const c.BIGNUM,  // Modulus (not owned, points to gN cache)
+    info: [*c]u8,         // User info (owned, can be NULL)
+};
 
 // SRP password callback type
 const SrpClientPwdCallback = ?*const fn (?*c.SSL, ?*anyopaque) callconv(std.builtin.CallingConvention.c) [*c]u8;
@@ -430,45 +467,107 @@ pub const SrpConnection = struct {
 
         // At this point, salt and verifier are allocated and must be freed or transferred
 
-        // 5. Create SRP_user_pwd structure (modern API)
-        const user_pwd = c.SRP_user_pwd_new();
-        if (user_pwd == null) {
-            logging.logDebug("Failed to create SRP_user_pwd\n", .{});
-            // Free salt and verifier since we couldn't create user_pwd
-            c.BN_free(salt);
-            c.BN_free(verifier);
-            return SrpError.InitFailed;
-        }
-        // Note: Do NOT defer SRP_user_pwd_free here - ownership will be transferred to SRP_VBASE
+        // 5-9. Create and populate SRP_user_pwd structure
+        // Use different code paths based on OpenSSL version
+        if (comptime has_srp_user_pwd_api) {
+            // ===== OpenSSL 3.0+ Modern API =====
+            logging.logDebug("Using OpenSSL 3.0+ SRP_user_pwd API\n", .{});
 
-        // 6. Set username and info (NULL for info)
-        if (c.SRP_user_pwd_set1_ids(user_pwd, username, null) != 1) {
-            logging.logDebug("Failed to set SRP username\n", .{});
-            c.SRP_user_pwd_free(user_pwd);
-            c.BN_free(salt);
-            c.BN_free(verifier);
-            return SrpError.InitFailed;
-        }
+            const user_pwd = c.SRP_user_pwd_new();
+            if (user_pwd == null) {
+                logging.logDebug("Failed to create SRP_user_pwd\n", .{});
+                c.BN_free(salt);
+                c.BN_free(verifier);
+                return SrpError.InitFailed;
+            }
 
-        // 7. Transfer ownership of salt/verifier to user_pwd (zero-copy)
-        // CRITICAL: After this call, DO NOT free salt/verifier - user_pwd owns them
-        if (c.SRP_user_pwd_set0_sv(user_pwd, salt, verifier) != 1) {
-            logging.logDebug("Failed to set SRP salt/verifier\n", .{});
-            c.SRP_user_pwd_free(user_pwd); // This will free salt/verifier
-            return SrpError.InitFailed;
-        }
+            // Set username and info (NULL for info)
+            if (c.SRP_user_pwd_set1_ids(user_pwd, username, null) != 1) {
+                logging.logDebug("Failed to set SRP username\n", .{});
+                c.SRP_user_pwd_free(user_pwd);
+                c.BN_free(salt);
+                c.BN_free(verifier);
+                return SrpError.InitFailed;
+            }
 
-        // 8. Set group parameters (gN->g and gN->N are referenced, not copied)
-        // CRITICAL: gN must remain valid for the lifetime of the connection
-        // Note: SRP_user_pwd_set_gN returns void (no error checking possible)
-        c.SRP_user_pwd_set_gN(user_pwd, gN.*.g, gN.*.N);
+            // Transfer ownership of salt/verifier to user_pwd (zero-copy)
+            if (c.SRP_user_pwd_set0_sv(user_pwd, salt, verifier) != 1) {
+                logging.logDebug("Failed to set SRP salt/verifier\n", .{});
+                c.SRP_user_pwd_free(user_pwd);
+                return SrpError.InitFailed;
+            }
 
-        // 9. Add user to SRP_VBASE database (transfers ownership of user_pwd)
-        // CRITICAL: After this call, DO NOT free user_pwd - SRP_VBASE owns it
-        if (c.SRP_VBASE_add0_user(srp_vbase, user_pwd) != 1) {
-            logging.logDebug("Failed to add user to SRP database\n", .{});
-            c.SRP_user_pwd_free(user_pwd); // Only free on error
-            return SrpError.InitFailed;
+            // Set group parameters (gN->g and gN->N are referenced, not copied)
+            c.SRP_user_pwd_set_gN(user_pwd, gN.*.g, gN.*.N);
+
+            // Add user to SRP_VBASE database (transfers ownership)
+            if (c.SRP_VBASE_add0_user(srp_vbase, user_pwd) != 1) {
+                logging.logDebug("Failed to add user to SRP database\n", .{});
+                c.SRP_user_pwd_free(user_pwd);
+                return SrpError.InitFailed;
+            }
+        } else {
+            // ===== OpenSSL 1.1.1 Manual Population (Compatibility Path) =====
+            logging.logDebug("Using OpenSSL 1.1.1 manual SRP_user_pwd population\n", .{});
+
+            // Allocate SRP_user_pwd structure manually
+            const user_pwd_mem = c.OPENSSL_malloc(@sizeOf(SRP_user_pwd_compat));
+            if (user_pwd_mem == null) {
+                logging.logDebug("Failed to allocate SRP_user_pwd\n", .{});
+                c.BN_free(salt);
+                c.BN_free(verifier);
+                return SrpError.InitFailed;
+            }
+            const user_pwd: *SRP_user_pwd_compat = @ptrCast(@alignCast(user_pwd_mem));
+
+            // Duplicate username string (owned by user_pwd)
+            const username_dup = c.OPENSSL_strdup(username);
+            if (username_dup == null) {
+                logging.logDebug("Failed to duplicate username\n", .{});
+                c.OPENSSL_free(user_pwd_mem);
+                c.BN_free(salt);
+                c.BN_free(verifier);
+                return SrpError.InitFailed;
+            }
+
+            // Populate structure fields
+            user_pwd.id = username_dup;
+            user_pwd.s = salt;      // Transfer ownership
+            user_pwd.v = verifier;  // Transfer ownership
+            user_pwd.g = gN.*.g;    // Reference (not owned)
+            user_pwd.N = gN.*.N;    // Reference (not owned)
+            user_pwd.info = null;   // No additional info
+
+            // Add to SRP_VBASE manually (OpenSSL 1.1.1 doesn't have SRP_VBASE_add0_user)
+            // We need to access the internal users_pwd STACK and push our user_pwd
+            // CRITICAL: This is internal API access - only for OpenSSL 1.1.1 compatibility
+            const vbase_ptr: [*c]u8 = @ptrCast(srp_vbase);
+            // SRP_VBASE layout: users_pwd is the first field (STACK_OF(SRP_user_pwd)*)
+            const users_pwd_ptr: *?*anyopaque = @ptrCast(@alignCast(vbase_ptr));
+
+            if (users_pwd_ptr.* == null) {
+                logging.logDebug("SRP_VBASE->users_pwd is null, cannot add user\n", .{});
+                c.OPENSSL_free(username_dup);
+                c.OPENSSL_free(user_pwd_mem);
+                c.BN_free(salt);
+                c.BN_free(verifier);
+                return SrpError.InitFailed;
+            }
+
+            // Use sk_push to add user_pwd to the stack
+            // Note: This is internal OpenSSL API but necessary for 1.1.1 compatibility
+            const stack = users_pwd_ptr.*;
+            const push_result = c.OPENSSL_sk_push(@ptrCast(stack), user_pwd_mem);
+            if (push_result == 0) {
+                logging.logDebug("Failed to push user_pwd to SRP_VBASE stack\n", .{});
+                c.OPENSSL_free(username_dup);
+                c.OPENSSL_free(user_pwd_mem);
+                c.BN_free(salt);
+                c.BN_free(verifier);
+                return SrpError.InitFailed;
+            }
+
+            logging.logDebug("Successfully added user to SRP_VBASE (OpenSSL 1.1.1 compat path)\n", .{});
         }
 
         logging.logDebug("SRP_VBASE initialized successfully (username: user, 4096-bit group)\n", .{});

@@ -357,11 +357,12 @@ All TLS flags work with both backends. DTLS flags only work with OpenSSL backend
 - `--no-ssl-verify` *(flag)* - disable certificate verification (insecure, requires `--insecure`). Example: `zigcat --ssl --insecure --no-ssl-verify example.com 443`
 - `--ssl-verify=false` *(flag)* - alternate form to disable verification (requires `--insecure`). Example: `zigcat --ssl --insecure --ssl-verify=false example.com 443`
 - `--insecure` *(flag)* - **REQUIRED** to allow insecure TLS connections when disabling certificate verification. This flag explicitly acknowledges the security risks of man-in-the-middle attacks and other threats. Example: `zigcat --ssl --insecure --no-ssl-verify example.com 443`
-- `--ssl-cert <file>` *(string path)* - server certificate file. Example: `zigcat -l 8443 --ssl --ssl-cert certs/server.crt`
-- `--ssl-key <file>` *(string path)* - server private key. Example: `zigcat -l 8443 --ssl --ssl-key certs/server.key`
+- `--ssl-cert <file>` *(string path)* - server certificate file (optional in server mode, auto-generated if omitted). Example: `zigcat -l 8443 --ssl --ssl-cert certs/server.crt`
+- `--ssl-key <file>` *(string path)* - server private key (optional in server mode, auto-generated if omitted). Example: `zigcat -l 8443 --ssl --ssl-key certs/server.key`
+- `--ssl-profile <profile>` *(enum: modern|intermediate|compatible)* - cipher suite security profile with smart defaults (server: modern, client: compatible). Example: `zigcat --ssl --ssl-profile modern example.com 443`
 - `--ssl-trustfile <file>` *(string path)* - CA bundle for client verification. Example: `zigcat --ssl --ssl-trustfile /etc/ssl/certs/ca-bundle.crt example.com 443`
 - `--ssl-crl <file>` *(string path)* - certificate revocation list. Example: `zigcat --ssl --ssl-crl revocations.pem example.com 443`
-- `--ssl-ciphers <list>` *(string)* - OpenSSL cipher list. Example: `zigcat --ssl --ssl-ciphers "TLS_AES_128_GCM_SHA256" example.com 443`
+- `--ssl-ciphers <list>` *(string)* - OpenSSL cipher list (overrides --ssl-profile). Example: `zigcat --ssl --ssl-ciphers "TLS_AES_128_GCM_SHA256" example.com 443`
 - `--ssl-servername <name>` *(string)* - override SNI hostname. Example: `zigcat --ssl --ssl-servername web.internal example.net 443`
 - `--ssl-alpn <protocols>` *(string)* - comma-separated ALPN protocols. Example: `zigcat --ssl --ssl-alpn "h2,http/1.1" example.com 443`
 
@@ -405,6 +406,127 @@ zigcat -l --dtls --ssl-cert cert.pem --ssl-key key.pem --ssl-verify --ssl-trustf
 - Built-in retransmission for handshake packets
 - MTU awareness to avoid IP fragmentation
 - Cookie exchange for DoS protection (server mode)
+
+### SSL/TLS Security Profiles
+
+ZigCat provides three cipher suite security profiles (`--ssl-profile`) that balance security against compatibility. The tool uses **smart defaults**: server mode defaults to `modern` (highest security), while client mode defaults to `compatible` (adapts to server). ZigCat automatically logs warnings when less secure ciphers are negotiated.
+
+#### Profile Comparison
+
+| Profile | Security | Compatibility | Use Case |
+|---------|----------|---------------|----------|
+| **modern** | ✅ Highest | ⚠️ Modern clients/servers only | Production servers, security-critical applications |
+| **intermediate** | ✅ High | ✅ Broad | Balanced approach, supports older clients without ECDHE |
+| **compatible** | ⚠️ Moderate | ✅ Maximum | Legacy client support, ncat compatibility |
+
+#### Profile Details
+
+**modern (AEAD-only, ECDHE-only, TLS 1.2+)**
+- **Cipher Suites:**
+  - ECDHE-ECDSA-AES128-GCM-SHA256
+  - ECDHE-RSA-AES128-GCM-SHA256
+  - ECDHE-ECDSA-AES256-GCM-SHA384
+  - ECDHE-RSA-AES256-GCM-SHA384
+  - ECDHE-ECDSA-CHACHA20-POLY1305
+  - ECDHE-RSA-CHACHA20-POLY1305
+- **Security:** Highest (AEAD authentication, perfect forward secrecy)
+- **Compatibility:** Modern TLS clients/servers only (fails against legacy systems with CBC-only support)
+- **Default:** Server mode (`-l`)
+
+**intermediate (AEAD-only, ECDHE+DHE, TLS 1.2+)**
+- **Cipher Suites:** Modern profile +
+  - DHE-RSA-AES128-GCM-SHA256
+  - DHE-RSA-AES256-GCM-SHA384
+  - DHE-RSA-CHACHA20-POLY1305
+- **Security:** High (AEAD authentication, perfect forward secrecy)
+- **Compatibility:** Broad (supports older clients that lack ECDHE)
+- **Default:** None (explicit opt-in)
+
+**compatible (includes CBC-SHA256, TLS 1.2+)**
+- **Cipher Suites:** Intermediate profile +
+  - ECDHE-ECDSA-AES128-SHA256
+  - ECDHE-RSA-AES128-SHA256
+  - ECDHE-ECDSA-AES256-SHA384
+  - ECDHE-RSA-AES256-SHA384
+  - DHE-RSA-AES128-SHA256
+  - DHE-RSA-AES256-SHA384
+- **Security:** Moderate (⚠️ vulnerable to padding oracle attacks: Lucky13, BEAST)
+- **Compatibility:** Maximum (supports legacy clients, ncat compatibility)
+- **Default:** Client mode (connect)
+- **Warning:** ZigCat automatically logs warnings when CBC ciphers are negotiated
+
+#### Security Comparison with ncat
+
+ZigCat provides **superior security** compared to ncat even in compatible mode:
+
+| Feature | ZigCat (modern) | ZigCat (compatible) | ncat (default) |
+|---------|-----------------|---------------------|----------------|
+| AEAD Ciphers | ✅ Only | ✅ Preferred | ⚠️ Mixed |
+| CBC Ciphers | ❌ Disabled | ✅ Fallback only | ✅ Allowed |
+| Perfect Forward Secrecy | ✅ Required (ECDHE) | ✅ Required (ECDHE/DHE) | ⚠️ Optional |
+| TLS 1.0/1.1 | ❌ Disabled | ❌ Disabled | ⚠️ Allowed |
+| Automatic Warnings | ✅ Yes | ✅ Yes | ❌ No |
+
+#### Usage Examples
+
+**Server Mode (defaults to modern):**
+```bash
+# Modern profile (default for server mode)
+zigcat -l --ssl 8443
+
+# Explicitly set profile
+zigcat -l --ssl --ssl-profile intermediate 8443
+
+# Auto-generate certificate (ncat compatibility)
+zigcat -l --ssl 8443  # No --ssl-cert/--ssl-key needed
+
+# Use custom certificate
+zigcat -l --ssl --ssl-cert server.crt --ssl-key server.key 8443
+```
+
+**Client Mode (defaults to compatible):**
+```bash
+# Compatible profile (default for client mode, adapts to server)
+zigcat --ssl example.com 443
+
+# Force modern profile (may fail against legacy servers)
+zigcat --ssl --ssl-profile modern example.com 443
+
+# Intermediate profile (balanced security/compatibility)
+zigcat --ssl --ssl-profile intermediate example.com 443
+```
+
+**Automatic Security Warnings:**
+```bash
+# Server receives CBC-cipher client connection
+$ zigcat -l --ssl 8443
+SSL server mode: Using 'modern' cipher profile (highest security)
+⚠️  WARNING: Client connected using legacy CBC cipher: ECDHE-RSA-AES128-SHA256
+   TLS version: TLSv1.2
+   This cipher is vulnerable to padding oracle attacks (Lucky13, BEAST)
+   Recommendation: Client should upgrade to support modern AEAD ciphers
+   Server is using 'modern' profile - client may be using legacy software
+
+# Client connects to CBC-only server
+$ zigcat --ssl example.com 443
+SSL client mode: Using 'compatible' cipher profile (adapts to server)
+⚠️  WARNING: Connected to server using legacy CBC cipher: ECDHE-RSA-AES128-SHA256
+   TLS version: TLSv1.2
+   This cipher is vulnerable to padding oracle attacks (Lucky13, BEAST)
+   Recommendation: Upgrade server to support modern AEAD ciphers (GCM, ChaCha20-Poly1305)
+   Use --ssl-profile modern on both client and server for maximum security
+
+# Modern AEAD cipher negotiated (no warnings)
+$ zigcat --ssl --ssl-profile modern example.com 443
+✅ TLS connection established with TLSv1.3 using TLS_AES_256_GCM_SHA384 (secure AEAD cipher)
+```
+
+**Profile Selection Guide:**
+- **Production server?** Use default (modern) or explicitly set `--ssl-profile modern`
+- **Client connecting to unknown server?** Use default (compatible)
+- **Both endpoints under your control?** Use `--ssl-profile modern` on both
+- **Need to support legacy clients?** Use `--ssl-profile intermediate` on server
+- **Testing ncat compatibility?** Use `--ssl-profile compatible` on both
 
 ## Global Socket (NAT Traversal)
 
