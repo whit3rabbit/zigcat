@@ -240,6 +240,13 @@ validate_environment() {
     # Check if Docker daemon is running (if not native build)
     if [[ "$NATIVE_BUILD" == "false" ]] && ! docker info > /dev/null 2>&1; then
         log_error "Docker daemon is not running or not accessible"
+        log_error ""
+        log_error "Troubleshooting steps:"
+        log_error "  1. Check if Docker is running: systemctl status docker"
+        log_error "  2. Check if you're in the docker group: groups | grep docker"
+        log_error "  3. If not in docker group, add yourself: sudo usermod -aG docker \$USER"
+        log_error "  4. Log out and log back in, or run: newgrp docker"
+        log_error "  5. Verify access: docker info"
         return 1
     fi
 

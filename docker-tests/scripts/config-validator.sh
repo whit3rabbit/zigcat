@@ -39,25 +39,39 @@ log_success() {
 check_dependencies() {
     if command -v yq &> /dev/null; then
         YAML_PARSER="yq"
-    elif command -v python3 &> /dev/null && python3 -c "import yaml" &> /dev/null; then
+    elif command -v python3 &> /dev/null && python3 -c "import yaml" &> /dev/null 2>&1; then
         YAML_PARSER="python"
     else
         log_error "Neither yq nor Python with PyYAML is available for YAML parsing"
-        log_info "Install yq: brew install yq (macOS) or apt-get install yq (Ubuntu)"
-        log_info "Or install PyYAML: pip3 install PyYAML"
+        log_error ""
+        log_error "Installation options (choose one):"
+        log_error ""
+        log_error "Option 1 - Install yq (recommended, faster):"
+        log_error "  Ubuntu/Debian: sudo snap install yq"
+        log_error "  Or download binary from: https://github.com/mikefarah/yq/releases"
+        log_error ""
+        log_error "Option 2 - Install Python PyYAML:"
+        log_error "  sudo apt-get install python3-yaml"
+        log_error "  Or: pip3 install PyYAML"
+        log_error ""
         return 1
     fi
     
     if ! command -v docker &> /dev/null; then
         log_error "Docker is required but not installed"
+        log_info "Install Docker: https://docs.docker.com/engine/install/"
         return 1
     fi
-    
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose is required but not installed"
-        return 1
+
+    # Check for docker compose (modern built-in) or docker-compose (standalone legacy)
+    if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
+        log_warn "Docker Compose not found (neither 'docker compose' nor 'docker-compose')"
+        log_warn "Docker Compose is optional for release builds but required for full test suite"
+        log_info "Modern Docker includes compose: 'docker compose' (no hyphen)"
+        log_info "Or install standalone: sudo apt-get install docker-compose-plugin"
+        # Don't fail - compose is optional for builds
     fi
-    
+
     return 0
 }
 
