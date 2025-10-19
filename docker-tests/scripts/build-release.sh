@@ -234,6 +234,37 @@ detect_version() {
     return 0
 }
 
+# Detect yq version and set command prefix
+detect_yq_version() {
+    if ! command -v yq &> /dev/null; then
+        return 1
+    fi
+
+    # Check if it's mikefarah/yq (Go version) or kislyuk/yq (Python/jq wrapper)
+    if yq --version 2>&1 | grep -q "mikefarah"; then
+        YQ_CMD="yq eval"
+        YQ_TYPE="mikefarah"
+    elif yq --version 2>&1 | grep -qi "python\|jq"; then
+        YQ_CMD="yq -r"
+        YQ_TYPE="kislyuk"
+    else
+        # Try to detect by testing syntax
+        if yq eval '.test' <<< 'test: value' &>/dev/null; then
+            YQ_CMD="yq eval"
+            YQ_TYPE="mikefarah"
+        elif yq -r '.test' <<< '{"test": "value"}' &>/dev/null; then
+            YQ_CMD="yq -r"
+            YQ_TYPE="kislyuk"
+        else
+            YQ_CMD="yq eval"
+            YQ_TYPE="unknown"
+        fi
+    fi
+
+    log_debug "Detected yq type: $YQ_TYPE (command: $YQ_CMD)"
+    return 0
+}
+
 # Load YAML configuration and populate BUILD_MATRIX
 load_yaml_config() {
     if [[ -z "$CONFIG_FILE" ]]; then
@@ -246,9 +277,13 @@ load_yaml_config() {
     # Check if yq is installed
     if ! command -v yq &> /dev/null; then
         log_error "yq is required for YAML config support but not found"
-        log_error "Install: brew install yq (macOS) or see https://github.com/mikefarah/yq"
+        log_error "Install: brew install yq (macOS) or pip install yq (Linux)"
+        log_error "See: https://github.com/mikefarah/yq or https://github.com/kislyuk/yq"
         return 1
     fi
+
+    # Detect yq version
+    detect_yq_version
 
     # Validate config file exists
     if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -259,38 +294,52 @@ load_yaml_config() {
     # Clear hardcoded BUILD_MATRIX
     declare -gA BUILD_MATRIX=()
 
-    # Parse platforms from YAML
+    # Parse platforms from YAML (syntax depends on yq version)
     local platform_count
-    platform_count=$(yq eval '.platforms | length' "$CONFIG_FILE")
+    if [[ "$YQ_TYPE" == "kislyuk" ]]; then
+        platform_count=$($YQ_CMD '.platforms | length' "$CONFIG_FILE")
+    else
+        platform_count=$(yq eval '.platforms | length' "$CONFIG_FILE")
+    fi
 
     for ((i=0; i<platform_count; i++)); do
         local enabled
-        enabled=$(yq eval ".platforms[$i].enabled" "$CONFIG_FILE")
+        if [[ "$YQ_TYPE" == "kislyuk" ]]; then
+            enabled=$($YQ_CMD ".platforms[$i].enabled" "$CONFIG_FILE")
+        else
+            enabled=$(yq eval ".platforms[$i].enabled" "$CONFIG_FILE")
+        fi
 
         if [[ "$enabled" != "true" ]]; then
             log_debug "  Skipping disabled platform at index $i"
             continue
         fi
 
-        local platform_name
-        platform_name=$(yq eval ".platforms[$i].name" "$CONFIG_FILE")
-
-        local artifact_suffix
-        artifact_suffix=$(yq eval ".platforms[$i].artifact_suffix" "$CONFIG_FILE")
-
-        local arch_count
-        arch_count=$(yq eval ".platforms[$i].architectures | length" "$CONFIG_FILE")
+        local platform_name artifact_suffix arch_count
+        if [[ "$YQ_TYPE" == "kislyuk" ]]; then
+            platform_name=$($YQ_CMD ".platforms[$i].name" "$CONFIG_FILE")
+            artifact_suffix=$($YQ_CMD ".platforms[$i].artifact_suffix" "$CONFIG_FILE")
+            arch_count=$($YQ_CMD ".platforms[$i].architectures | length" "$CONFIG_FILE")
+        else
+            platform_name=$(yq eval ".platforms[$i].name" "$CONFIG_FILE")
+            artifact_suffix=$(yq eval ".platforms[$i].artifact_suffix" "$CONFIG_FILE")
+            arch_count=$(yq eval ".platforms[$i].architectures | length" "$CONFIG_FILE")
+        fi
 
         for ((j=0; j<arch_count; j++)); do
-            local arch
-            arch=$(yq eval ".platforms[$i].architectures[$j]" "$CONFIG_FILE")
+            local arch zig_target build_opts
 
-            local zig_target
-            zig_target=$(yq eval ".platforms[$i].zig_target_map.$arch" "$CONFIG_FILE")
-
-            # Build options (join array with spaces)
-            local build_opts
-            build_opts=$(yq eval ".platforms[$i].build_options | join(\" \")" "$CONFIG_FILE")
+            if [[ "$YQ_TYPE" == "kislyuk" ]]; then
+                arch=$($YQ_CMD ".platforms[$i].architectures[$j]" "$CONFIG_FILE")
+                zig_target=$($YQ_CMD ".platforms[$i].zig_target_map.$arch" "$CONFIG_FILE")
+                # Build options (join array with spaces) - kislyuk/yq outputs JSON array
+                build_opts=$($YQ_CMD ".platforms[$i].build_options | join(\" \")" "$CONFIG_FILE")
+            else
+                arch=$(yq eval ".platforms[$i].architectures[$j]" "$CONFIG_FILE")
+                zig_target=$(yq eval ".platforms[$i].zig_target_map.$arch" "$CONFIG_FILE")
+                # Build options (join array with spaces)
+                build_opts=$(yq eval ".platforms[$i].build_options | join(\" \")" "$CONFIG_FILE")
+            fi
 
             # Determine platform base (linux/alpine/freebsd)
             local platform_base
