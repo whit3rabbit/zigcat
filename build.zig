@@ -59,7 +59,8 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
             const lib_path = std.fmt.allocPrint(b.allocator, "{s}/lib/libssl.dylib", .{path}) catch continue;
             defer b.allocator.free(lib_path);
 
-            std.fs.accessAbsolute(lib_path, .{}) catch continue;
+            // Use statFile() instead of accessAbsolute() to avoid faccessat2 syscall blocked by Docker seccomp
+            _ = std.fs.cwd().statFile(lib_path) catch continue;
             std.debug.print("[OpenSSL Detection] ✓ Found at Homebrew path: {s}\n", .{path});
             return true;
         }
@@ -76,7 +77,8 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
                 const full_path = std.fmt.allocPrint(b.allocator, "{s}/{s}", .{ search_path, lib_name }) catch continue;
                 defer b.allocator.free(full_path);
 
-                std.fs.accessAbsolute(full_path, .{}) catch continue;
+                // Use statFile() instead of accessAbsolute() to avoid faccessat2 syscall blocked by Docker seccomp
+                _ = std.fs.cwd().statFile(full_path) catch continue;
                 std.debug.print("[OpenSSL Detection] ✓ Found at system path: {s}\n", .{full_path});
                 return true;
             }
@@ -97,7 +99,8 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
             };
             defer b.allocator.free(vcpkg_lib);
 
-            std.fs.accessAbsolute(vcpkg_lib, .{}) catch {
+            // Use statFile() instead of accessAbsolute() for consistency and portability
+            _ = std.fs.cwd().statFile(vcpkg_lib) catch {
                 std.debug.print("[OpenSSL Detection] vcpkg OpenSSL not found at: {s}\n", .{vcpkg_lib});
                 return false;
             };
@@ -120,7 +123,8 @@ fn detectOpenSSLPaths(b: *std.Build) bool {
         };
 
         for (windows_paths) |path| {
-            std.fs.accessAbsolute(path, .{}) catch continue;
+            // Use statFile() instead of accessAbsolute() for consistency and portability
+            _ = std.fs.cwd().statFile(path) catch continue;
             std.debug.print("[OpenSSL Detection] ✓ Found at Windows path: {s}\n", .{path});
             return true;
         }
@@ -355,7 +359,8 @@ pub fn build(b: *std.Build) void {
 
                 var found_static_lib = false;
                 for (static_lib_paths) |lib_path| {
-                    std.fs.accessAbsolute(lib_path, .{}) catch continue;
+                    // Use statFile() instead of accessAbsolute() to avoid faccessat2 syscall blocked by Docker seccomp
+                    _ = std.fs.cwd().statFile(lib_path) catch continue;
                     exe.addObjectFile(.{ .cwd_relative = lib_path });
                     std.debug.print("[wolfSSL] Using static library: {s}\n", .{lib_path});
                     found_static_lib = true;
@@ -388,8 +393,8 @@ pub fn build(b: *std.Build) void {
                     defer b.allocator.free(include_path);
                     defer b.allocator.free(lib_path);
 
-                    // Check if this path exists
-                    std.fs.accessAbsolute(lib_path, .{}) catch continue;
+                    // Check if this path exists using statFile() to avoid faccessat2 syscall blocked by Docker seccomp
+                    _ = std.fs.cwd().statFile(lib_path) catch continue;
 
                     exe.addSystemIncludePath(.{ .cwd_relative = include_path });
                     exe.addLibraryPath(.{ .cwd_relative = lib_path });
