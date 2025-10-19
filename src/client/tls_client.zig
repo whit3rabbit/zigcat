@@ -27,36 +27,8 @@ const logging = @import("../util/logging.zig");
 const build_options = @import("build_options");
 const dtls_enabled = build_options.enable_tls and (!@hasDecl(build_options, "use_wolfssl") or !build_options.use_wolfssl);
 const dtls = if (dtls_enabled) @import("../tls/dtls/dtls.zig") else struct {
-    /// DTLS stub for wolfSSL builds (DTLS only supported with OpenSSL).
-    /// These methods should never be called because connectDtls() returns an error.
-    /// If called, indicates a logic error in the connection establishment code.
-    pub const DtlsConnection = struct {
-        /// SAFETY: Should never be called - connectDtls() returns error first.
-        /// Using unreachable instead of @panic() to signal this is a logic error.
-        pub fn deinit(_: *DtlsConnection) void {
-            unreachable; // connectDtls() prevents DtlsConnection creation
-        }
-
-        /// SAFETY: Should never be called - connectDtls() returns error first.
-        pub fn close(_: *DtlsConnection) void {
-            unreachable; // connectDtls() prevents DtlsConnection creation
-        }
-
-        /// SAFETY: Should never be called - connectDtls() returns error first.
-        pub fn read(_: *DtlsConnection, _: []u8) !usize {
-            unreachable; // connectDtls() prevents DtlsConnection creation
-        }
-
-        /// SAFETY: Should never be called - connectDtls() returns error first.
-        pub fn write(_: *DtlsConnection, _: []const u8) !usize {
-            unreachable; // connectDtls() prevents DtlsConnection creation
-        }
-
-        /// SAFETY: Should never be called - connectDtls() returns error first.
-        pub fn getSocket(_: *DtlsConnection) posix.socket_t {
-            unreachable; // connectDtls() prevents DtlsConnection creation
-        }
-    };
+    // Use shared stub to ensure type consistency across modules
+    pub const DtlsConnection = @import("../tls/dtls/dtls_stub.zig").DtlsConnection;
 
     /// DTLS configuration (stub - matches real DtlsConfig for compile-time compatibility).
     pub const DtlsConfig = struct {

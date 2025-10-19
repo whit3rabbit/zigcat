@@ -355,15 +355,11 @@ pub fn build(b: *std.Build) void {
                 }
 
                 if (!found_static_lib) {
-                    std.log.err("Static wolfSSL library not found. Tried:", .{});
-                    for (static_lib_paths) |lib_path| {
-                        std.log.err("  {s}", .{lib_path});
-                    }
-                    std.log.err("", .{});
-                    std.log.err("Install wolfSSL development libraries:", .{});
-                    std.log.err("  Alpine: apk add wolfssl-dev", .{});
-                    std.log.err("  Ubuntu: apt install libwolfssl-dev", .{});
-                    return;
+                    // Alpine doesn't provide static wolfSSL by default, so fall back to dynamic linking
+                    // This is acceptable for Alpine as it still produces small binaries with musl
+                    std.log.warn("Static wolfSSL library not found, using dynamic linking instead", .{});
+                    std.log.warn("  (This is normal on Alpine Linux - wolfssl-dev provides shared libraries only)", .{});
+                    exe.linkSystemLibrary("wolfssl");
                 }
             } else {
                 // Dynamic build: use standard system library linking

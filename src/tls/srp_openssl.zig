@@ -24,6 +24,14 @@ const gsocket = @import("../net/gsocket.zig");
 const logging = @import("../util/logging.zig");
 const posix = std.posix;
 
+// Check if TLS is enabled at compile time
+const build_options = @import("build_options");
+comptime {
+    if (!build_options.enable_tls) {
+        @compileError("srp_openssl.zig requires TLS to be enabled. SRP encryption depends on OpenSSL. Build with -Dtls=true or use a different connection mode.");
+    }
+}
+
 // C FFI bindings for OpenSSL
 pub const c = @cImport({
     // Suppress deprecation warnings for SRP (no replacement API in OpenSSL 3.x)

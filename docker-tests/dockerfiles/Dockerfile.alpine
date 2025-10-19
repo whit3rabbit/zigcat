@@ -52,19 +52,14 @@ esac\n' > /usr/local/bin/platform-to-zig-target.sh \
 # Binary will be named zigcat-wolfssl to distinguish from OpenSSL builds
 # Build natively (no cross-compilation) to avoid architecture mismatch issues
 #
-# IMPORTANT: This build requires Docker 20.10.6+ with libseccomp 2.4.4+
-#            OR use custom seccomp profile: --security-opt seccomp=docker-tests/seccomp/zig-builder.json
-#            Zig 0.15.1 uses faccessat2 syscall which older Docker versions block (errno 38 / ENOSYS)
-#            See docker-tests/DOCKER_BUILD_ERRORS.md for troubleshooting
-RUN --mount=type=cache,target=/build/.zig-cache \
-    --mount=type=cache,target=/tmp/zig-global-cache \
-    echo "Building native musl binary with TLS (wolfSSL backend, static)" && \
+# Build native musl binary with TLS (wolfSSL backend)
+# NOTE: Cache mounts disabled due to Zig 0.15.1 faccessat2 incompatibility with Docker overlayfs
+#       See: https://github.com/ziglang/zig/issues/18180
+RUN echo "Building native musl binary with TLS (wolfSSL backend, static)" && \
     zig build -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl
 
 # Run unit tests (native, TLS enabled with wolfSSL, static)
-RUN --mount=type=cache,target=/build/.zig-cache \
-    --mount=type=cache,target=/tmp/zig-global-cache \
-    echo "Running native tests with TLS (wolfSSL backend, static)" && \
+RUN echo "Running native tests with TLS (wolfSSL backend, static)" && \
     zig build test -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl
 
 # Export stage for artifacts

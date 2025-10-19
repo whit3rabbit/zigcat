@@ -27,8 +27,11 @@ const logging = @import("../util/logging.zig");
 const portscan = @import("../util/portscan.zig");
 const net = @import("../net/socket.zig");
 
+// Check if TLS is enabled for conditional gsocket import
+const build_options = @import("build_options");
+
 // Client mode modules
-const gsocket_client = @import("./gsocket_client.zig");
+const gsocket_client = if (build_options.enable_tls) @import("./gsocket_client.zig") else struct {};
 const unix_client = @import("./unix_client.zig");
 const tcp_client = @import("./tcp_client.zig");
 const tls_client = @import("./tls_client.zig");
@@ -73,7 +76,13 @@ pub const netStreamToStream = adapters.netStreamToStream;
 pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void {
     // 1. Check for gsocket mode (NAT-traversal via GSRN relay)
     if (cfg.gsocket_secret) |secret| {
-        return gsocket_client.runGsocketClient(allocator, cfg, secret);
+        if (build_options.enable_tls) {
+            return gsocket_client.runGsocketClient(allocator, cfg, secret);
+        } else {
+            std.debug.print("ERROR: gsocket mode requires TLS to be enabled for SRP encryption.\n", .{});
+            std.debug.print("Please rebuild zigcat with -Dtls=true or use a different connection mode.\n", .{});
+            return error.GsocketRequiresTLS;
+        }
     }
 
     // 2. Check for Unix socket mode (local IPC)

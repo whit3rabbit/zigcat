@@ -26,19 +26,8 @@ const TelnetConnection = @import("../protocol/telnet_connection.zig").TelnetConn
 const build_options = @import("build_options");
 const dtls_enabled = build_options.enable_tls and (!@hasDecl(build_options, "use_wolfssl") or !build_options.use_wolfssl);
 const dtls = if (dtls_enabled) @import("../tls/dtls/dtls.zig") else struct {
-    pub const DtlsConnection = struct {
-        pub fn deinit(_: *DtlsConnection) void {}
-        pub fn close(_: *DtlsConnection) void {}
-        pub fn read(_: *DtlsConnection, _: []u8) !usize {
-            return error.DtlsNotAvailableWithWolfSSL;
-        }
-        pub fn write(_: *DtlsConnection, _: []const u8) !usize {
-            return error.DtlsNotAvailableWithWolfSSL;
-        }
-        pub fn getSocket(_: *DtlsConnection) posix.socket_t {
-            return 0;
-        }
-    };
+    // Use shared stub to ensure type consistency across modules
+    pub const DtlsConnection = @import("../tls/dtls/dtls_stub.zig").DtlsConnection;
 };
 
 /// Helper function to safely cast context pointer to typed pointer.

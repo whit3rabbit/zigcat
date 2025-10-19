@@ -26,9 +26,18 @@ const std = @import("std");
 const config = @import("../config.zig");
 const logging = @import("../util/logging.zig");
 const gsocket = @import("../net/gsocket.zig");
-const srp = @import("../tls/srp_openssl.zig");
 const adapters = @import("./stream_adapters.zig");
 const TransferContext = @import("./transfer_context.zig").TransferContext;
+
+// Check if TLS is enabled at compile time (gsocket requires SRP encryption)
+const build_options = @import("build_options");
+const srp = if (build_options.enable_tls) @import("../tls/srp_openssl.zig") else struct {};
+
+comptime {
+    if (!build_options.enable_tls) {
+        @compileError("gsocket mode requires TLS to be enabled for SRP encryption. Build with -Dtls=true or use a different connection mode.");
+    }
+}
 
 /// Run gsocket client or server mode (determined by -l flag and relay response).
 ///
