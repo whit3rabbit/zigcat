@@ -126,20 +126,36 @@ validate-releases.sh (smoke tests)
 
 ### Build Matrix (Default Hardcoded Mode)
 
-The consolidated script builds these 7 platform variants by default:
+The consolidated script builds these **12 platform variants** by default:
+
+#### 64-bit with TLS Support (5 variants)
 
 | Platform | Arch | TLS Backend | Type | Size | Tarball Name |
 |----------|------|-------------|------|------|--------------|
 | Linux glibc | x64 | OpenSSL | Dynamic | ~6MB | `zigcat-v0.0.1-linux-x64-glibc-openssl-dynamic.tar.gz` |
 | Linux glibc | ARM64 | OpenSSL | Dynamic | ~6MB | `zigcat-v0.0.1-linux-arm64-glibc-openssl-dynamic.tar.gz` |
-| Linux musl | x64 | None | Static | ~2MB | `zigcat-v0.0.1-linux-x64-musl-static.tar.gz` |
-| Linux musl | ARM64 | None | Static | ~2MB | `zigcat-v0.0.1-linux-arm64-musl-static.tar.gz` |
 | Alpine musl | x64 | wolfSSL | Static | ~835KB | `zigcat-v0.0.1-alpine-x64-musl-wolfssl-static.tar.gz` |
 | Alpine musl | ARM64 | wolfSSL | Static | ~865KB | `zigcat-v0.0.1-alpine-arm64-musl-wolfssl-static.tar.gz` |
+| Alpine musl | x86 (32-bit) | wolfSSL | Static | ~800KB | `zigcat-v0.0.1-alpine-x86-musl-wolfssl-static.tar.gz` |
+
+#### Portable Static Builds - No TLS, Zero Dependencies (4 variants)
+
+| Platform | Arch | TLS Backend | Type | Size | Tarball Name |
+|----------|------|-------------|------|------|--------------|
+| Linux musl | x64 | None | Static | ~2MB | `zigcat-v0.0.1-linux-x64-musl-static.tar.gz` |
+| Linux musl | ARM64 | Static | ~2MB | `zigcat-v0.0.1-linux-arm64-musl-static.tar.gz` |
+| Linux musl | x86 (32-bit) | None | Static | ~1.8MB | `zigcat-v0.0.1-linux-x86-musl-static.tar.gz` |
+| Linux musl | ARM v7 (32-bit) | None | Static | ~1.9MB | `zigcat-v0.0.1-linux-arm-musl-static.tar.gz` |
+
+#### BSD Variants (1 variant)
+
+| Platform | Arch | TLS Backend | Type | Size | Tarball Name |
+|----------|------|-------------|------|------|--------------|
 | FreeBSD | x64 | None | Dynamic | ~300KB | `zigcat-v0.0.1-freebsd-x64-freebsd.tar.gz` |
 
 **Naming Convention:** `zigcat-{version}-{platform}-{arch}-{suffix}.tar.gz`
 - **suffix** clearly indicates: TLS backend (openssl/wolfssl) + linking type (static/dynamic) + libc (glibc/musl)
+- **32-bit support:** x86 and ARM v7 available as static musl builds (maximum compatibility)
 
 ### Continue-on-Error Mode
 

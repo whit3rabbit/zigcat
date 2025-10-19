@@ -37,12 +37,23 @@ SKIPPED_BUILDS=()
 
 # Build matrix - explicit platform definitions
 declare -A BUILD_MATRIX
+
+# Linux glibc with OpenSSL (64-bit only - glibc doesn't support 32-bit well anymore)
 BUILD_MATRIX["linux-x64-openssl"]="linux:amd64:x86_64-linux-gnu:-Dtls=true -Dtls-backend=openssl:glibc-openssl-dynamic"
 BUILD_MATRIX["linux-arm64-openssl"]="linux:arm64:aarch64-linux-gnu:-Dtls=true -Dtls-backend=openssl:glibc-openssl-dynamic"
+
+# Linux musl static (all architectures - maximum portability)
 BUILD_MATRIX["linux-x64-static"]="linux:amd64:x86_64-linux-musl:-Dstatic=true -Dtls=false:musl-static"
 BUILD_MATRIX["linux-arm64-static"]="linux:arm64:aarch64-linux-musl:-Dstatic=true -Dtls=false:musl-static"
+BUILD_MATRIX["linux-x86-static"]="linux:386:i386-linux-musl:-Dstatic=true -Dtls=false:musl-static"
+BUILD_MATRIX["linux-arm-static"]="linux:arm/v7:arm-linux-musleabihf:-Dstatic=true -Dtls=false:musl-static"
+
+# Alpine with wolfSSL (64-bit + 32-bit)
 BUILD_MATRIX["alpine-x64-wolfssl"]="alpine:amd64:x86_64-linux-musl:-Dstatic=true -Dtls=true -Dtls-backend=wolfssl:musl-wolfssl-static"
 BUILD_MATRIX["alpine-arm64-wolfssl"]="alpine:arm64:aarch64-linux-musl:-Dstatic=true -Dtls=true -Dtls-backend=wolfssl:musl-wolfssl-static"
+BUILD_MATRIX["alpine-x86-wolfssl"]="alpine:386:i386-linux-musl:-Dstatic=true -Dtls=true -Dtls-backend=wolfssl:musl-wolfssl-static"
+
+# FreeBSD (64-bit only)
 BUILD_MATRIX["freebsd-x64"]="freebsd:amd64:x86_64-freebsd:-Dtls=false:freebsd"
 
 # Logging functions
@@ -112,13 +123,21 @@ EXAMPLES:
     # Build only (skip packaging)
     $0 --skip-package --version v0.0.1
 
-PLATFORMS:
+PLATFORMS (Default Hardcoded Matrix):
+    64-bit with TLS:
     - Linux x64 glibc+OpenSSL (dynamic, ~6MB)
     - Linux ARM64 glibc+OpenSSL (dynamic, ~6MB)
-    - Linux x64 musl static (no TLS, ~2MB)
-    - Linux ARM64 musl static (no TLS, ~2MB)
     - Alpine x64 musl+wolfSSL static (~835KB, GPLv2)
     - Alpine ARM64 musl+wolfSSL static (~865KB, GPLv2)
+    - Alpine x86 musl+wolfSSL static (~800KB, GPLv2, 32-bit)
+
+    Portable static (no TLS, zero dependencies):
+    - Linux x64 musl static (~2MB)
+    - Linux ARM64 musl static (~2MB)
+    - Linux x86 musl static (~1.8MB, 32-bit)
+    - Linux ARM musl static (~1.9MB, 32-bit ARMv7)
+
+    BSD:
     - FreeBSD x64 (~300KB)
 
 OUTPUT:

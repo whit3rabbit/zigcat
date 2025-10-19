@@ -229,6 +229,7 @@ get_artifact_name() {
         amd64) arch="x64" ;;
         arm64) arch="arm64" ;;
         386|x86) arch="x86" ;;
+        arm/v7|armv7|arm) arch="arm" ;;
     esac
 
     # Construct filename: zigcat-{version}-{platform}-{arch}-{suffix}
