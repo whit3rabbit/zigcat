@@ -30,6 +30,13 @@ comptime {
     if (!build_options.enable_tls) {
         @compileError("srp_openssl.zig requires TLS to be enabled. SRP encryption depends on OpenSSL. Build with -Dtls=true or use a different connection mode.");
     }
+
+    // Ensure this module is only compiled when using OpenSSL backend
+    // wolfSSL does not provide OpenSSL-compatible SRP headers
+    const backend = build_options.tls_backend;
+    if (!std.mem.eql(u8, backend, "openssl")) {
+        @compileError("srp_openssl.zig is OpenSSL-specific and cannot be used with other TLS backends. This module requires OpenSSL headers (openssl/ssl.h, openssl/srp.h). Use -Dtls-backend=openssl or disable gsocket support.");
+    }
 }
 
 // C FFI bindings for OpenSSL
@@ -511,7 +518,9 @@ pub const SrpConnection = struct {
             logging.logDebug("Using OpenSSL 1.1.1 manual SRP_user_pwd population\n", .{});
 
             // Allocate SRP_user_pwd structure manually
-            const user_pwd_mem = c.OPENSSL_malloc(@sizeOf(SRP_user_pwd_compat));
+            // NOTE: Using malloc() instead of OPENSSL_malloc() to avoid Zig C translation issues
+            // with __FILE__ macro on ARM64. OPENSSL_malloc is just a debugging wrapper around malloc.
+            const user_pwd_mem = c.malloc(@sizeOf(SRP_user_pwd_compat));
             if (user_pwd_mem == null) {
                 logging.logDebug("Failed to allocate SRP_user_pwd\n", .{});
                 c.BN_free(salt);
@@ -521,10 +530,11 @@ pub const SrpConnection = struct {
             const user_pwd: *SRP_user_pwd_compat = @ptrCast(@alignCast(user_pwd_mem));
 
             // Duplicate username string (owned by user_pwd)
-            const username_dup = c.OPENSSL_strdup(username);
+            // NOTE: Using strdup() instead of OPENSSL_strdup() for same reason as above
+            const username_dup = c.strdup(username);
             if (username_dup == null) {
                 logging.logDebug("Failed to duplicate username\n", .{});
-                c.OPENSSL_free(user_pwd_mem);
+                c.free(user_pwd_mem);
                 c.BN_free(salt);
                 c.BN_free(verifier);
                 return SrpError.InitFailed;
@@ -547,8 +557,8 @@ pub const SrpConnection = struct {
 
             if (users_pwd_ptr.* == null) {
                 logging.logDebug("SRP_VBASE->users_pwd is null, cannot add user\n", .{});
-                c.OPENSSL_free(username_dup);
-                c.OPENSSL_free(user_pwd_mem);
+                c.free(username_dup);
+                c.free(user_pwd_mem);
                 c.BN_free(salt);
                 c.BN_free(verifier);
                 return SrpError.InitFailed;
@@ -560,8 +570,8 @@ pub const SrpConnection = struct {
             const push_result = c.OPENSSL_sk_push(@ptrCast(stack), user_pwd_mem);
             if (push_result == 0) {
                 logging.logDebug("Failed to push user_pwd to SRP_VBASE stack\n", .{});
-                c.OPENSSL_free(username_dup);
-                c.OPENSSL_free(user_pwd_mem);
+                c.free(username_dup);
+                c.free(user_pwd_mem);
                 c.BN_free(salt);
                 c.BN_free(verifier);
                 return SrpError.InitFailed;

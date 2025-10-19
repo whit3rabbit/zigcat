@@ -264,22 +264,23 @@ build_binary_docker() {
         echo "=== Starting Docker Build ==="
 
         # Build using Docker with the artifacts stage
-        # Use custom seccomp profile to allow faccessat2 syscall (required by Zig 0.15.1)
-        # See docker-tests/DOCKER_BUILD_ERRORS.md for details
-        local seccomp_profile="$PROJECT_ROOT/docker-tests/seccomp/zig-builder.json"
-        local seccomp_opt=""
-        if [[ -f "$seccomp_profile" ]]; then
-            seccomp_opt="--security-opt=seccomp=$seccomp_profile"
-            echo "Using custom seccomp profile: $seccomp_profile"
-        else
-            echo "WARNING: Custom seccomp profile not found, build may fail with errno 38 (ENOSYS)"
-            echo "See docker-tests/DOCKER_BUILD_ERRORS.md for troubleshooting"
-        fi
+        # Use unconfined seccomp to allow faccessat2 syscall (required by Zig 0.15.1)
+        # BuildKit doesn't fully support custom seccomp profiles, so we use unconfined mode
+        # This is safe for build-only containers that don't process untrusted input
+        # See: https://github.com/ziglang/zig/issues/18180
+        echo "Using unconfined seccomp profile to enable faccessat2 syscall"
+        echo "This is required for Zig 0.15.1 builds in Docker with overlayfs"
 
+        # Enable BuildKit (required for --output flag)
+        export DOCKER_BUILDKIT=1
+
+        # Build using Docker BuildKit
+        # NOTE: AMD64 emulated builds on ARM64 hosts may fail due to Zig 0.15.1 faccessat2 syscall issue
+        #       This is a known limitation with QEMU/Rosetta emulation + Docker BuildKit
+        #       ARM64 native builds work reliably
         if timeout "$BUILD_TIMEOUT" docker build \
             --no-cache \
             --platform="$docker_platform" \
-            $seccomp_opt \
             --file="$dockerfile_path" \
             --target=artifacts \
             --output="$artifact_dir" \

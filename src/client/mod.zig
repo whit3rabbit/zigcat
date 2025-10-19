@@ -31,7 +31,11 @@ const net = @import("../net/socket.zig");
 const build_options = @import("build_options");
 
 // Client mode modules
-const gsocket_client = if (build_options.enable_tls) @import("./gsocket_client.zig") else struct {};
+// Only import gsocket_client when using OpenSSL backend (wolfSSL doesn't support SRP)
+const gsocket_client = if (build_options.enable_tls and std.mem.eql(u8, build_options.tls_backend, "openssl"))
+    @import("./gsocket_client.zig")
+else
+    struct {};
 const unix_client = @import("./unix_client.zig");
 const tcp_client = @import("./tcp_client.zig");
 const tls_client = @import("./tls_client.zig");
@@ -75,13 +79,23 @@ pub const netStreamToStream = adapters.netStreamToStream;
 /// Returns: Error if connection fails or I/O error occurs
 pub fn runClient(allocator: std.mem.Allocator, cfg: *const config.Config) !void {
     // 1. Check for gsocket mode (NAT-traversal via GSRN relay)
-    if (cfg.gsocket_secret) |secret| {
-        if (build_options.enable_tls) {
+    // Only compile this path when OpenSSL backend is available
+    if (comptime (build_options.enable_tls and std.mem.eql(u8, build_options.tls_backend, "openssl"))) {
+        if (cfg.gsocket_secret) |secret| {
             return gsocket_client.runGsocketClient(allocator, cfg, secret);
-        } else {
-            std.debug.print("ERROR: gsocket mode requires TLS to be enabled for SRP encryption.\n", .{});
-            std.debug.print("Please rebuild zigcat with -Dtls=true or use a different connection mode.\n", .{});
-            return error.GsocketRequiresTLS;
+        }
+    } else {
+        // If user somehow has gsocket_secret set but we don't have OpenSSL, error out
+        if (cfg.gsocket_secret != null) {
+            std.debug.print("ERROR: gsocket mode requires OpenSSL backend for SRP encryption.\n", .{});
+            if (build_options.enable_tls) {
+                std.debug.print("Current backend: wolfSSL (does not support SRP)\n", .{});
+                std.debug.print("Please rebuild zigcat with -Dtls-backend=openssl or use a different connection mode.\n", .{});
+            } else {
+                std.debug.print("TLS is disabled.\n", .{});
+                std.debug.print("Please rebuild zigcat with -Dtls=true -Dtls-backend=openssl or use a different connection mode.\n", .{});
+            }
+            return error.GsocketNotAvailable;
         }
     }
 

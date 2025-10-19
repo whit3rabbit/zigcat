@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # Multi-stage Dockerfile for Alpine/musl static builds with wolfSSL
 # IMPORTANT: Use TARGETPLATFORM for native compilation (not cross-compilation)
 # This ensures wolfSSL libraries match the target architecture
@@ -25,12 +26,16 @@ RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64"
 ENV PATH="/opt/zig:$PATH"
 
 # Set Zig cache directories for better control and performance
-# These can be mounted as volumes or tmpfs for faster builds
+# Using /build for local cache (persistent across build steps)
+# Using /tmp for global cache (temporary but accessible)
+# This prevents cache corruption issues seen with overlayfs + faccessat2
 ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache
 ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache
 
-# Create cache directories
-RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
+# Create cache directories with proper permissions
+# CRITICAL: Ensure cache directories exist before first build command
+RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR" && \
+    chmod -R 777 "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
 # Create build directory
 WORKDIR /build
@@ -53,14 +58,16 @@ esac\n' > /usr/local/bin/platform-to-zig-target.sh \
 # Build natively (no cross-compilation) to avoid architecture mismatch issues
 #
 # Build native musl binary with TLS (wolfSSL backend)
-# NOTE: Cache mounts disabled due to Zig 0.15.1 faccessat2 incompatibility with Docker overlayfs
+# NOTE: Known issue with Zig 0.15.1 + Docker BuildKit + emulated AMD64 on ARM64 hosts
+#       The faccessat2 syscall may fail with errno 38 (ENOSYS) on some platforms
+#       ARM64 builds work reliably, AMD64 builds may fail on Apple Silicon hosts
 #       See: https://github.com/ziglang/zig/issues/18180
 RUN echo "Building native musl binary with TLS (wolfSSL backend, static)" && \
-    zig build -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl
+    zig build -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
 
 # Run unit tests (native, TLS enabled with wolfSSL, static)
 RUN echo "Running native tests with TLS (wolfSSL backend, static)" && \
-    zig build test -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl
+    zig build test -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
 
 # Export stage for artifacts
 FROM scratch AS artifacts

@@ -29,13 +29,19 @@ const gsocket = @import("../net/gsocket.zig");
 const adapters = @import("./stream_adapters.zig");
 const TransferContext = @import("./transfer_context.zig").TransferContext;
 
-// Check if TLS is enabled at compile time (gsocket requires SRP encryption)
+// Check if TLS is enabled at compile time (gsocket requires SRP encryption with OpenSSL backend)
 const build_options = @import("build_options");
-const srp = if (build_options.enable_tls) @import("../tls/srp_openssl.zig") else struct {};
+const srp = if (build_options.enable_tls and std.mem.eql(u8, build_options.tls_backend, "openssl"))
+    @import("../tls/srp_openssl.zig")
+else
+    struct {};
 
+// Only compile gsocket support when using OpenSSL backend
+// This prevents import errors when using wolfSSL backend
 comptime {
-    if (!build_options.enable_tls) {
-        @compileError("gsocket mode requires TLS to be enabled for SRP encryption. Build with -Dtls=true or use a different connection mode.");
+    // This file should only be imported when OpenSSL backend is active
+    if (!build_options.enable_tls or !std.mem.eql(u8, build_options.tls_backend, "openssl")) {
+        @compileError("This module requires OpenSSL backend. gsocket support is not available with wolfSSL or when TLS is disabled.");
     }
 }
 

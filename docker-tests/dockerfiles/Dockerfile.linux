@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # Multi-stage Dockerfile for Linux cross-compilation
 # Container runs on native architecture, Zig handles cross-compilation
 # Using Ubuntu 20.04 (glibc 2.31, OpenSSL 1.1.1f) - code supports both 1.1.1 and 3.0+ APIs
@@ -51,15 +52,31 @@ case "$1" in\n\
 esac\n' > /usr/local/bin/platform-to-zig-target.sh \
     && chmod +x /usr/local/bin/platform-to-zig-target.sh
 
+# Set Zig cache directories for consistency with Alpine builds
+# Using /build for local cache (persistent across build steps)
+# Using /tmp for global cache (temporary but accessible)
+# This prevents cache corruption issues seen with overlayfs + faccessat2
+ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache
+
+# Create cache directories with proper permissions
+# CRITICAL: Ensure cache directories exist before first build command
+RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR" && \
+    chmod -R 777 "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
+
 # Build for target platform
+# NOTE: Known issue with Zig 0.15.1 + Docker BuildKit + emulated AMD64 on ARM64 hosts
+#       The faccessat2 syscall may fail with errno 38 (ENOSYS) on some platforms
+#       ARM64 builds work reliably, AMD64 builds may fail on Apple Silicon hosts
+#       See: https://github.com/ziglang/zig/issues/18180
 RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     echo "Building for Zig target: $ZIG_TARGET with TLS enabled" && \
-    zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
+    zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
 
 # Run unit tests
 RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
     echo "Running tests for Zig target: $ZIG_TARGET with TLS enabled" && \
-    zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true
+    zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
 
 # Export stage for artifacts
 FROM scratch AS artifacts

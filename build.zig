@@ -248,6 +248,11 @@ pub fn build(b: *std.Build) void {
             // wolfSSL detection is done at link time
             // If wolfSSL is not installed, linking will fail with clear error
             std.debug.print("[TLS Backend] Using wolfSSL (lightweight, 92% smaller)\n", .{});
+
+            // Warn about gsocket incompatibility with wolfSSL
+            std.debug.print("[WARNING] gsocket mode is not available with wolfSSL backend\n", .{});
+            std.debug.print("[WARNING] gsocket requires OpenSSL for SRP encryption support\n", .{});
+            std.debug.print("[WARNING] To enable gsocket: Use -Dtls-backend=openssl instead\n", .{});
         } else {
             const openssl_available = detectOpenSSL(b);
             if (!openssl_available) {
@@ -275,6 +280,9 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "enable_unixsock", enable_unixsock);
     options.addOption(bool, "allow_legacy_tls", allow_legacy_tls);
     options.addOption(bool, "use_wolfssl", use_wolfssl);
+    // Export TLS backend as string for conditional imports in code
+    const tls_backend_str = if (use_wolfssl) "wolfssl" else "openssl";
+    options.addOption([]const u8, "tls_backend", tls_backend_str);
 
     // Determine binary name: append "-wolfssl" when using wolfSSL backend for clarity
     const binary_name = if (use_wolfssl and enable_tls) "zigcat-wolfssl" else "zigcat";
