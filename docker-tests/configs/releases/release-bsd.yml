@@ -3,8 +3,10 @@
 #
 # Note: OpenBSD and NetBSD require native builds due to Zig cross-compilation limitations
 #
-# Usage:
-#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-bsd.yml
+# Usage (Consolidated Script with YAML Support):
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-bsd.yml --version v0.0.1
+#
+# Requires yq: brew install yq
 
 platforms:
   # FreeBSD (cross-compiled from Linux, NO TLS)

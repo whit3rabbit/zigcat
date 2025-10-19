@@ -1,8 +1,10 @@
 # ZigCat Release Build Configuration - Linux Variants Only
 # Builds Linux glibc (dynamic+TLS) and musl (static) variants
 #
-# Usage:
-#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-linux.yml
+# Usage (Consolidated Script with YAML Support):
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-linux.yml --version v0.0.1
+#
+# Note: Requires yq (brew install yq)
 
 platforms:
   # Linux glibc (dynamic with OpenSSL TLS)

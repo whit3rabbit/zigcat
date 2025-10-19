@@ -237,7 +237,7 @@ clean:
 # Build complete v0.0.1 release (all steps: build + package + checksums)
 release-v0.0.1:
 	@echo "Building complete v0.0.1 release..."
-	./docker-tests/scripts/build-release-v2.sh --version v0.0.1 --continue-on-error --verbose
+	./docker-tests/scripts/build-release.sh --version v0.0.1 --continue-on-error --verbose
 	./docker-tests/scripts/package-release.sh --version v0.0.1 --compression 9 --create-deb --create-rpm --verbose
 	./docker-tests/scripts/generate-checksums.sh --release-dir docker-tests/artifacts/releases/v0.0.1 --verbose
 	./docker-tests/scripts/validate-releases.sh --release-dir docker-tests/artifacts/releases/v0.0.1 --verbose
@@ -248,7 +248,7 @@ release-v0.0.1:
 # Build all release binaries only (no packaging)
 release-build:
 	@echo "Building all release binaries..."
-	./docker-tests/scripts/build-release-v2.sh --version v0.0.1 --continue-on-error --verbose
+	./docker-tests/scripts/build-release.sh --version v0.0.1 --continue-on-error --verbose
 
 # Package existing artifacts into tarballs, deb, and rpm
 release-package:
@@ -268,47 +268,98 @@ release-tarballs:
 		--compression 9 \
 		--verbose
 
-# Build all release artifacts (Linux glibc, musl, Alpine wolfSSL, FreeBSD)
+# Build all release artifacts using YAML config (Linux glibc, musl, Alpine wolfSSL, FreeBSD)
+# Includes: build + package + checksums + validation
 release-all:
-	@echo "Building all release artifacts..."
+	@echo "Building all release artifacts from YAML config..."
 	./docker-tests/scripts/build-release.sh \
 		--config docker-tests/configs/releases/release-all.yml \
-		--parallel \
 		--verbose
+	@echo ""
+	@echo "Packaging artifacts..."
+	./docker-tests/scripts/package-release.sh \
+		--compression 9 \
+		--create-deb \
+		--create-rpm \
+		--verbose
+	@echo ""
+	@echo "Generating checksums..."
+	./docker-tests/scripts/generate-checksums.sh \
+		--verbose
+	@echo ""
+	@echo "Validating releases..."
+	./docker-tests/scripts/validate-releases.sh \
+		--verbose || true
+	@echo ""
+	@echo "✅ Release build complete!"
 
-# Build all Linux variants (glibc dynamic+TLS, musl static)
+# Build all Linux variants using YAML config (glibc dynamic+TLS, musl static)
+# Includes: build + package + checksums
 release-linux:
-	@echo "Building Linux release variants..."
+	@echo "Building Linux release variants from YAML config..."
 	./docker-tests/scripts/build-release.sh \
 		--config docker-tests/configs/releases/release-linux.yml \
-		--parallel \
 		--verbose
+	@echo ""
+	@echo "Packaging artifacts..."
+	./docker-tests/scripts/package-release.sh \
+		--compression 9 \
+		--create-deb \
+		--create-rpm \
+		--verbose
+	@echo ""
+	@echo "Generating checksums..."
+	./docker-tests/scripts/generate-checksums.sh \
+		--verbose
+	@echo ""
+	@echo "✅ Linux release complete!"
 
-# Build Alpine static+wolfSSL (smallest build ~835KB)
+# Build Alpine static+wolfSSL using YAML config (smallest build ~835KB)
+# Includes: build + package + checksums
 release-alpine:
-	@echo "Building Alpine wolfSSL release (smallest with TLS)..."
+	@echo "Building Alpine wolfSSL release from YAML config..."
 	./docker-tests/scripts/build-release.sh \
 		--config docker-tests/configs/releases/release-alpine.yml \
 		--verbose
+	@echo ""
+	@echo "Packaging artifacts..."
+	./docker-tests/scripts/package-release.sh \
+		--compression 9 \
+		--create-deb \
+		--create-rpm \
+		--verbose
+	@echo ""
+	@echo "Generating checksums..."
+	./docker-tests/scripts/generate-checksums.sh \
+		--verbose
+	@echo ""
+	@echo "✅ Alpine release complete!"
 
-# Build FreeBSD variants
+# Build FreeBSD variants using YAML config
+# Includes: build + package + checksums
 release-bsd:
-	@echo "Building BSD release variants..."
+	@echo "Building BSD release variants from YAML config..."
 	./docker-tests/scripts/build-release.sh \
 		--config docker-tests/configs/releases/release-bsd.yml \
 		--verbose
-
-# Build macOS variants (REQUIRES NATIVE MACOS)
-release-macos:
-	@echo "Building macOS release variants (native build required)..."
-	@if [ "$$(uname)" != "Darwin" ]; then \
-		echo "ERROR: macOS builds must be run on native macOS system"; \
-		exit 1; \
-	fi
-	./docker-tests/scripts/build-release.sh \
-		--config docker-tests/configs/releases/release-macos.yml \
-		--native \
+	@echo ""
+	@echo "Packaging artifacts..."
+	./docker-tests/scripts/package-release.sh \
+		--compression 9 \
 		--verbose
+	@echo ""
+	@echo "Generating checksums..."
+	./docker-tests/scripts/generate-checksums.sh \
+		--verbose
+	@echo ""
+	@echo "✅ BSD release complete!"
+
+# Build macOS variants using YAML config (REQUIRES NATIVE MACOS)
+# Note: macOS builds not yet supported in consolidated script - use native build system
+release-macos:
+	@echo "ERROR: macOS YAML config builds not yet implemented in consolidated script"
+	@echo "Use native build: zig build -Doptimize=ReleaseSmall"
+	@exit 1
 
 # Generate SHA256 checksums
 release-checksums:

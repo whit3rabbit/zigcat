@@ -40,10 +40,45 @@ docker --version  # Should be 20.10+
 # Make
 make --version
 
+# Optional: For YAML config mode
+yq --version  # Required only if using --config flag (brew install yq)
+
 # Optional: For package creation
 dpkg-deb --version   # For .deb packages
 rpmbuild --version   # For .rpm packages
 ```
+
+### Build Modes
+
+The consolidated `build-release.sh` script supports two modes:
+
+**1. Default Mode (Hardcoded Matrix)**
+- ✅ Self-contained, no external dependencies
+- ✅ Fast and simple
+- ✅ 7 pre-configured platforms (Linux x64/ARM64, Alpine x64/ARM64, FreeBSD x64)
+- ❌ Less flexible (requires editing script to add platforms)
+
+```bash
+# Example: Build all default platforms
+./docker-tests/scripts/build-release.sh --version v0.0.1
+```
+
+**2. YAML Config Mode**
+- ✅ Highly flexible (add platforms via config files)
+- ✅ Easy to maintain custom builds
+- ❌ Requires `yq` tool (`brew install yq` on macOS)
+- ❌ Slightly more complex
+
+```bash
+# Example: Build using YAML config
+./docker-tests/scripts/build-release.sh \
+    --config docker-tests/configs/releases/release-all.yml \
+    --version v0.0.1
+```
+
+**When to use which:**
+- Use **Default Mode** for: Quick v0.0.1 releases, CI/CD, standard builds
+- Use **YAML Mode** for: Custom platforms, experimental configs, advanced users
 
 ### System Requirements
 
@@ -70,10 +105,15 @@ rpmbuild --version   # For .rpm packages
 
 ### Architecture
 
+The build system now uses a unified `build-release.sh` script that supports two modes:
+
+1. **Default Mode (Hardcoded Matrix)**: Self-contained, no dependencies, 7 pre-configured platforms
+2. **YAML Mode**: Flexible configuration via YAML files, requires `yq` tool
+
 ```
 make release-v0.0.1
     ↓
-build-release-v2.sh (builds all binaries)
+build-release.sh (builds all binaries - hardcoded or YAML mode)
     ↓
 package-release.sh (creates tarballs/deb/rpm)
     ├─ build-deb-packages.sh
@@ -84,17 +124,22 @@ generate-checksums.sh (SHA256SUMS)
 validate-releases.sh (smoke tests)
 ```
 
-### Build Matrix
+### Build Matrix (Default Hardcoded Mode)
 
-| Platform | Arch | TLS Backend | Type | Size | Output Name |
-|----------|------|-------------|------|------|-------------|
+The consolidated script builds these 7 platform variants by default:
+
+| Platform | Arch | TLS Backend | Type | Size | Tarball Name |
+|----------|------|-------------|------|------|--------------|
 | Linux glibc | x64 | OpenSSL | Dynamic | ~6MB | `zigcat-v0.0.1-linux-x64-glibc-openssl-dynamic.tar.gz` |
 | Linux glibc | ARM64 | OpenSSL | Dynamic | ~6MB | `zigcat-v0.0.1-linux-arm64-glibc-openssl-dynamic.tar.gz` |
 | Linux musl | x64 | None | Static | ~2MB | `zigcat-v0.0.1-linux-x64-musl-static.tar.gz` |
 | Linux musl | ARM64 | None | Static | ~2MB | `zigcat-v0.0.1-linux-arm64-musl-static.tar.gz` |
 | Alpine musl | x64 | wolfSSL | Static | ~835KB | `zigcat-v0.0.1-alpine-x64-musl-wolfssl-static.tar.gz` |
 | Alpine musl | ARM64 | wolfSSL | Static | ~865KB | `zigcat-v0.0.1-alpine-arm64-musl-wolfssl-static.tar.gz` |
-| FreeBSD | x64 | None | Dynamic | ~300KB | `zigcat-v0.0.1-freebsd-x64.tar.gz` |
+| FreeBSD | x64 | None | Dynamic | ~300KB | `zigcat-v0.0.1-freebsd-x64-freebsd.tar.gz` |
+
+**Naming Convention:** `zigcat-{version}-{platform}-{arch}-{suffix}.tar.gz`
+- **suffix** clearly indicates: TLS backend (openssl/wolfssl) + linking type (static/dynamic) + libc (glibc/musl)
 
 ### Continue-on-Error Mode
 
@@ -115,11 +160,17 @@ make release-clean
 ### Step 2: Build All Binaries
 
 ```bash
-# Option A: Use Makefile (recommended)
+# Option A: Use Makefile (recommended - uses hardcoded matrix)
 make release-build
 
-# Option B: Direct script call
-./docker-tests/scripts/build-release-v2.sh --version v0.0.1 --continue-on-error --verbose
+# Option B: Direct script call (auto-detects version from build.zig)
+./docker-tests/scripts/build-release.sh --continue-on-error --verbose
+
+# Option C: With specific version
+./docker-tests/scripts/build-release.sh --version v0.0.1 --continue-on-error --verbose
+
+# Option D: Using YAML configuration (flexible, requires yq)
+./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-all.yml --verbose
 ```
 
 **What happens:**
@@ -129,6 +180,11 @@ make release-build
 - Build report generated at `docker-tests/artifacts/BUILD_REPORT.md`
 
 **Duration:** 15-30 minutes
+
+**Build Modes:**
+
+1. **Hardcoded Mode (Default)**: Fast, self-contained, 7 platforms (Linux x64/ARM64, Alpine x64/ARM64, FreeBSD x64)
+2. **YAML Mode**: Flexible, requires `yq`, supports custom platform configs
 
 ### Step 3: Package Artifacts
 
@@ -369,6 +425,30 @@ sudo apt install pigz
 ## Manual Build Process
 
 ### Building Single Platform
+
+**Using consolidated script (recommended):**
+
+```bash
+# Build only Linux x64 by creating a minimal YAML config
+cat > /tmp/linux-x64-only.yml <<'EOF'
+platforms:
+  - name: linux-glibc
+    base_image: ubuntu:22.04
+    dockerfile: Dockerfile.linux-glibc
+    architectures: [amd64]
+    zig_target_map:
+      amd64: x86_64-linux-gnu
+    build_options:
+      - "-Dtls=true"
+      - "-Dtls-backend=openssl"
+    artifact_suffix: "glibc-openssl"
+    enabled: true
+EOF
+
+./docker-tests/scripts/build-release.sh --config /tmp/linux-x64-only.yml --version v0.0.1
+```
+
+**Direct Docker build (low-level):**
 
 ```bash
 # Example: Linux x64 with OpenSSL

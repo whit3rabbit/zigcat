@@ -1,8 +1,10 @@
 # ZigCat Release Build Configuration - Complete Matrix
 # Builds all release artifacts for all supported platforms and configurations
 #
-# Usage:
-#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-all.yml
+# Usage (Consolidated Script with YAML Support):
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-all.yml --version v0.0.1
+#
+# Note: Requires yq (brew install yq)
 
 platforms:
   # Linux glibc (dynamic with OpenSSL TLS)

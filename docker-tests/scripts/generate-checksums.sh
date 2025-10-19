@@ -5,6 +5,10 @@
 
 set -euo pipefail
 
+# Script directory and paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -50,7 +54,7 @@ Generate SHA256 checksums for release artifacts
 
 OPTIONS:
     --release-dir DIR              Release directory containing artifacts
-                                   (required)
+                                   (auto-detected from latest version if not specified)
     --sign                         Sign checksums with GPG
     --gpg-key KEY                  GPG key ID for signing
                                    (default: use default key)
@@ -96,11 +100,46 @@ parse_args() {
         esac
     done
 
-    # Validate required arguments
+    # Auto-detect release directory if not specified
     if [[ -z "$RELEASE_DIR" ]]; then
-        log_error "Release directory is required (--release-dir)"
-        usage
-        exit 1
+        log_info "Auto-detecting release directory..."
+
+        # First, try to get version from build.zig
+        local version
+        version=$(grep -E 'options\.addOption.*"version"' "$PROJECT_ROOT/build.zig" | sed -E 's/.*"version",[[:space:]]*"([^"]+)".*/\1/')
+
+        if [[ -z "$version" ]]; then
+            log_error "Could not auto-detect version from build.zig"
+            log_error "Please specify --release-dir explicitly"
+            usage
+            exit 1
+        fi
+
+        # Ensure version starts with 'v'
+        if [[ "$version" != v* ]]; then
+            version="v$version"
+        fi
+
+        # Look for tarballs subdirectory first, then fall back to main release dir
+        local potential_dirs=(
+            "$PROJECT_ROOT/docker-tests/artifacts/releases/$version/tarballs"
+            "$PROJECT_ROOT/docker-tests/artifacts/releases/$version"
+        )
+
+        for dir in "${potential_dirs[@]}"; do
+            if [[ -d "$dir" ]] && compgen -G "$dir/*.tar.gz" > /dev/null 2>&1; then
+                RELEASE_DIR="$dir"
+                log_success "Detected release directory: $RELEASE_DIR"
+                break
+            fi
+        done
+
+        if [[ -z "$RELEASE_DIR" ]]; then
+            log_error "Could not find release directory for version $version"
+            log_error "Looked in: ${potential_dirs[*]}"
+            log_error "Please specify --release-dir explicitly"
+            exit 1
+        fi
     fi
 }
 

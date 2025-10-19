@@ -1,8 +1,10 @@
 # ZigCat Release Build Configuration - Alpine wolfSSL (Smallest Build)
 # Builds Alpine musl static binaries with wolfSSL TLS support (~835KB)
 #
-# Usage:
-#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-alpine.yml
+# Usage (Consolidated Script with YAML Support):
+#   ./docker-tests/scripts/build-release.sh --config docker-tests/configs/releases/release-alpine.yml --version v0.0.1
+#
+# Note: Requires yq (brew install yq)
 
 platforms:
   # Alpine musl (static WITH wolfSSL - smallest build ~835KB)

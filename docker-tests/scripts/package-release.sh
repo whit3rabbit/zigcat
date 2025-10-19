@@ -70,7 +70,7 @@ ZigCat Release Packaging Orchestrator
 Package build artifacts into tarballs, .deb, and .rpm packages
 
 OPTIONS:
-    --version VERSION          Release version (e.g., v0.0.1) [REQUIRED]
+    --version VERSION          Release version (e.g., v0.0.1, auto-detected from build.zig if not specified)
     --compression LEVEL        Gzip compression level 1-9 (default: 9)
     --create-deb               Create Debian (.deb) packages
     --create-rpm               Create RPM (.rpm) packages
@@ -146,11 +146,23 @@ parse_args() {
         esac
     done
 
-    # Validate required arguments
+    # Auto-detect version if not specified
     if [[ -z "$VERSION" ]]; then
-        log_error "Version is required (--version)"
-        usage
-        exit 1
+        log_info "Auto-detecting version from build.zig..."
+
+        # Extract version from build.zig
+        local detected_version
+        detected_version=$(grep -E 'options\.addOption.*"version"' "$PROJECT_ROOT/build.zig" | sed -E 's/.*"version",[[:space:]]*"([^"]+)".*/\1/')
+
+        if [[ -z "$detected_version" ]]; then
+            log_error "Could not auto-detect version from build.zig"
+            log_error "Please specify version with --version flag"
+            usage
+            exit 1
+        fi
+
+        VERSION="$detected_version"
+        log_success "Detected version: $VERSION"
     fi
 
     # Ensure version starts with 'v'
@@ -228,38 +240,50 @@ create_tarball() {
     local artifact_dir="$1"
     local platform arch suffix
 
-    # Extract platform and arch from directory name
-    local dir_name
-    dir_name=$(basename "$artifact_dir")
+    # Check if build metadata exists (from build-release.sh)
+    if [[ -f "$artifact_dir/.build-meta" ]]; then
+        # Read metadata file
+        source "$artifact_dir/.build-meta"
+        log_debug "  Loaded metadata from .build-meta: platform=$PLATFORM arch=$ARCH suffix=$SUFFIX"
 
-    # Expected format: {platform}-{arch}
-    platform=$(echo "$dir_name" | cut -d'-' -f1)
-    arch=$(echo "$dir_name" | cut -d'-' -f2)
+        platform="$PLATFORM"
+        arch="$ARCH"
+        suffix="$SUFFIX"
+    else
+        # Fallback: Extract from directory name (old behavior)
+        log_debug "  No .build-meta found, using directory name heuristics"
 
-    # Determine suffix based on what we find in BUILD_REPORT.md or directory structure
-    # For now, use a simple heuristic
-    local suffix="unknown"
+        local dir_name
+        dir_name=$(basename "$artifact_dir")
 
-    # Map directory names to suffixes
-    case "$dir_name" in
-        *alpine*wolfssl*) suffix="musl-wolfssl-static" ;;
-        *alpine*) suffix="musl-wolfssl-static" ;;
-        *musl*) suffix="musl-static" ;;
-        *glibc*) suffix="glibc-openssl-dynamic" ;;
-        *freebsd*) suffix="freebsd" ;;
-        linux-*)
-            # Check if binary is static
-            if file "$artifact_dir/zigcat" | grep -q "statically linked"; then
-                suffix="musl-static"
-            else
-                suffix="glibc-openssl-dynamic"
-            fi
-            ;;
-        *)
-            log_warn "Could not determine suffix for $dir_name, using platform name"
-            suffix="$platform"
-            ;;
-    esac
+        # Expected format: {platform}-{arch}
+        platform=$(echo "$dir_name" | cut -d'-' -f1)
+        arch=$(echo "$dir_name" | cut -d'-' -f2)
+
+        # Determine suffix based on directory structure
+        local suffix="unknown"
+
+        # Map directory names to suffixes
+        case "$dir_name" in
+            *alpine*wolfssl*) suffix="musl-wolfssl-static" ;;
+            *alpine*) suffix="musl-wolfssl-static" ;;
+            *musl*) suffix="musl-static" ;;
+            *glibc*) suffix="glibc-openssl-dynamic" ;;
+            *freebsd*) suffix="freebsd" ;;
+            linux-*)
+                # Check if binary is static
+                if file "$artifact_dir/zigcat" | grep -q "statically linked"; then
+                    suffix="musl-static"
+                else
+                    suffix="glibc-openssl-dynamic"
+                fi
+                ;;
+            *)
+                log_warn "Could not determine suffix for $dir_name, using platform name"
+                suffix="$platform"
+                ;;
+        esac
+    fi
 
     local artifact_name
     artifact_name=$(get_artifact_name "$platform" "$arch" "$suffix")
@@ -295,6 +319,19 @@ create_tarball() {
     # Create tarball with maximum compression
     local tarball_name="${artifact_name}.tar.gz"
     local tarball_path="$OUTPUT_DIR/tarballs/$tarball_name"
+
+    # Check if tarball already exists
+    if [[ -f "$tarball_path" ]]; then
+        local existing_size
+        existing_size=$(du -h "$tarball_path" | cut -f1)
+        log_warn "  Tarball already exists: $tarball_name ($existing_size)"
+        log_info "  Skipping (use --force to overwrite, or delete manually)"
+
+        # Cleanup temp directory
+        rm -rf "$temp_dir"
+        echo "$tarball_path"
+        return 0
+    fi
 
     log_debug "  Creating tarball with compression level $COMPRESSION_LEVEL..."
 
