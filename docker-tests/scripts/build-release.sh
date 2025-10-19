@@ -327,18 +327,22 @@ load_yaml_config() {
         fi
 
         for ((j=0; j<arch_count; j++)); do
-            local arch zig_target build_opts
+            local arch zig_target build_opts config_dockerfile
 
             if [[ "$YQ_TYPE" == "kislyuk" ]]; then
                 arch=$($YQ_CMD ".platforms[$i].architectures[$j]" "$CONFIG_FILE")
                 zig_target=$($YQ_CMD ".platforms[$i].zig_target_map.$arch" "$CONFIG_FILE")
                 # Build options (join array with spaces) - kislyuk/yq outputs JSON array
                 build_opts=$($YQ_CMD ".platforms[$i].build_options | join(\" \")" "$CONFIG_FILE")
+                # Dockerfile path (optional - falls back to default if not specified)
+                config_dockerfile=$($YQ_CMD ".platforms[$i].dockerfile // \"\"" "$CONFIG_FILE")
             else
                 arch=$(yq eval ".platforms[$i].architectures[$j]" "$CONFIG_FILE")
                 zig_target=$(yq eval ".platforms[$i].zig_target_map.$arch" "$CONFIG_FILE")
                 # Build options (join array with spaces)
                 build_opts=$(yq eval ".platforms[$i].build_options | join(\" \")" "$CONFIG_FILE")
+                # Dockerfile path (optional - falls back to default if not specified)
+                config_dockerfile=$(yq eval ".platforms[$i].dockerfile // \"\"" "$CONFIG_FILE")
             fi
 
             # Determine platform base (linux/alpine/freebsd)
@@ -354,10 +358,10 @@ load_yaml_config() {
             # Create build ID
             local build_id="${platform_name}-${arch}"
 
-            # Build spec: platform:arch:zig_target:build_opts:suffix
-            BUILD_MATRIX["$build_id"]="${platform_base}:${arch}:${zig_target}:${build_opts}:${artifact_suffix}"
+            # Build spec: platform:arch:zig_target:build_opts:suffix:dockerfile
+            BUILD_MATRIX["$build_id"]="${platform_base}:${arch}:${zig_target}:${build_opts}:${artifact_suffix}:${config_dockerfile}"
 
-            log_debug "  Loaded: $build_id"
+            log_debug "  Loaded: $build_id (dockerfile: ${config_dockerfile:-default})"
         done
     done
 
@@ -394,34 +398,53 @@ build_platform() {
     local build_id="$1"
     local build_spec="${BUILD_MATRIX[$build_id]}"
 
-    IFS=':' read -r platform arch zig_target build_opts suffix <<< "$build_spec"
+    IFS=':' read -r platform arch zig_target build_opts suffix config_dockerfile <<< "$build_spec"
 
     log_step "Building: $build_id"
     log_debug "  Platform: $platform, Arch: $arch"
     log_debug "  Zig Target: $zig_target"
     log_debug "  Build Options: $build_opts"
     log_debug "  Suffix: $suffix"
+    log_debug "  Dockerfile: ${config_dockerfile:-default}"
 
     # Determine Docker platform
     local docker_platform="linux/$arch"
 
-    # Determine Dockerfile
+    # Determine Dockerfile (use YAML config if specified, otherwise fallback to default)
     local dockerfile=""
-    case "$platform" in
-        linux)
-            dockerfile="$DOCKERFILES_DIR/Dockerfile.linux"
-            ;;
-        alpine)
-            dockerfile="$DOCKERFILES_DIR/Dockerfile.alpine"
-            ;;
-        freebsd)
-            dockerfile="$DOCKERFILES_DIR/Dockerfile.freebsd"
-            ;;
-        *)
-            log_error "Unknown platform: $platform"
+    if [[ -n "$config_dockerfile" ]]; then
+        # YAML specified a custom Dockerfile - check release/ subdirectory first
+        if [[ -f "$DOCKERFILES_DIR/release/$config_dockerfile" ]]; then
+            dockerfile="$DOCKERFILES_DIR/release/$config_dockerfile"
+            log_debug "  Using YAML Dockerfile from release/: $config_dockerfile"
+        elif [[ -f "$DOCKERFILES_DIR/$config_dockerfile" ]]; then
+            dockerfile="$DOCKERFILES_DIR/$config_dockerfile"
+            log_debug "  Using YAML Dockerfile: $config_dockerfile"
+        else
+            log_error "Dockerfile specified in YAML not found: $config_dockerfile"
+            log_error "  Searched: $DOCKERFILES_DIR/release/$config_dockerfile"
+            log_error "  Searched: $DOCKERFILES_DIR/$config_dockerfile"
             return 1
-            ;;
-    esac
+        fi
+    else
+        # Fallback to default Dockerfiles based on platform
+        log_debug "  No dockerfile in YAML, using default for platform: $platform"
+        case "$platform" in
+            linux)
+                dockerfile="$DOCKERFILES_DIR/Dockerfile.linux"
+                ;;
+            alpine)
+                dockerfile="$DOCKERFILES_DIR/Dockerfile.alpine"
+                ;;
+            freebsd)
+                dockerfile="$DOCKERFILES_DIR/Dockerfile.freebsd"
+                ;;
+            *)
+                log_error "Unknown platform: $platform"
+                return 1
+                ;;
+        esac
+    fi
 
     if [[ ! -f "$dockerfile" ]]; then
         log_error "Dockerfile not found: $dockerfile"

@@ -4,6 +4,7 @@ FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=0.15.1
+ARG BUILD_OPTIONS=""
 
 # Install system dependencies and OpenSSL for TLS
 RUN apt-get update && apt-get install -y \
@@ -37,11 +38,17 @@ case "$1" in\n\
 esac\n' > /usr/local/bin/platform-to-zig-target.sh \
     && chmod +x /usr/local/bin/platform-to-zig-target.sh
 
-# Build for FreeBSD target without TLS (cross-compile limitation)
+# Build for FreeBSD target
 # NOTE: Cross-compiling to FreeBSD from Linux with TLS requires FreeBSD sysroot/libraries
 RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Building for Zig target: $ZIG_TARGET (TLS disabled - cross-compile limitation)" && \
-    zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
+    echo "Building for Zig target: $ZIG_TARGET" && \
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        echo "Build options: $BUILD_OPTIONS" && \
+        zig build -Dtarget=$ZIG_TARGET $BUILD_OPTIONS; \
+    else \
+        echo "Using default: ReleaseSmall, TLS disabled (cross-compile limitation)" && \
+        zig build -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSmall -Dtls=false; \
+    fi
 
 # Run unit tests (cross-compiled, TLS disabled)
 # NOTE: Tests are skipped for cross-compiled FreeBSD binaries since they cannot run on Linux

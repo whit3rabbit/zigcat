@@ -7,6 +7,7 @@ FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=0.15.1
+ARG BUILD_OPTIONS=""
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -62,12 +63,22 @@ esac\n' > /usr/local/bin/platform-to-zig-target.sh \
 #       The faccessat2 syscall may fail with errno 38 (ENOSYS) on some platforms
 #       ARM64 builds work reliably, AMD64 builds may fail on Apple Silicon hosts
 #       See: https://github.com/ziglang/zig/issues/18180
-RUN echo "Building native musl binary with TLS (wolfSSL backend, static)" && \
-    zig build -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
+RUN echo "Building native musl binary" && \
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        echo "Build options: $BUILD_OPTIONS" && \
+        zig build $BUILD_OPTIONS --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    else \
+        echo "Using default: wolfSSL backend, static, ReleaseSmall" && \
+        zig build -Doptimize=ReleaseSmall -Dstatic=true -Dtls=true -Dtls-backend=wolfssl --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    fi
 
-# Run unit tests (native, TLS enabled with wolfSSL, static)
-RUN echo "Running native tests with TLS (wolfSSL backend, static)" && \
-    zig build test -Drelease=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
+# Run unit tests
+RUN echo "Running native tests" && \
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        zig build test $BUILD_OPTIONS --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    else \
+        zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=true -Dtls-backend=wolfssl --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    fi
 
 # Export stage for artifacts
 FROM scratch AS artifacts

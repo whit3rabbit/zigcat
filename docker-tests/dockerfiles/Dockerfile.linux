@@ -7,6 +7,7 @@ FROM ubuntu:20.04 AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=0.15.1
+ARG BUILD_OPTIONS=""
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -70,13 +71,23 @@ RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR" && \
 #       ARM64 builds work reliably, AMD64 builds may fail on Apple Silicon hosts
 #       See: https://github.com/ziglang/zig/issues/18180
 RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Building for Zig target: $ZIG_TARGET with TLS enabled" && \
-    zig build -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
+    echo "Building for Zig target: $ZIG_TARGET" && \
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        echo "Build options: $BUILD_OPTIONS" && \
+        zig build -Dtarget=$ZIG_TARGET $BUILD_OPTIONS --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    else \
+        echo "Using default build options: -Doptimize=ReleaseSmall -Dtls=true" && \
+        zig build -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSmall -Dtls=true --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    fi
 
 # Run unit tests
 RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
-    echo "Running tests for Zig target: $ZIG_TARGET with TLS enabled" && \
-    zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=true --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
+    echo "Running tests for Zig target: $ZIG_TARGET" && \
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        zig build test -Dtarget=$ZIG_TARGET $BUILD_OPTIONS --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    else \
+        zig build test -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSmall -Dtls=true --cache-dir "$ZIG_LOCAL_CACHE_DIR" --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"; \
+    fi
 
 # Export stage for artifacts
 FROM scratch AS artifacts
@@ -91,6 +102,7 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     curl \
     wget \
+    xz-utils \
     bc \
     procps \
     iproute2 \
