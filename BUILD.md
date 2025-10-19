@@ -1,6 +1,12 @@
 # Building ZigCat
 
-These instructions cover all supported build workflows. Downloadable release binaries are published on the project's Releases page; follow the steps below only if you want to build from source.
+**Quick Navigation:**
+- **Just want to build locally?** See [Using the Makefile](#using-the-makefile-recommended) or [Using Zig build directly](#using-zig-build-directly)
+- **Creating a release with packages?** See **[docs/RELEASING.md](docs/RELEASING.md)** for complete release workflow
+- **Need cross-platform testing?** See [Docker cross-platform testing](#docker-cross-platform-testing)
+- **Want TLS support?** See [TLS/SSL builds](#tlsssl-builds)
+
+These instructions cover all supported build workflows for development and testing. Downloadable release binaries are published on the project's Releases page; follow the steps below only if you want to build from source.
 
 ## Using the Makefile (recommended)
 
@@ -76,126 +82,52 @@ Package metadata lives under `docs/packaging/`.
 
 ## Building Releases Locally (via Docker)
 
-ZigCat includes a comprehensive release build system that uses Docker to build production-ready artifacts for multiple platforms and configurations locally, without relying on CI/CD.
+ZigCat includes a comprehensive release build system for creating production-ready packages (tarballs, .deb, .rpm) across multiple platforms.
 
-### Quick Start
+**For complete release workflow documentation, see [docs/RELEASING.md](docs/RELEASING.md)**.
+
+### Quick Reference
 
 ```bash
-# Build all release artifacts (Linux, Alpine, FreeBSD)
-make release-all
+# Build complete v0.0.1 release (all platforms + packages)
+make release-v0.0.1
+
+# Build all platforms without packaging
+make release-build
 
 # Build specific variants
 make release-linux      # All Linux variants (glibc+TLS, musl static)
 make release-alpine     # Alpine musl+wolfSSL (~835KB smallest)
 make release-bsd        # FreeBSD cross-compiled
-make release-macos      # macOS (requires native macOS)
 ```
 
-### Release Build Matrix
+### What You Get
 
-| **Variant** | **Arch** | **Libc** | **TLS** | **Linking** | **Size** |
-|-------------|----------|----------|---------|-------------|----------|
-| Linux glibc | x64, arm64 | glibc | OpenSSL | Dynamic | ~2.0-2.2 MB |
-| Linux musl | x64, arm64, x86, arm | musl | None | Static | ~1.6-1.8 MB |
-| **Alpine wolfSSL** | x64, arm64 | musl | wolfSSL | Static | **~835 KB** ✨ |
-| FreeBSD | x64 | N/A | None | Cross-compiled | ~1.8 MB |
-| macOS | x64, arm64 | N/A | OpenSSL | Native only | ~2.0 MB |
+The release system builds:
+- **Linux glibc + OpenSSL**: Dynamic, ~2-6 MB, requires libssl3
+- **Linux musl static**: Static, ~2 MB, zero dependencies, no TLS
+- **Alpine musl + wolfSSL**: Static, ~835 KB, TLS support, GPLv2 license
+- **FreeBSD**: Cross-compiled, ~300 KB, no TLS
 
-### Features
-
-- ✅ **Complete platform coverage**: Linux (glibc, musl), Alpine (wolfSSL), FreeBSD, macOS
-- ✅ **Multiple TLS options**: OpenSSL (default), wolfSSL (smallest), or no TLS (maximum portability)
-- ✅ **Automatic packaging**: Creates properly named tarballs with LICENSE, README
-- ✅ **Checksums**: Generates SHA256SUMS for artifact verification
-- ✅ **Validation**: Smoke tests all binaries before release
-- ✅ **Version management**: Auto-detects version from build.zig
-
-### Artifact Structure
-
-Release artifacts are organized by version:
-
-```
-docker-tests/artifacts/releases/
-└── v0.1.0/
-    ├── zigcat-v0.1.0-linux-x64-glibc-openssl.tar.gz
-    ├── zigcat-v0.1.0-linux-x64-musl-static.tar.gz
-    ├── zigcat-v0.1.0-alpine-x64-musl-wolfssl-static.tar.gz (smallest!)
-    ├── zigcat-v0.1.0-freebsd-x64.tar.gz
-    ├── SHA256SUMS
-    └── RELEASE_NOTES.md
-```
+Plus packages:
+- Tarballs with gzip -9 compression
+- .deb packages (Debian/Ubuntu)
+- .rpm packages (RHEL/Fedora)
+- SHA256SUMS checksums
 
 ### Prerequisites
 
-- Docker (version 20.10.6+ recommended)
-- yq (YAML processor): `brew install yq` (macOS) or `apt install yq` (Ubuntu)
+- Docker 20.10.6+ (for cross-platform builds)
 - Make (usually pre-installed)
 
 ### Complete Documentation
 
-For detailed release build documentation, see **[RELEASE_BUILDS.md](RELEASE_BUILDS.md)**, which covers:
-- Complete build matrix and platform details
-- Advanced configuration options
-- Platform-specific notes (Alpine, FreeBSD, macOS)
+**[docs/RELEASING.md](docs/RELEASING.md)** covers:
+- Step-by-step release workflow
+- Platform matrix and build options
+- Package creation (.deb, .rpm)
 - Troubleshooting guide
-- Complete release workflow
-
-### Example Workflow
-
-```bash
-# 1. Build all release artifacts
-make release-all
-
-# 2. Validate binaries
-make release-validate
-
-# 3. Generate checksums
-make release-checksums
-
-# 4. Review artifacts
-ls -lh docker-tests/artifacts/releases/v*/
-
-# 5. Upload to GitHub releases
-```
-
-### Makefile Targets
-
-```bash
-make release-all        # Build all variants (Linux, Alpine, BSD)
-make release-linux      # Linux glibc + musl only
-make release-alpine     # Alpine wolfSSL (smallest ~835KB)
-make release-bsd        # FreeBSD cross-compiled
-make release-macos      # macOS native builds (requires macOS)
-make release-package    # Package artifacts into tarballs
-make release-checksums  # Generate SHA256SUMS
-make release-validate   # Smoke test all binaries
-make release-clean      # Clean release artifacts
-```
-
-### Why Docker-based Builds?
-
-- **Reproducible**: Same environment every time
-- **Cross-compilation**: Build for any platform from macOS/Linux
-- **No local dependencies**: All TLS libraries in containers
-- **CI/CD parity**: Same builds locally and in CI
-
-### Platform Notes
-
-**Alpine wolfSSL (Smallest Build)**:
-- Only ~835KB with full TLS support
-- Uses wolfSSL (GPLv2 license)
-- Requires custom seccomp profile for Docker builds
-- See `docker-tests/DOCKER_BUILD_ERRORS.md` for troubleshooting
-
-**FreeBSD**:
-- Cross-compiled from Linux (NO TLS)
-- For TLS support, build natively on FreeBSD
-
-**macOS**:
-- Requires native macOS system (not Docker)
-- Cannot be cross-compiled due to Apple licensing
-
-For complete details, troubleshooting, and advanced usage, see **[RELEASE_BUILDS.md](RELEASE_BUILDS.md)**.
+- GitHub release upload instructions
 
 ## Docker cross-platform testing
 

@@ -234,6 +234,40 @@ clean:
 # Release Build Targets (via docker-tests system)
 # ==============================================================================
 
+# Build complete v0.0.1 release (all steps: build + package + checksums)
+release-v0.0.1:
+	@echo "Building complete v0.0.1 release..."
+	./docker-tests/scripts/build-release-v2.sh --version v0.0.1 --continue-on-error --verbose
+	./docker-tests/scripts/package-release.sh --version v0.0.1 --compression 9 --create-deb --create-rpm --verbose
+	./docker-tests/scripts/generate-checksums.sh --release-dir docker-tests/artifacts/releases/v0.0.1 --verbose
+	./docker-tests/scripts/validate-releases.sh --release-dir docker-tests/artifacts/releases/v0.0.1 --verbose
+	@echo ""
+	@echo "✅ v0.0.1 release complete!"
+	@echo "📦 Artifacts: docker-tests/artifacts/releases/v0.0.1/"
+
+# Build all release binaries only (no packaging)
+release-build:
+	@echo "Building all release binaries..."
+	./docker-tests/scripts/build-release-v2.sh --version v0.0.1 --continue-on-error --verbose
+
+# Package existing artifacts into tarballs, deb, and rpm
+release-package:
+	@echo "Packaging release artifacts..."
+	./docker-tests/scripts/package-release.sh \
+		--version v0.0.1 \
+		--compression 9 \
+		--create-deb \
+		--create-rpm \
+		--verbose
+
+# Create tarballs only (no deb/rpm)
+release-tarballs:
+	@echo "Creating release tarballs..."
+	./docker-tests/scripts/package-release.sh \
+		--version v0.0.1 \
+		--compression 9 \
+		--verbose
+
 # Build all release artifacts (Linux glibc, musl, Alpine wolfSSL, FreeBSD)
 release-all:
 	@echo "Building all release artifacts..."
@@ -276,18 +310,11 @@ release-macos:
 		--native \
 		--verbose
 
-# Package existing artifacts into tarballs
-release-package:
-	@echo "Packaging release artifacts..."
-	./docker-tests/scripts/package-artifacts.sh \
-		--artifacts-dir docker-tests/artifacts \
-		--verbose
-
 # Generate SHA256 checksums
 release-checksums:
 	@echo "Generating SHA256 checksums..."
-	@if [ -z "$$(ls -A docker-tests/artifacts/releases/*/zigcat-*.tar.gz 2>/dev/null)" ]; then \
-		echo "ERROR: No release tarballs found. Run 'make release-all' first."; \
+	@if [ -z "$$(ls -A docker-tests/artifacts/releases/*/tarballs/*.tar.gz 2>/dev/null)" ]; then \
+		echo "ERROR: No release tarballs found. Run 'make release-build' and 'make release-package' first."; \
 		exit 1; \
 	fi
 	./docker-tests/scripts/generate-checksums.sh \
@@ -298,8 +325,27 @@ release-checksums:
 release-validate:
 	@echo "Validating release binaries..."
 	./docker-tests/scripts/validate-releases.sh \
-		--artifacts-dir docker-tests/artifacts \
+		--release-dir "$$(ls -d docker-tests/artifacts/releases/v* | head -1)" \
 		--verbose
+
+# Print release summary
+release-summary:
+	@echo "Release Summary:"
+	@echo "================"
+	@if [ -d "docker-tests/artifacts/releases/v0.0.1" ]; then \
+		echo ""; \
+		echo "Tarballs:"; \
+		find docker-tests/artifacts/releases/v0.0.1/tarballs -name "*.tar.gz" -exec du -h {} \; 2>/dev/null || echo "  No tarballs found"; \
+		echo ""; \
+		echo "Debian Packages:"; \
+		find docker-tests/artifacts/releases/v0.0.1/deb -name "*.deb" -exec du -h {} \; 2>/dev/null || echo "  No .deb packages found"; \
+		echo ""; \
+		echo "RPM Packages:"; \
+		find docker-tests/artifacts/releases/v0.0.1/rpm -name "*.rpm" -exec du -h {} \; 2>/dev/null || echo "  No .rpm packages found"; \
+		echo ""; \
+	else \
+		echo "No v0.0.1 release found. Run 'make release-v0.0.1'"; \
+	fi
 
 # Clean release artifacts
 release-clean:

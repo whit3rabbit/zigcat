@@ -1,5 +1,17 @@
-zigcat (0.1.0-1) unstable; urgency=medium
+zigcat (0.0.1-1) unstable; urgency=medium
 
-  * Initial release.
+  * Initial release v0.0.1
+  * Core networking: TCP/UDP/SCTP/Unix sockets with dual-stack IPv4/IPv6
+  * TLS/DTLS support with OpenSSL and wolfSSL backends
+  * GSocket NAT traversal with SRP encryption
+  * Telnet protocol support (RFC 854/855/856/857/858/1073/1079/1091/1143/1184)
+  * Port scanning with zero-I/O mode (parallel/sequential)
+  * Exec mode with io_uring/poll backends
+  * Broker and chat relay modes
+  * IP access control (allowlist/denylist with CIDR)
+  * Modular architecture with 10 client modules
+  * Automatic exec backend selection (io_uring on Linux 5.1+)
+  * Flow control with backpressure management
+  * Cross-platform support (Linux, FreeBSD, macOS, Windows)
 
- -- Whit3Rabbit <whiterabbit@protonmail.com>  Fri, 10 Oct 2025 06:31:36 -0500
+ -- Whit3Rabbit <whiterabbit@protonmail.com>  Sat, 19 Oct 2025 14:12:00 -0500

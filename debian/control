@@ -10,12 +10,20 @@ Build-Depends:
 Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Homepage: https://github.com/whit3rabbit/zigcat
+Vcs-Browser: https://github.com/whit3rabbit/zigcat
+Vcs-Git: https://github.com/whit3rabbit/zigcat.git
 
 Package: zigcat
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: modern netcat clone written in Zig
- Zigcat provides TCP and UDP client/server helpers, TLS support, proxy
- awareness, and timeout-aware I/O in a compact standalone binary. It aims
- to be a drop-in replacement for traditional netcat utilities while adding
- cross-platform features and stricter error handling.
+Depends: ${shlibs:Depends}, ${misc:Depends}, libssl3 (>= 3.0.0)
+Description: modern netcat clone written in Zig with TLS support
+ Zigcat provides TCP and UDP client/server helpers, TLS/DTLS support, proxy
+ awareness, GSocket NAT traversal, Telnet protocol support, and timeout-aware
+ I/O in a compact standalone binary.
+ .
+ It aims to be a drop-in replacement for traditional netcat utilities while
+ adding cross-platform features, security enhancements, and stricter error
+ handling.
+ .
+ This package includes the OpenSSL-enabled dynamic binary with full TLS/DTLS
+ and GSocket support.
