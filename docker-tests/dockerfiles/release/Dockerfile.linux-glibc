@@ -10,6 +10,7 @@ FROM --platform=$TARGETPLATFORM ubuntu:22.04 AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=0.15.1
+ARG BUILD_OPTIONS=""
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -21,10 +22,10 @@ RUN apt-get update && apt-get install -y \
 
 # Install Zig compiler (architecture-aware)
 RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
-    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
-    tar -xf zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz && \
-    mv zig-linux-${ARCH}-${ZIG_VERSION} /opt/zig && \
-    rm zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
@@ -56,7 +57,13 @@ RUN --mount=type=cache,target=/build/.zig-cache \
     --mount=type=cache,target=/tmp/zig-global-cache \
     ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
     echo "Building for target: $ZIG_TARGET (platform: $TARGETPLATFORM)" && \
-    zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dtls=true -Dtls-backend=openssl
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        echo "Build options: $BUILD_OPTIONS" && \
+        zig build -Dtarget="$ZIG_TARGET" $BUILD_OPTIONS; \
+    else \
+        echo "Using default: ReleaseSmall, strip, OpenSSL TLS" && \
+        zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dtls=true -Dtls-backend=openssl; \
+    fi
 
 # Run unit tests (skip for cross-compilation)
 RUN --mount=type=cache,target=/build/.zig-cache \
@@ -68,8 +75,12 @@ RUN --mount=type=cache,target=/build/.zig-cache \
         *) echo "unknown";; \
     esac) && \
     if [ "$ZIG_TARGET" = "$NATIVE_TARGET" ]; then \
-        echo "Running native tests with OpenSSL TLS (dynamic)" && \
-        zig build test -Doptimize=ReleaseSmall -Dtls=true -Dtls-backend=openssl; \
+        echo "Running native tests" && \
+        if [ -n "$BUILD_OPTIONS" ]; then \
+            zig build test $BUILD_OPTIONS; \
+        else \
+            zig build test -Doptimize=ReleaseSmall -Dtls=true -Dtls-backend=openssl; \
+        fi; \
     else \
         echo "Skipping tests for cross-compilation (target: $ZIG_TARGET, native: $NATIVE_TARGET)"; \
     fi
@@ -89,7 +100,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     wget \
     file \
-    ldd \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

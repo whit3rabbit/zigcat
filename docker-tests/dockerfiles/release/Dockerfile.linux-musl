@@ -10,6 +10,7 @@ FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=0.15.1
+ARG BUILD_OPTIONS=""
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -20,7 +21,7 @@ RUN apk add --no-cache \
 
 # Install Zig compiler (architecture-aware)
 # Map machine architecture to Zig download architecture
-# Note: x86 and arm use different naming pattern (zig-ARCH-linux vs zig-linux-ARCH)
+# All Zig downloads use zig-{ARCH}-linux format
 RUN ARCH=$(case "$(uname -m)" in \
         x86_64) echo "x86_64";; \
         aarch64) echo "aarch64";; \
@@ -29,11 +30,7 @@ RUN ARCH=$(case "$(uname -m)" in \
         *) echo "x86_64";; \
     esac) && \
     echo "Detected architecture: $(uname -m), using Zig arch: ${ARCH}" && \
-    if [ "$ARCH" = "x86" ] || [ "$ARCH" = "arm" ]; then \
-        ZIG_FILE="zig-${ARCH}-linux-${ZIG_VERSION}"; \
-    else \
-        ZIG_FILE="zig-linux-${ARCH}-${ZIG_VERSION}"; \
-    fi && \
+    ZIG_FILE="zig-${ARCH}-linux-${ZIG_VERSION}" && \
     echo "Downloading: ${ZIG_FILE}.tar.xz" && \
     wget -q https://ziglang.org/download/${ZIG_VERSION}/${ZIG_FILE}.tar.xz && \
     tar -xf ${ZIG_FILE}.tar.xz && \
@@ -72,7 +69,13 @@ RUN --mount=type=cache,target=/build/.zig-cache \
     --mount=type=cache,target=/tmp/zig-global-cache \
     ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
     echo "Building for target: $ZIG_TARGET (platform: $TARGETPLATFORM)" && \
-    zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=false
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        echo "Build options: $BUILD_OPTIONS" && \
+        zig build -Dtarget="$ZIG_TARGET" $BUILD_OPTIONS; \
+    else \
+        echo "Using default: ReleaseSmall, strip, static, no TLS" && \
+        zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=false; \
+    fi
 
 # Run unit tests (skip for cross-compilation)
 RUN --mount=type=cache,target=/build/.zig-cache \
@@ -84,8 +87,12 @@ RUN --mount=type=cache,target=/build/.zig-cache \
         *) echo "unknown";; \
     esac) && \
     if [ "$ZIG_TARGET" = "$NATIVE_TARGET" ]; then \
-        echo "Running native tests (NO TLS, static)" && \
-        zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=false; \
+        echo "Running native tests" && \
+        if [ -n "$BUILD_OPTIONS" ]; then \
+            zig build test $BUILD_OPTIONS; \
+        else \
+            zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=false; \
+        fi; \
     else \
         echo "Skipping tests for cross-compilation (target: $ZIG_TARGET, native: $NATIVE_TARGET)"; \
     fi
