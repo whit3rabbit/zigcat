@@ -34,6 +34,9 @@ VALIDATE_BINARIES=true
 SUCCESSFUL_BUILDS=()
 FAILED_BUILDS=()
 SKIPPED_BUILDS=()
+DEFAULT_ZIG_VERSION="0.15.1"
+ZIG_VERSION_OVERRIDE="${ZIG_VERSION_OVERRIDE:-${ZIG_VERSION:-}}"
+ZIG_RELEASE_VERSION=""
 
 # Build matrix - explicit platform definitions
 declare -A BUILD_MATRIX
@@ -83,6 +86,106 @@ log_debug() {
     fi
 }
 
+# Determine Zig compiler version to use for Docker builds.
+# Respects ZIG_VERSION_OVERRIDE / ZIG_VERSION environment variables or --zig-version flag.
+detect_zig_version() {
+    if [[ -n "$ZIG_RELEASE_VERSION" ]]; then
+        return 0
+    fi
+
+    if [[ -n "$ZIG_VERSION_OVERRIDE" ]]; then
+        ZIG_RELEASE_VERSION="$ZIG_VERSION_OVERRIDE"
+        log_info "Using Zig version override: $ZIG_RELEASE_VERSION"
+        return 0
+    fi
+
+    log_step "Detecting latest Zig compiler version..."
+
+    local downloader=""
+    if command -v curl >/dev/null 2>&1; then
+        downloader="curl -fsSL"
+    elif command -v wget >/dev/null 2>&1; then
+        downloader="wget -qO-"
+    else
+        log_warn "  Neither curl nor wget available; falling back to default ${DEFAULT_ZIG_VERSION}"
+        ZIG_RELEASE_VERSION="$DEFAULT_ZIG_VERSION"
+        return 0
+    fi
+
+    local index_json=""
+    if ! index_json=$($downloader https://ziglang.org/download/index.json 2>/dev/null); then
+        log_warn "  Failed to download Zig index; falling back to ${DEFAULT_ZIG_VERSION}"
+        ZIG_RELEASE_VERSION="$DEFAULT_ZIG_VERSION"
+        return 0
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        log_warn "  python3 not found; falling back to ${DEFAULT_ZIG_VERSION}"
+        ZIG_RELEASE_VERSION="$DEFAULT_ZIG_VERSION"
+        return 0
+    fi
+
+    local latest_version=""
+    latest_version=$(printf '%s' "$index_json" | python3 - <<'PY' 2>/dev/null
+import json, sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+def emit(ver):
+    if isinstance(ver, str) and ver:
+        print(ver)
+        sys.exit(0)
+
+stable = data.get("stable")
+if isinstance(stable, dict):
+    stable = stable.get("version")
+emit(stable)
+
+candidates = []
+for key, value in data.items():
+    if key in ("master", "_meta", "stable"):
+        continue
+    if isinstance(value, dict):
+        ver = value.get("version") or key
+    else:
+        ver = key
+    if isinstance(ver, str) and ver[0].isdigit():
+        candidates.append(ver)
+
+if not candidates:
+    sys.exit(1)
+
+def parse(ver):
+    main, _, suffix = ver.partition('-')
+    parts = []
+    for piece in main.split('.'):
+        try:
+            parts.append(int(piece))
+        except ValueError:
+            parts.append(0)
+    if len(parts) < 3:
+        parts += [0] * (3 - len(parts))
+    return parts, suffix != "", suffix
+
+candidates.sort(key=parse)
+print(candidates[-1])
+PY
+) || true
+
+    if [[ -z "$latest_version" ]]; then
+        log_warn "  Unable to determine latest Zig version; falling back to ${DEFAULT_ZIG_VERSION}"
+        ZIG_RELEASE_VERSION="$DEFAULT_ZIG_VERSION"
+        return 0
+    fi
+
+    ZIG_RELEASE_VERSION="$latest_version"
+    log_info "Detected Zig compiler version: $ZIG_RELEASE_VERSION"
+    return 0
+}
+
 # Print usage
 usage() {
     cat << EOF
@@ -94,6 +197,7 @@ Build complete release artifacts with descriptive names and continue-on-error
 OPTIONS:
     -c, --config FILE          YAML configuration file (optional, uses hardcoded BUILD_MATRIX if not specified)
     -v, --version VERSION      Release version (e.g., v0.0.1, auto-detected from build.zig if not specified)
+    --zig-version VERSION      Override Zig compiler version (default: latest stable)
     --continue-on-error        Continue building if individual platforms fail (default: true)
     --stop-on-error            Stop if any platform fails
     --skip-build               Skip build phase (use existing artifacts)
@@ -158,6 +262,10 @@ parse_args() {
                 ;;
             -v|--version)
                 VERSION="$2"
+                shift 2
+                ;;
+            --zig-version)
+                ZIG_VERSION_OVERRIDE="$2"
                 shift 2
                 ;;
             --continue-on-error)
@@ -404,6 +512,7 @@ build_platform() {
     log_debug "  Platform: $platform, Arch: $arch"
     log_debug "  Zig Target: $zig_target"
     log_debug "  Build Options: $build_opts"
+    log_debug "  Zig Version: ${ZIG_RELEASE_VERSION:-unknown}"
     log_debug "  Suffix: $suffix"
     log_debug "  Dockerfile: ${config_dockerfile:-default}"
 
@@ -465,11 +574,19 @@ build_platform() {
     local build_args=(
         "--platform" "$docker_platform"
         "--build-arg" "ZIG_TARGET=$zig_target"
+        "--build-arg" "ZIG_VERSION=$ZIG_RELEASE_VERSION"
+        "--build-arg" "DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION"
         "--build-arg" "BUILD_OPTIONS=$build_opts"
         "-f" "$dockerfile"
         "-t" "zigcat-builder-${build_id}:latest"
         "$PROJECT_ROOT"
     )
+
+    local seccomp_profile="$PROJECT_ROOT/docker-tests/seccomp/zig-builder.json"
+    if [[ -f "$seccomp_profile" ]]; then
+        build_args=( "--security-opt" "seccomp=$seccomp_profile" "${build_args[@]}" )
+        log_debug "  Using seccomp profile: $seccomp_profile"
+    fi
 
     log_debug "  Docker build command: docker build ${build_args[*]}"
 
@@ -492,8 +609,27 @@ build_platform() {
         binary_name="zigcat-wolfssl"
     fi
 
-    if ! docker cp "$container_id:/app/zig-out/bin/$binary_name" "$artifact_dir/zigcat" 2>> "$log_file"; then
-        log_error "  Failed to extract binary"
+    local candidate_paths=(
+        "/app/zig-out/bin/$binary_name"
+        "/build/zig-out/bin/$binary_name"
+        "/usr/local/bin/$binary_name"
+        "/bin/$binary_name"
+    )
+
+    local copied=false
+    for candidate in "${candidate_paths[@]}"; do
+        rm -f "$artifact_dir/zigcat"
+        if docker cp "$container_id:$candidate" "$artifact_dir/zigcat" > /dev/null 2>> "$log_file"; then
+            log_debug "  Extracted binary from $candidate"
+            copied=true
+            break
+        else
+            log_debug "  Binary not at $candidate"
+        fi
+    done
+
+    if [[ "$copied" != true ]]; then
+        log_error "  Failed to extract binary (searched: ${candidate_paths[*]})"
         docker rm "$container_id" > /dev/null 2>&1
         FAILED_BUILDS+=("$build_id")
         return 1
@@ -510,7 +646,8 @@ build_platform() {
 PLATFORM=$platform
 ARCH=$arch
 ZIG_TARGET=$zig_target
-BUILD_OPTIONS=$build_opts
+BUILD_OPTIONS="$build_opts"
+ZIG_VERSION=$ZIG_RELEASE_VERSION
 SUFFIX=$suffix
 BUILD_ID=$build_id
 EOF
@@ -569,6 +706,7 @@ generate_build_report() {
         echo "# ZigCat Build Report - $VERSION"
         echo ""
         echo "**Build Date:** $timestamp"
+        echo "**Zig Compiler:** $ZIG_RELEASE_VERSION"
         echo "**Continue on Error:** $CONTINUE_ON_ERROR"
         echo "**Build Timeout:** ${BUILD_TIMEOUT}s"
         echo ""
@@ -653,6 +791,7 @@ print_summary() {
     echo "  ZigCat Build Summary - $VERSION"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    echo "  Zig Compiler:      $ZIG_RELEASE_VERSION"
     echo "  Total Platforms:    ${#BUILD_MATRIX[@]}"
     echo "  Successful:         ${#SUCCESSFUL_BUILDS[@]}"
     echo "  Failed:             ${#FAILED_BUILDS[@]}"
@@ -704,8 +843,12 @@ main() {
     # Detect version if not specified
     detect_version || exit 1
 
+    # Determine Zig compiler version (latest stable unless overridden)
+    detect_zig_version
+
     log_info "Version: $VERSION"
     log_info "Continue on Error: $CONTINUE_ON_ERROR"
+    log_info "Zig Compiler: ${ZIG_RELEASE_VERSION:-$DEFAULT_ZIG_VERSION}"
     if [[ -n "$CONFIG_FILE" ]]; then
         log_info "Config File: $CONFIG_FILE"
     fi

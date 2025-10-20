@@ -9,7 +9,8 @@ FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-ARG ZIG_VERSION=0.15.1
+ARG ZIG_VERSION=latest
+ARG DEFAULT_ZIG_VERSION=0.15.1
 ARG BUILD_OPTIONS=""
 
 # Install system dependencies
@@ -19,22 +20,28 @@ RUN apk add --no-cache \
     ca-certificates \
     bash
 
+# Install Zig version resolver helper
+COPY docker-tests/scripts/resolve-zig-version.sh /usr/local/bin/resolve-zig-version
+RUN chmod +x /usr/local/bin/resolve-zig-version
+
 # Install Zig compiler (architecture-aware)
 # Map machine architecture to Zig download architecture
 # All Zig downloads use zig-{ARCH}-linux format
-RUN ARCH=$(case "$(uname -m)" in \
+RUN set -eux; \
+    ARCH=$(case "$(uname -m)" in \
         x86_64) echo "x86_64";; \
         aarch64) echo "aarch64";; \
         i686|i386) echo "x86";; \
         armv7*|armhf) echo "arm";; \
         *) echo "x86_64";; \
-    esac) && \
-    echo "Detected architecture: $(uname -m), using Zig arch: ${ARCH}" && \
-    ZIG_FILE="zig-${ARCH}-linux-${ZIG_VERSION}" && \
-    echo "Downloading: ${ZIG_FILE}.tar.xz" && \
-    wget -q https://ziglang.org/download/${ZIG_VERSION}/${ZIG_FILE}.tar.xz && \
-    tar -xf ${ZIG_FILE}.tar.xz && \
-    mv ${ZIG_FILE} /opt/zig && \
+    esac); \
+    echo "Detected architecture: $(uname -m), using Zig arch: ${ARCH}"; \
+    ZIG_ACTUAL=$(DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION resolve-zig-version "$ZIG_VERSION"); \
+    ZIG_FILE="zig-${ARCH}-linux-${ZIG_ACTUAL}"; \
+    echo "Downloading Zig ${ZIG_ACTUAL}: ${ZIG_FILE}.tar.xz"; \
+    wget -q https://ziglang.org/download/${ZIG_ACTUAL}/${ZIG_FILE}.tar.xz; \
+    tar -xf ${ZIG_FILE}.tar.xz; \
+    mv ${ZIG_FILE} /opt/zig; \
     rm ${ZIG_FILE}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"

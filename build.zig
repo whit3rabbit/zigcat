@@ -140,7 +140,12 @@ pub fn build(b: *std.Build) void {
     // - `standardTargetOptions` configures cross-compilation targets (e.g., `x86_64-linux-gnu`).
     // - `standardOptimizeOption` controls optimization levels (`ReleaseSmall`, `Debug`, etc.).
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{
+    const optimize_override = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size",
+    );
+    const optimize = optimize_override orelse b.standardOptimizeOption(.{
         .preferred_optimize_mode = .ReleaseSmall,
     });
 

@@ -1,5 +1,6 @@
 # Ignore build artifacts and cache
 .zig-cache/
+zig-cache/
 zig-out/
 *.o
 *.a

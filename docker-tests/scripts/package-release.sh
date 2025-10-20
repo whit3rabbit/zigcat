@@ -243,8 +243,21 @@ create_tarball() {
 
     # Check if build metadata exists (from build-release.sh)
     if [[ -f "$artifact_dir/.build-meta" ]]; then
-        # Read metadata file
-        source "$artifact_dir/.build-meta"
+        # Normalize metadata for shell sourcing (handle legacy unquoted values)
+        local meta_normalized
+        meta_normalized=$(mktemp)
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" == BUILD_OPTIONS=* ]] && [[ "$line" != BUILD_OPTIONS=\"*\" ]]; then
+                local value="${line#BUILD_OPTIONS=}"
+                printf 'BUILD_OPTIONS="%s"\n' "$value" >> "$meta_normalized"
+            else
+                printf '%s\n' "$line" >> "$meta_normalized"
+            fi
+        done < "$artifact_dir/.build-meta"
+
+        # shellcheck disable=SC1090
+        source "$meta_normalized"
+        rm -f "$meta_normalized"
         log_debug "  Loaded metadata from .build-meta: platform=$PLATFORM arch=$ARCH suffix=$SUFFIX"
 
         platform="$PLATFORM"

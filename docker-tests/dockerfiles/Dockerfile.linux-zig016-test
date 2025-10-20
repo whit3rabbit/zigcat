@@ -6,8 +6,8 @@ FROM ubuntu:20.04 AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
-ARG ZIG_VERSION=latest
-ARG DEFAULT_ZIG_VERSION=0.15.1
+ARG ZIG_VERSION=0.16.0-dev.747+493ad58ff
+ARG DEFAULT_ZIG_VERSION=0.16.0-dev.747+493ad58ff
 ARG BUILD_OPTIONS=""
 
 # Install system dependencies
@@ -30,19 +30,12 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone &
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Zig version resolver helper
-COPY docker-tests/scripts/resolve-zig-version.sh /usr/local/bin/resolve-zig-version
-RUN chmod +x /usr/local/bin/resolve-zig-version
-
 # Install Zig compiler (architecture-aware)
-RUN set -eux; \
-    ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac); \
-    ZIG_ACTUAL=$(DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION resolve-zig-version "$ZIG_VERSION"); \
-    echo "Using Zig version ${ZIG_ACTUAL}"; \
-    wget -q https://ziglang.org/download/${ZIG_ACTUAL}/zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
-    tar -xf zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
-    mv zig-${ARCH}-linux-${ZIG_ACTUAL} /opt/zig; \
-    rm zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
@@ -125,18 +118,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Zig for test execution (architecture-aware)
-ARG ZIG_VERSION=latest
-ARG DEFAULT_ZIG_VERSION=0.15.1
-COPY --from=builder /usr/local/bin/resolve-zig-version /usr/local/bin/resolve-zig-version
-RUN chmod +x /usr/local/bin/resolve-zig-version
-RUN set -eux; \
-    ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac); \
-    ZIG_ACTUAL=$(DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION resolve-zig-version "$ZIG_VERSION"); \
-    echo "Using Zig version ${ZIG_ACTUAL}"; \
-    wget -q https://ziglang.org/download/${ZIG_ACTUAL}/zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
-    tar -xf zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
-    mv zig-${ARCH}-linux-${ZIG_ACTUAL} /opt/zig; \
-    rm zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz
+ARG ZIG_VERSION=0.16.0-dev.747+493ad58ff
+ARG DEFAULT_ZIG_VERSION=0.16.0-dev.747+493ad58ff
+RUN ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac) && \
+    wget -q https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    tar -xf zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz && \
+    mv zig-${ARCH}-linux-${ZIG_VERSION} /opt/zig && \
+    rm zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz
 
 ENV PATH="/opt/zig:$PATH"
 
