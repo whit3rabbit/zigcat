@@ -417,7 +417,17 @@ fn loadRulesFromFile(
     defer file.close();
 
     const max_file_size = 1024 * 1024; // 1MB max
-    const content = try file.readToEndAllocOptions(allocator, max_file_size, null, .of(u8), null);
+    // Zig 0.16.0-dev: Use reader().readAllAlloc()
+    // Zig 0.15.1: Use readToEndAlloc() or readToEndAllocOptions()
+    const content = blk: {
+        if (@hasDecl(std.fs.File, "readToEndAlloc")) {
+            // Zig 0.15.1 path
+            break :blk try file.readToEndAlloc(allocator, max_file_size);
+        } else {
+            // Zig 0.16.0-dev path - use reader
+            break :blk try file.reader().readAllAlloc(allocator, max_file_size);
+        }
+    };
     defer allocator.free(content);
 
     var line_iter = std.mem.splitScalar(u8, content, '\n');
