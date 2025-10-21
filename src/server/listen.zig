@@ -417,7 +417,7 @@ fn loadRulesFromFile(
     defer file.close();
 
     const max_file_size = 1024 * 1024; // 1MB max
-    const content = try file.readToEndAlloc(allocator, max_file_size);
+    const content = try file.readToEndAllocOptions(allocator, max_file_size, null, .of(u8), null);
     defer allocator.free(content);
 
     var line_iter = std.mem.splitScalar(u8, content, '\n');

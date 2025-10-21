@@ -146,7 +146,7 @@ pub fn dropPrivileges(target_user: []const u8) !void {
 
     // Verify supplementary groups were cleared
     var group_buf: [32]c.gid_t = undefined;
-    const ngroups = c.getgroups(group_buf.len, &group_buf);
+    const ngroups = c.getgroups(@intCast(group_buf.len), &group_buf);
 
     logging.log(1, "✓ Privileges dropped successfully:\n", .{});
     logging.log(1, "  User: {s}\n", .{target_user});
