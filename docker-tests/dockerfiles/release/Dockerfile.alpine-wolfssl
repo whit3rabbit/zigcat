@@ -8,8 +8,8 @@
 #     --security-opt seccomp=docker-tests/seccomp/zig-builder.json \
 #     -f docker-tests/dockerfiles/release/Dockerfile.alpine-wolfssl .
 
-ARG BASE_IMAGE=alpine:3.18
-ARG RUNTIME_BASE_IMAGE=alpine:3.18
+ARG BASE_IMAGE=alpine:edge
+ARG RUNTIME_BASE_IMAGE=alpine:edge
 FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS builder
 
 ARG TARGETPLATFORM
@@ -21,15 +21,15 @@ ARG ZIG_TARGET
 ARG BUILD_ID=default
 
 # Install system dependencies including wolfSSL and gcc for shim
-# NOTE: Use 'wolfssl' package from community repo (not 'wolfssl-dev')
-# wolfssl package provides the library needed for TLS support
+# NOTE: wolfssl-dev provides static library (.a) and unversioned symlink (.so) needed for Zig
+# Available in Alpine edge/community repository
 # gcc/musl-dev needed to compile faccessat2 shim for old Docker/seccomp
 RUN apk add --no-cache \
     wget \
     xz \
     ca-certificates \
     bash \
-    wolfssl \
+    wolfssl-dev \
     gcc \
     musl-dev
 
