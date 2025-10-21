@@ -13,7 +13,8 @@ ZigCat is a modern, secure alternative to netcat/ncat built in Zig. It keeps the
 ## Getting started
 - Download the latest release binary for your platform from the [Releases](https://github.com/whit3rabbit/zigcat/releases) page.
 - Make it executable (`chmod +x zigcat` on Unix-like systems).
-- Run `zigcat --help` or open [`USAGE.md`](USAGE.md) for the full CLI cheat sheet.
+- Run `zigcat --help` or open [`USAGE.md`](USAGE.md) for the quick-start cheat sheet.
+- Zigcat is built against Zig `0.15.1`; Zig `0.16` introduces breaking changes, so stick with `0.15.1` until support lands.
 
 ### Quick examples
 - Connect to a service: `zigcat example.com 443`
@@ -36,7 +37,7 @@ ZigCat is a modern, secure alternative to netcat/ncat built in Zig. It keeps the
 Prebuilt downloads live on the Releases page. If you prefer to compile locally, follow the detailed instructions in `BUILD.md`.
 
 ## Documentation
-- [`USAGE.md`](USAGE.md) - complete CLI cheat sheet with flag types and examples.
+- [`USAGE.md`](USAGE.md) - quick-start cheat sheet covering core to advanced usage.
 - [`BUILD.md`](BUILD.md) - platform-specific build commands and packaging tips.
 - `docs/` - additional architecture notes, testing guides, and plans.
 
