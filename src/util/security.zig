@@ -147,12 +147,13 @@ pub fn dropPrivileges(target_user: []const u8) !void {
     // Verify supplementary groups were cleared
     var group_buf: [32]c.gid_t = undefined;
     // Zig 0.16.0-dev has C translation layer issues with getgroups() inline macros
-    // Use direct syscall on Linux to avoid the problematic macro expansion
-    const ngroups = if (builtin.os.tag == .linux and @hasDecl(std.posix.system, "getgroups"))
-        // Zig 0.16.0-dev: Use POSIX syscall directly
-        std.posix.system.getgroups(@intCast(group_buf.len), @ptrCast(&group_buf))
+    // (see: https://github.com/ziglang/zig/issues/22804 - __builtin_constant_p type mismatch)
+    // Use direct Linux syscall to avoid problematic C macro expansion
+    const ngroups = if (builtin.os.tag == .linux and @hasDecl(std.os.linux, "getgroups"))
+        // Zig 0.16.0-dev on Linux: Use syscall directly (bypasses C translation issues)
+        @as(i32, @intCast(std.os.linux.getgroups(@intCast(group_buf.len), @ptrCast(&group_buf))))
     else
-        // Zig 0.15.1: Use C library function (works on all platforms)
+        // Zig 0.15.1 or non-Linux: Use C library function
         c.getgroups(@intCast(group_buf.len), &group_buf);
 
     logging.log(1, "✓ Privileges dropped successfully:\n", .{});
