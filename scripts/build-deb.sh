@@ -27,8 +27,8 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v dpkg-buildpackage >/dev/null 2>&
   ZIG_VERSION="$(zig version)"
   echo "Found Zig ${ZIG_VERSION}"
 
-  # Check for debhelper
-  if ! dpkg -l | grep -q "debhelper"; then
+  # Check for debhelper (using dpkg-query which is more reliable)
+  if ! dpkg-query -W -f='${Status}' debhelper 2>/dev/null | grep -q "install ok installed"; then
     echo "ERROR: debhelper is required to build the package." >&2
     echo "" >&2
     echo "Install with:" >&2
@@ -36,8 +36,8 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v dpkg-buildpackage >/dev/null 2>&
     exit 1
   fi
 
-  # Check for libssl-dev
-  if ! dpkg -l | grep -q "libssl-dev"; then
+  # Check for libssl-dev (using dpkg-query which is more reliable)
+  if ! dpkg-query -W -f='${Status}' libssl-dev 2>/dev/null | grep -q "install ok installed"; then
     echo "WARNING: libssl-dev not found. Install with:" >&2
     echo "  sudo apt-get install libssl-dev" >&2
   fi
