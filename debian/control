@@ -4,9 +4,9 @@ Priority: optional
 Maintainer: Whit3Rabbit <whiterabbit@protonmail.com>
 Build-Depends:
  debhelper-compat (= 13),
- zig (>= 0.15.1),
  pkg-config,
  libssl-dev
+# Note: Zig is not available as a Debian package. Install manually from https://ziglang.org/download/
 Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Homepage: https://github.com/whit3rabbit/zigcat
