@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.5
 # Multi-stage Dockerfile for Alpine/musl static builds with wolfSSL TLS
 # Builds the SMALLEST zigcat binary with TLS support (~835KB on x64)
 # IMPORTANT: wolfSSL is licensed under GPLv2
@@ -7,21 +8,30 @@
 #     --security-opt seccomp=docker-tests/seccomp/zig-builder.json \
 #     -f docker-tests/dockerfiles/release/Dockerfile.alpine-wolfssl .
 
-FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
+ARG BASE_IMAGE=alpine:3.18
+ARG RUNTIME_BASE_IMAGE=alpine:3.18
+FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=latest
 ARG DEFAULT_ZIG_VERSION=0.15.1
 ARG BUILD_OPTIONS=""
+ARG ZIG_TARGET
+ARG BUILD_ID=default
 
-# Install system dependencies including wolfSSL
+# Install system dependencies including wolfSSL and gcc for shim
+# NOTE: Use 'wolfssl' package from community repo (not 'wolfssl-dev')
+# wolfssl package provides the library needed for TLS support
+# gcc/musl-dev needed to compile faccessat2 shim for old Docker/seccomp
 RUN apk add --no-cache \
     wget \
     xz \
     ca-certificates \
     bash \
-    wolfssl-dev
+    wolfssl \
+    gcc \
+    musl-dev
 
 # Install Zig version resolver helper
 COPY docker-tests/scripts/resolve-zig-version.sh /usr/local/bin/resolve-zig-version
@@ -39,9 +49,11 @@ RUN set -eux; \
 
 ENV PATH="/opt/zig:$PATH"
 
-# Set Zig cache directories for better control and performance
-ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache
-ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache
+# Set Zig cache directories with unique BUILD_ID to prevent cache corruption
+# Each build gets its own isolated cache, avoiding "unable to access options file" errors
+ARG BUILD_ID
+ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache-${BUILD_ID}
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache-${BUILD_ID}
 
 # Create cache directories
 RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
@@ -51,6 +63,12 @@ WORKDIR /build
 
 # Copy source code
 COPY . .
+
+# Compile faccessat2 shim (workaround for old Docker/seccomp)
+# This intercepts faccessat2 syscalls and redirects to faccessat
+# Required for Zig 0.15.1 on Docker < 20.10.6 or libseccomp < 2.4.4
+RUN gcc -shared -fPIC -o /usr/local/lib/faccessat2_shim.so docker-tests/preload/faccessat2_shim.c && \
+    echo "Compiled faccessat2 shim for syscall workaround"
 
 # Platform-to-Zig target mapping for musl
 RUN printf '#!/bin/bash\n\
@@ -65,26 +83,28 @@ esac\n' > /usr/local/bin/platform-to-zig-target.sh \
 # NOTE: wolfSSL supports static linking, enabling TLS in static musl builds
 # Binary will be named zigcat-wolfssl to distinguish from OpenSSL builds
 #
-# IMPORTANT: This build requires Docker 20.10.6+ with libseccomp 2.4.4+
-#            OR use custom seccomp profile: --security-opt seccomp=docker-tests/seccomp/zig-builder.json
-#            Zig 0.15.1 uses faccessat2 syscall which older Docker versions block (errno 38 / ENOSYS)
-#            See docker-tests/DOCKER_BUILD_ERRORS.md for troubleshooting
-RUN --mount=type=cache,target=/build/.zig-cache \
-    --mount=type=cache,target=/tmp/zig-global-cache \
-    ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
+# IMPORTANT: This build uses LD_PRELOAD shim to work around faccessat2 syscall
+#            blocking on Docker < 20.10.6 or libseccomp < 2.4.4
+#            Zig 0.15.1 uses faccessat2 which older Docker versions block (errno 38 / ENOSYS)
+# NOTE: Cache cleaned after build to prevent corruption in subsequent builds
+RUN ZIG_TARGET=${ZIG_TARGET:-$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM")} && \
     echo "Building for target: $ZIG_TARGET (platform: $TARGETPLATFORM)" && \
+    echo "Using LD_PRELOAD shim to intercept faccessat2 syscalls" && \
+    export LD_PRELOAD=/usr/local/lib/faccessat2_shim.so && \
     if [ -n "$BUILD_OPTIONS" ]; then \
         echo "Build options: $BUILD_OPTIONS" && \
         zig build -Dtarget="$ZIG_TARGET" $BUILD_OPTIONS; \
     else \
         echo "Using default: ReleaseSmall, strip, static, wolfSSL TLS" && \
         zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=true -Dtls-backend=wolfssl; \
-    fi
+    fi && \
+    unset LD_PRELOAD && \
+    rm -rf "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
 # Run unit tests (skip for cross-compilation)
-RUN --mount=type=cache,target=/build/.zig-cache \
-    --mount=type=cache,target=/tmp/zig-global-cache \
-    ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
+# NOTE: LD_PRELOAD shim used to intercept faccessat2 syscalls
+# NOTE: Cache cleaned after tests to prevent corruption in subsequent builds
+RUN ZIG_TARGET=${ZIG_TARGET:-$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM")} && \
     NATIVE_TARGET=$(case "$(uname -m)" in \
         x86_64) echo "x86_64-linux-musl";; \
         aarch64) echo "aarch64-linux-musl";; \
@@ -92,14 +112,17 @@ RUN --mount=type=cache,target=/build/.zig-cache \
     esac) && \
     if [ "$ZIG_TARGET" = "$NATIVE_TARGET" ]; then \
         echo "Running native tests" && \
+        export LD_PRELOAD=/usr/local/lib/faccessat2_shim.so && \
         if [ -n "$BUILD_OPTIONS" ]; then \
             zig build test $BUILD_OPTIONS; \
         else \
             zig build test -Doptimize=ReleaseSmall -Dstatic=true -Dtls=true -Dtls-backend=wolfssl; \
-        fi; \
+        fi && \
+        unset LD_PRELOAD; \
     else \
         echo "Skipping tests for cross-compilation (target: $ZIG_TARGET, native: $NATIVE_TARGET)"; \
-    fi
+    fi && \
+    rm -rf "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
 # Export stage for artifacts
 FROM scratch AS artifacts
@@ -107,7 +130,7 @@ COPY --from=builder /build/zig-out/bin/ /bin/
 COPY --from=builder /build/zig-out/ /artifacts/
 
 # Runtime stage for testing
-FROM alpine:3.18 AS runtime
+FROM ${RUNTIME_BASE_IMAGE} AS runtime
 
 # Install runtime dependencies for testing
 RUN apk add --no-cache \

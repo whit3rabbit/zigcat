@@ -2,7 +2,9 @@
 # Multi-stage Dockerfile for Alpine/musl static builds with wolfSSL
 # IMPORTANT: Use TARGETPLATFORM for native compilation (not cross-compilation)
 # This ensures wolfSSL libraries match the target architecture
-FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
+ARG BASE_IMAGE=alpine:3.18
+ARG RUNTIME_BASE_IMAGE=alpine:3.18
+FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
@@ -11,12 +13,14 @@ ARG DEFAULT_ZIG_VERSION=0.15.1
 ARG BUILD_OPTIONS=""
 
 # Install system dependencies
+# NOTE: Use 'wolfssl' package from community repo (not 'wolfssl-dev')
+# wolfssl package provides the library needed for TLS support
 RUN apk add --no-cache \
     wget \
     xz \
     ca-certificates \
     bash \
-    wolfssl-dev
+    wolfssl
 
 # Install Zig version resolver helper
 COPY docker-tests/scripts/resolve-zig-version.sh /usr/local/bin/resolve-zig-version
@@ -93,8 +97,7 @@ FROM scratch AS artifacts
 COPY --from=builder /build/zig-out/bin/ /bin/
 COPY --from=builder /build/zig-out/ /artifacts/
 
-# Runtime stage for testing with musl
-FROM alpine:3.18 AS runtime
+FROM ${RUNTIME_BASE_IMAGE} AS runtime
 
 # Install runtime dependencies for testing
 RUN apk add --no-cache \

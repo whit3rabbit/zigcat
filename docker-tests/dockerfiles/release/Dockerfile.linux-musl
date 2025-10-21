@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.5
 # Multi-stage Dockerfile for Linux musl static builds (NO TLS)
 # Builds fully static binaries for x86_64, aarch64, x86, and arm
 #
@@ -5,13 +6,17 @@
 #   docker build --platform=linux/amd64 -f docker-tests/dockerfiles/release/Dockerfile.linux-musl .
 #   docker build --platform=linux/arm64 -f docker-tests/dockerfiles/release/Dockerfile.linux-musl .
 
-FROM --platform=$TARGETPLATFORM alpine:3.18 AS builder
+ARG BASE_IMAGE=alpine:3.18
+ARG RUNTIME_BASE_IMAGE=alpine:3.18
+FROM --platform=$TARGETPLATFORM ${BASE_IMAGE} AS builder
 
 ARG TARGETPLATFORM
 ARG BUILDPLATFORM
 ARG ZIG_VERSION=latest
 ARG DEFAULT_ZIG_VERSION=0.15.1
 ARG BUILD_OPTIONS=""
+ARG ZIG_TARGET
+ARG BUILD_ID=default
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -46,9 +51,11 @@ RUN set -eux; \
 
 ENV PATH="/opt/zig:$PATH"
 
-# Set Zig cache directories
-ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache
-ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache
+# Set Zig cache directories with unique BUILD_ID to prevent cache corruption
+# Each build gets its own isolated cache, avoiding "unable to access options file" errors
+ARG BUILD_ID
+ENV ZIG_LOCAL_CACHE_DIR=/build/.zig-cache-${BUILD_ID}
+ENV ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache-${BUILD_ID}
 
 # Create cache directories
 RUN mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
@@ -72,9 +79,9 @@ esac\n' > /usr/local/bin/platform-to-zig-target.sh \
 
 # Build for musl target with NO TLS (static linking for maximum portability)
 # Static builds have TLS disabled to ensure zero dependencies
-RUN --mount=type=cache,target=/build/.zig-cache \
-    --mount=type=cache,target=/tmp/zig-global-cache \
-    ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
+# NOTE: Cache mounts removed to prevent "unable to access options file" errors
+# NOTE: Cache cleaned after build to prevent corruption in subsequent builds
+RUN ZIG_TARGET=${ZIG_TARGET:-$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM")} && \
     echo "Building for target: $ZIG_TARGET (platform: $TARGETPLATFORM)" && \
     if [ -n "$BUILD_OPTIONS" ]; then \
         echo "Build options: $BUILD_OPTIONS" && \
@@ -82,12 +89,13 @@ RUN --mount=type=cache,target=/build/.zig-cache \
     else \
         echo "Using default: ReleaseSmall, strip, static, no TLS" && \
         zig build -Dtarget="$ZIG_TARGET" -Doptimize=ReleaseSmall -Dstrip=true -Dstatic=true -Dtls=false; \
-    fi
+    fi && \
+    rm -rf "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
 # Run unit tests (skip for cross-compilation)
-RUN --mount=type=cache,target=/build/.zig-cache \
-    --mount=type=cache,target=/tmp/zig-global-cache \
-    ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM") && \
+# NOTE: Cache mounts removed to prevent "unable to access options file" errors
+# NOTE: Cache cleaned after tests to prevent corruption in subsequent builds
+RUN ZIG_TARGET=${ZIG_TARGET:-$(/usr/local/bin/platform-to-zig-target.sh "$TARGETPLATFORM")} && \
     NATIVE_TARGET=$(case "$(uname -m)" in \
         x86_64) echo "x86_64-linux-musl";; \
         aarch64) echo "aarch64-linux-musl";; \
@@ -102,15 +110,15 @@ RUN --mount=type=cache,target=/build/.zig-cache \
         fi; \
     else \
         echo "Skipping tests for cross-compilation (target: $ZIG_TARGET, native: $NATIVE_TARGET)"; \
-    fi
+    fi && \
+    rm -rf "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR"
 
 # Export stage for artifacts
 FROM scratch AS artifacts
 COPY --from=builder /build/zig-out/bin/ /bin/
 COPY --from=builder /build/zig-out/ /artifacts/
 
-# Runtime stage for testing
-FROM alpine:3.18 AS runtime
+FROM ${RUNTIME_BASE_IMAGE} AS runtime
 
 # Install runtime dependencies for testing
 RUN apk add --no-cache \

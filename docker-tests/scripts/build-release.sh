@@ -570,28 +570,47 @@ build_platform() {
     # Build command
     log_info "  Building with Docker (platform: $docker_platform)..."
 
-    # Build arguments
+    # Generate unique BUILD_ID to prevent Zig cache corruption across builds
+    # Format: timestamp-pid-random to ensure uniqueness even for parallel builds
+    local docker_build_id="${build_id}-$(date +%s)-$$-$RANDOM"
+    log_debug "  Using BUILD_ID: $docker_build_id"
+
+    # Determine optional base image overrides (needed for architectures like x86)
     local build_args=(
         "--platform" "$docker_platform"
         "--build-arg" "ZIG_TARGET=$zig_target"
         "--build-arg" "ZIG_VERSION=$ZIG_RELEASE_VERSION"
         "--build-arg" "DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION"
         "--build-arg" "BUILD_OPTIONS=$build_opts"
+        "--build-arg" "BUILD_ID=$docker_build_id"
+    )
+
+    local dockerfile_name
+    dockerfile_name=$(basename "$dockerfile")
+    if [[ "$dockerfile_name" == *"alpine"* || "$dockerfile_name" == *"linux-musl"* ]]; then
+        local base_image="alpine:3.18"
+        local runtime_base_image="alpine:3.18"
+        if [[ "$arch" == "x86" || "$arch" == "386" ]]; then
+            base_image="alpine:3.12"
+            runtime_base_image="alpine:3.12"
+        fi
+        build_args+=("--build-arg" "BASE_IMAGE=$base_image")
+        build_args+=("--build-arg" "RUNTIME_BASE_IMAGE=$runtime_base_image")
+        log_debug "  Using base images: builder=$base_image runtime=$runtime_base_image"
+    fi
+
+    build_args+=(
         "-f" "$dockerfile"
         "-t" "zigcat-builder-${build_id}:latest"
         "$PROJECT_ROOT"
     )
 
-    local seccomp_profile="$PROJECT_ROOT/docker-tests/seccomp/zig-builder.json"
-    if [[ -f "$seccomp_profile" ]]; then
-        build_args=( "--security-opt" "seccomp=$seccomp_profile" "${build_args[@]}" )
-        log_debug "  Using seccomp profile: $seccomp_profile"
-    fi
+    # Note: --security-opt is deprecated and removed. BuildKit cache mounts work without it.
 
-    log_debug "  Docker build command: docker build ${build_args[*]}"
+    log_debug "  Docker build command: docker buildx build --load ${build_args[*]}"
 
-    # Execute build
-    if ! timeout "$BUILD_TIMEOUT" docker build "${build_args[@]}" > "$log_file" 2>&1; then
+    # Execute build (using BuildKit for cache mounts)
+    if ! timeout "$BUILD_TIMEOUT" docker buildx build --load "${build_args[@]}" > "$log_file" 2>&1; then
         log_error "  Build failed (see $log_file for details)"
         FAILED_BUILDS+=("$build_id")
         return 1

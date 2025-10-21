@@ -1,1 +1,124 @@
-../Dockerfile.freebsd
+# syntax=docker/dockerfile:1.5
+# Multi-stage Dockerfile for FreeBSD cross-compilation
+FROM --platform=$BUILDPLATFORM ubuntu:22.04 AS builder
+
+ARG TARGETPLATFORM
+ARG BUILDPLATFORM
+ARG ZIG_VERSION=latest
+ARG DEFAULT_ZIG_VERSION=0.15.1
+ARG BUILD_OPTIONS=""
+
+# Install system dependencies and OpenSSL for TLS
+RUN apt-get update && apt-get install -y \
+    wget \
+    xz-utils \
+    ca-certificates \
+    libssl-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig version resolver helper
+COPY docker-tests/scripts/resolve-zig-version.sh /usr/local/bin/resolve-zig-version
+RUN chmod +x /usr/local/bin/resolve-zig-version
+
+# Install Zig compiler (architecture-aware)
+RUN set -eux; \
+    ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac); \
+    ZIG_ACTUAL=$(DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION resolve-zig-version "$ZIG_VERSION"); \
+    echo "Using Zig version ${ZIG_ACTUAL}"; \
+    wget -q https://ziglang.org/download/${ZIG_ACTUAL}/zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
+    tar -xf zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
+    mv zig-${ARCH}-linux-${ZIG_ACTUAL} /opt/zig; \
+    rm zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz
+
+ENV PATH="/opt/zig:$PATH"
+
+# Create build directory
+WORKDIR /build
+
+# Copy source code
+COPY . .
+
+# Platform-to-Zig target mapping script for FreeBSD
+RUN printf '#!/bin/bash\n\
+case "$1" in\n\
+  "linux/amd64"|"freebsd/amd64") echo "x86_64-freebsd" ;;\n\
+  *) echo "x86_64-freebsd" ;;\n\
+esac\n' > /usr/local/bin/platform-to-zig-target.sh \
+    && chmod +x /usr/local/bin/platform-to-zig-target.sh
+
+# Build for FreeBSD target
+# NOTE: Cross-compiling to FreeBSD from Linux with TLS requires FreeBSD sysroot/libraries
+RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
+    echo "Building for Zig target: $ZIG_TARGET" && \
+    if [ -n "$BUILD_OPTIONS" ]; then \
+        echo "Build options: $BUILD_OPTIONS" && \
+        zig build -Dtarget=$ZIG_TARGET $BUILD_OPTIONS; \
+    else \
+        echo "Using default: ReleaseSmall, TLS disabled (cross-compile limitation)" && \
+        zig build -Dtarget=$ZIG_TARGET -Doptimize=ReleaseSmall -Dtls=false; \
+    fi
+
+# Run unit tests (cross-compiled, TLS disabled)
+# NOTE: Tests are skipped for cross-compiled FreeBSD binaries since they cannot run on Linux
+# Cross-compiled FreeBSD binaries require FreeBSD runtime libraries and kernel
+# RUN ZIG_TARGET=$(/usr/local/bin/platform-to-zig-target.sh $TARGETPLATFORM) && \
+#     echo "Running tests for Zig target: $ZIG_TARGET (TLS disabled)" && \
+#     zig build test -Dtarget=$ZIG_TARGET -Drelease=true -Dtls=false
+
+# Export stage for artifacts
+FROM scratch AS artifacts
+COPY --from=builder /build/zig-out/bin/ /bin/
+COPY --from=builder /build/zig-out/ /artifacts/
+
+# Runtime stage for FreeBSD cross-compilation testing
+# Note: FreeBSD binaries won't run on Linux containers
+# This stage is primarily for build verification and limited testing
+FROM ubuntu:22.04 AS runtime
+
+# Install runtime dependencies for testing
+RUN apt-get update && apt-get install -y \
+    netcat-openbsd \
+    curl \
+    wget \
+    xz-utils \
+    bc \
+    procps \
+    iproute2 \
+    iputils-ping \
+    telnet \
+    socat \
+    file \
+    binutils \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Zig for test execution (for unit tests that can run cross-platform, architecture-aware)
+ARG ZIG_VERSION=latest
+ARG DEFAULT_ZIG_VERSION=0.15.1
+COPY --from=builder /usr/local/bin/resolve-zig-version /usr/local/bin/resolve-zig-version
+RUN chmod +x /usr/local/bin/resolve-zig-version
+RUN set -eux; \
+    ARCH=$(case "$(uname -m)" in x86_64) echo "x86_64";; aarch64) echo "aarch64";; *) echo "x86_64";; esac); \
+    ZIG_ACTUAL=$(DEFAULT_ZIG_VERSION=$DEFAULT_ZIG_VERSION resolve-zig-version "$ZIG_VERSION"); \
+    echo "Using Zig version ${ZIG_ACTUAL}"; \
+    wget -q https://ziglang.org/download/${ZIG_ACTUAL}/zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
+    tar -xf zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz; \
+    mv zig-${ARCH}-linux-${ZIG_ACTUAL} /opt/zig; \
+    rm zig-${ARCH}-linux-${ZIG_ACTUAL}.tar.xz
+
+ENV PATH="/opt/zig:$PATH"
+
+# Create test user
+RUN useradd -m -s /bin/bash testuser
+
+# Copy FreeBSD-compiled binary (for inspection, not execution)
+COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
+
+# Create test directories
+RUN mkdir -p /test-results /test-logs /artifacts
+WORKDIR /test
+
+# Note: This container can run Zig unit tests but not FreeBSD binaries
+# FreeBSD binary testing would require actual FreeBSD environment
+CMD ["/bin/bash", "-c", "sleep infinity"]

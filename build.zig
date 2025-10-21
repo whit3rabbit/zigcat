@@ -433,6 +433,7 @@ pub fn build(b: *std.Build) void {
             } else {
                 exe.linkSystemLibrary("ssl");
                 exe.linkSystemLibrary("crypto");
+
             }
 
             // Add include and library search paths for cross-compilation (Docker builds)
