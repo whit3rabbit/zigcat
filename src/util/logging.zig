@@ -241,8 +241,16 @@ pub fn logHexDumpCfg(cfg: *const config.Config, data: []const u8, label: []const
 }
 
 fn logInternal(comptime level_str: []const u8, comptime fmt: []const u8, args: anytype) void {
-    const timestamp = std.time.timestamp();
-    std.debug.print("[{d}] [{s}] ", .{ timestamp, level_str });
+    // Get current Unix timestamp (seconds since epoch)
+    // In Zig 0.16+, use Instant for time queries
+    const instant = std.time.Instant.now() catch {
+        std.debug.print("[?] [{s}] ", .{level_str});
+        std.debug.print(fmt, args);
+        return;
+    };
+    // For logging, we just need a rough timestamp - use nanoseconds / 1e9 for seconds
+    const timestamp_sec = @divFloor(instant.timestamp.sec, 1);
+    std.debug.print("[{d}] [{s}] ", .{ timestamp_sec, level_str });
     std.debug.print(fmt, args);
 }
 
@@ -299,7 +307,7 @@ pub fn logTrace(comptime fmt: []const u8, args: anytype) void {
 /// Parameters:
 /// - address: Client/server network address
 /// - action: Event type (e.g., "ACCEPT", "CONNECT", "CLOSE")
-pub fn logConnection(address: std.net.Address, action: []const u8) void {
+pub fn logConnection(address: std.Io.net.IpAddress, action: []const u8) void {
     std.debug.print("[{s}] Connection from {any}\n", .{ action, address });
 }
 

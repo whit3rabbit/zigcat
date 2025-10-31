@@ -868,6 +868,19 @@ pub fn build(b: *std.Build) void {
     const gsocket_test_step = b.step("test-gsocket", "Run gsocket integration tests (NAT traversal, SRP encryption)");
     gsocket_test_step.dependOn(&run_gsocket_tests.step);
 
+    //--- Version Compatibility Tests ---
+    // Tests version detection and backward compatibility patterns across Zig 0.15.1 and 0.16.0-dev.
+    // Verifies that conditional compilation based on builtin.zig_version works correctly.
+    const version_compat_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/version_compat_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const version_compat_tests = b.addTest(.{ .root_module = version_compat_test_module });
+    const run_version_compat_tests = b.addRunArtifact(version_compat_tests);
+    const version_compat_test_step = b.step("test-version-compat", "Run version compatibility tests (Zig 0.15.1 vs 0.16.0-dev)");
+    version_compat_test_step.dependOn(&run_version_compat_tests.step);
+
     const validation_test_step = b.step("test-validation", "Run all validation tests (13 tests: 8 CRLF + 5 shell)");
     validation_test_step.dependOn(&run_crlf_memory_tests.step);
     validation_test_step.dependOn(&run_shell_memory_tests.step);

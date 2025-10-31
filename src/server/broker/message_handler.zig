@@ -43,10 +43,10 @@ fn sanitizeUtf8(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
     var it = std.unicode.Utf8Iterator.init(input);
     while (it.next()) |codepoint| {
-        try sanitized_list.writer().writeCodepoint(codepoint);
+        try sanitized_list.writer(allocator).writeCodepoint(codepoint);
     }
 
-    return sanitized_list.toOwnedSlice();
+    return sanitized_list.toOwnedSlice(allocator);
 }
 
 /// Reads and processes incoming data from a client.

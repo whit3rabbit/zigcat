@@ -49,25 +49,25 @@ const unix_mode = @import("unix.zig");
 ///
 /// Returns an error if socket creation or binding fails for either protocol.
 fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, port: u16) !void {
-    var server_v4 = std.net.Address.parseIp("0.0.0.0", port) catch |err| {
+    var server_v4 = std.Io.net.IpAddress.parse("0.0.0.0", port) catch |err| {
         logging.logError(err, "parsing IPv4 address");
         return err;
     };
-    var listener_v4 = server_v4.listen(.{ .reuse_address = true }) catch |err| {
+    var listener_v4 = server_v4.listen(cfg.io.?, .{ .reuse_address = true }) catch |err| {
         logging.logError(err, "listening on IPv4");
         return err;
     };
-    defer listener_v4.deinit();
+    defer listener_v4.deinit(cfg.io.?);
 
-    var server_v6 = std.net.Address.parseIp("::", port) catch |err| {
+    var server_v6 = std.Io.net.IpAddress.parse("::", port) catch |err| {
         logging.logError(err, "parsing IPv6 address");
         return err;
     };
-    var listener_v6 = server_v6.listen(.{ .reuse_address = true }) catch |err| {
+    var listener_v6 = server_v6.listen(cfg.io.?, .{ .reuse_address = true }) catch |err| {
         logging.logError(err, "listening on IPv6");
         return err;
     };
-    defer listener_v6.deinit();
+    defer listener_v6.deinit(cfg.io.?);
 
     logging.logNormal(cfg, "Listening on 0.0.0.0:{d} and :::_:{d} (dual-stack)...\n", .{ port, port });
 
@@ -78,8 +78,8 @@ fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, p
     defer if (access_list_obj) |*al| al.deinit();
 
     var pollfds = [_]std.posix.pollfd{
-        .{ .fd = listener_v4.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
-        .{ .fd = listener_v6.stream.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = listener_v4.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = listener_v6.socket.handle, .events = std.posix.POLL.IN, .revents = 0 },
     };
 
     var connection_count: u32 = 0;
@@ -93,57 +93,69 @@ fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, p
 
         if (pollfds[0].revents != 0) {
             const conn = if (access_list_obj) |*al|
-                listen.acceptWithAccessControl(allocator, &listener_v4, al, cfg.verbose) catch {
+                listen.acceptWithAccessControl(allocator, &listener_v4, al, cfg.verbose, cfg.io.?) catch {
                     if (common.shutdown_requested.load(.seq_cst)) break;
                     continue;
                 }
-            else
-                listener_v4.accept() catch {
+            else blk: {
+                const stream = listener_v4.accept(cfg.io.?) catch {
                     if (common.shutdown_requested.load(.seq_cst)) break;
                     continue;
                 };
+                // Wrap Stream in Connection for consistency
+                break :blk listen.Connection{
+                    .stream = stream,
+                    .address = stream.socket.address,
+                };
+            };
             connection_count += 1;
             if (cfg.verbose) {
                 logging.logVerbose(cfg, "Accepted connection #{any} from {any} (IPv4)\n", .{ connection_count, conn.address });
             }
             if (cfg.max_conns > 0) {
                 const ctx = try allocator.create(ThreadContext);
-                ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg };
+                ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg, .io = cfg.io.? };
                 var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
                 thread.detach();
             } else {
                 handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
                     logging.logError(err, "handling client");
                 };
-                conn.stream.close();
+                conn.stream.close(cfg.io.?);
             }
         }
 
         if (pollfds[1].revents != 0) {
             const conn = if (access_list_obj) |*al|
-                listen.acceptWithAccessControl(allocator, &listener_v6, al, cfg.verbose) catch {
+                listen.acceptWithAccessControl(allocator, &listener_v6, al, cfg.verbose, cfg.io.?) catch {
                     if (common.shutdown_requested.load(.seq_cst)) break;
                     continue;
                 }
-            else
-                listener_v6.accept() catch {
+            else blk: {
+                const stream = listener_v6.accept(cfg.io.?) catch {
                     if (common.shutdown_requested.load(.seq_cst)) break;
                     continue;
                 };
+                // Wrap Stream in Connection for consistency
+                break :blk listen.Connection{
+                    .stream = stream,
+                    .address = stream.socket.address,
+                };
+            };
             connection_count += 1;
             if (cfg.verbose) {
                 logging.logVerbose(cfg, "Accepted connection #{any} from {any} (IPv6)\n", .{ connection_count, conn.address });
             }
             if (cfg.max_conns > 0) {
                 const ctx = try allocator.create(ThreadContext);
-                ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg };
+                ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg, .io = cfg.io.? };
                 var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
                 thread.detach();
             } else {
                 handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
                     logging.logError(err, "handling client");
                 };
-                conn.stream.close();
+                conn.stream.close(cfg.io.?);
             }
         }
 
@@ -188,13 +200,22 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     const final_bind_addr_str = if (bind_addr_str) |s| s else if (cfg.ipv6_only) "::" else "0.0.0.0";
 
     const bind_addr = if (@import("builtin").os.tag == .freebsd) blk: {
-        var addresses = try std.net.getAddressList(allocator, final_bind_addr_str, port);
-        defer addresses.deinit();
-        var ipv4_addr: ?std.net.Address = null;
-        for (addresses.addrs) |addr| {
-            if (addr.any.family == std.posix.AF.INET) {
-                ipv4_addr = addr;
-                break;
+        // FreeBSD: Need to explicitly resolve to IPv4 address
+        const hostname = std.Io.net.HostName.parse(final_bind_addr_str) catch {
+            // Not a hostname, try as IP address
+            break :blk try std.Io.net.IpAddress.resolve(cfg.io.?, final_bind_addr_str, port);
+        };
+        const addresses = try hostname.lookup(cfg.io.?);
+        defer cfg.io.?.free(&addresses);
+
+        var ipv4_addr: ?std.Io.net.IpAddress = null;
+        for (addresses) |addr| {
+            switch (addr) {
+                .ip4 => {
+                    ipv4_addr = addr;
+                    break;
+                },
+                .ip6 => {},
             }
         }
         if (ipv4_addr) |addr| {
@@ -203,7 +224,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             return error.NoIpv4AddressFound;
         }
     } else blk: {
-        break :blk try std.net.Address.resolveIp(final_bind_addr_str, port);
+        break :blk try std.Io.net.IpAddress.resolve(cfg.io.?, final_bind_addr_str, port);
     };
 
     const should_drop_privileges = cfg.drop_privileges_user != null;
@@ -246,8 +267,8 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         logging.logWarning("Note: SCTP mode not fully implemented\n", .{});
     }
 
-    var server = try bind_addr.listen(.{ .reuse_address = true });
-    defer server.deinit();
+    var server = try bind_addr.listen(cfg.io.?, .{ .reuse_address = true });
+    defer server.deinit(cfg.io.?);
 
     if (should_drop_privileges and is_privileged_port) {
         try security.dropPrivileges(cfg.drop_privileges_user.?);
@@ -269,7 +290,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         var default_access_list = allowlist.AccessList.init(allocator);
         defer if (access_list_obj == null) default_access_list.deinit();
         const access_list_ptr = if (access_list_obj) |*al| al else &default_access_list;
-        try broker_mode.runBrokerServer(allocator, server.stream.handle, cfg, access_list_ptr);
+        try broker_mode.runBrokerServer(allocator, server.socket.handle, cfg, access_list_ptr);
         return;
     }
 
@@ -283,7 +304,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
         }
 
         const conn = if (access_list_obj) |*al|
-            listen.acceptWithAccessControl(allocator, &server, al, cfg.verbose) catch |err| {
+            listen.acceptWithAccessControl(allocator, &server, al, cfg.verbose, cfg.io.?) catch |err| {
                 if (common.shutdown_requested.load(.seq_cst)) {
                     if (cfg.verbose) {
                         logging.logVerbose(cfg, "Server shutdown requested, stopping accept loop\n", .{});
@@ -304,7 +325,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             };
 
         if (common.shutdown_requested.load(.seq_cst)) {
-            conn.stream.close();
+            conn.stream.close(cfg.io.?);
             break;
         }
 
@@ -318,7 +339,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             if (cfg.verbose) {
                 logging.logVerbose(cfg, "Max connections ({any}) reached, closing new connection.\n", .{cfg.max_conns});
             }
-            conn.stream.close();
+            conn.stream.close(cfg.io.?);
             continue;
         }
 
@@ -336,7 +357,7 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
             handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
                 logging.logError(err, "handling client");
             };
-            conn.stream.close();
+            conn.stream.close(cfg.io.?);
         }
 
         if (!cfg.keep_listening) {
@@ -351,8 +372,9 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
 
 const ThreadContext = struct {
     allocator: std.mem.Allocator,
-    conn: std.net.Server.Connection,
+    conn: listen.Connection,
     cfg: *const config.Config,
+    io: std.Io,
 };
 
 /// A thread entry point for handling a single client connection.
@@ -366,7 +388,7 @@ const ThreadContext = struct {
 ///   and configuration.
 fn handleClientThread(ctx: *ThreadContext) void {
     defer ctx.allocator.destroy(ctx);
-    defer ctx.conn.stream.close();
+    defer ctx.conn.stream.close(ctx.io);
 
     handleClient(ctx.allocator, ctx.conn.stream, ctx.conn.address, ctx.cfg) catch |err| {
         logging.logError(err, "client handler");
@@ -388,8 +410,8 @@ fn handleClientThread(ctx: *ThreadContext) void {
 /// Returns an error if any part of the handling process fails.
 fn handleClient(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
-    client_address: std.net.Address,
+    stream: std.Io.net.Stream,
+    client_address: std.Io.net.IpAddress,
     cfg: *const config.Config,
 ) !void {
     if (cfg.verbose) {

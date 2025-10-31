@@ -72,20 +72,20 @@ const std = @import("std");
 /// ```
 pub const IpRule = union(enum) {
     /// Single IPv4 address (exact match)
-    single_ipv4: std.net.Ip4Address,
+    single_ipv4: std.Io.net.Ip4Address,
 
     /// Single IPv6 address (exact match)
-    single_ipv6: std.net.Ip6Address,
+    single_ipv6: std.Io.net.Ip6Address,
 
     /// IPv4 CIDR range with subnet mask
     cidr_v4: struct {
-        addr: std.net.Ip4Address,
+        addr: std.Io.net.Ip4Address,
         prefix_len: u8, // 0-32 (0 = match all, 32 = single host)
     },
 
     /// IPv6 CIDR range with prefix length
     cidr_v6: struct {
-        addr: std.net.Ip6Address,
+        addr: std.Io.net.Ip6Address,
         prefix_len: u8, // 0-128 (0 = match all, 128 = single host)
     },
 
@@ -192,38 +192,42 @@ pub fn parseRule(allocator: std.mem.Allocator, rule_str: []const u8) !IpRule {
         const prefix_str = rule_str[slash_pos + 1 ..];
         const prefix_len = try std.fmt.parseInt(u8, prefix_str, 10);
 
-        // Try to parse as IPv4 CIDR
-        if (std.net.Ip4Address.parse(addr_str, 0)) |ipv4| {
-            if (prefix_len > 32) return error.InvalidPrefixLength;
-            return IpRule{ .cidr_v4 = .{
-                .addr = ipv4,
-                .prefix_len = prefix_len,
-            } };
-        } else |_| {
-            // Try IPv6 CIDR
-            if (std.net.Ip6Address.parse(addr_str, 0)) |ipv6| {
-                if (prefix_len > 128) return error.InvalidPrefixLength;
-                return IpRule{ .cidr_v6 = .{
-                    .addr = ipv6,
-                    .prefix_len = prefix_len,
-                } };
-            } else |_| {
-                return error.InvalidCidrAddress;
+        // Try to parse address (will determine IPv4 vs IPv6)
+        if (std.Io.net.IpAddress.parse(addr_str, 0)) |parsed_addr| {
+            switch (parsed_addr) {
+                .ip4 => |ipv4| {
+                    if (prefix_len > 32) return error.InvalidPrefixLength;
+                    return IpRule{ .cidr_v4 = .{
+                        .addr = ipv4,
+                        .prefix_len = prefix_len,
+                    } };
+                },
+                .ip6 => |ipv6| {
+                    if (prefix_len > 128) return error.InvalidPrefixLength;
+                    return IpRule{ .cidr_v6 = .{
+                        .addr = ipv6,
+                        .prefix_len = prefix_len,
+                    } };
+                },
             }
+        } else |_| {
+            return error.InvalidCidrAddress;
         }
     }
 
-    // Try to parse as single IPv4
-    if (std.net.Ip4Address.parse(rule_str, 0)) |ipv4| {
-        return IpRule{ .single_ipv4 = ipv4 };
-    } else |_| {
-        // Try IPv6
-        if (std.net.Ip6Address.parse(rule_str, 0)) |ipv6| {
-            return IpRule{ .single_ipv6 = ipv6 };
-        } else |_| {
-            // Treat as hostname
-            const hostname = try allocator.dupe(u8, rule_str);
-            return IpRule{ .hostname = hostname };
+    // Try to parse as single IP address (IPv4 or IPv6)
+    if (std.Io.net.IpAddress.parse(rule_str, 0)) |parsed_addr| {
+        switch (parsed_addr) {
+            .ip4 => |ipv4| {
+                return IpRule{ .single_ipv4 = ipv4 };
+            },
+            .ip6 => |ipv6| {
+                return IpRule{ .single_ipv6 = ipv6 };
+            },
         }
+    } else |_| {
+        // Treat as hostname
+        const hostname = try allocator.dupe(u8, rule_str);
+        return IpRule{ .hostname = hostname };
     }
 }

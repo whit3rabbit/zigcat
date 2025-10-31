@@ -83,42 +83,44 @@ const DnsCache = dns_cache.DnsCache;
 ///
 /// This "deny-first" evaluation order is a critical security detail, as it
 /// ensures that specific exclusions always override broader permissions.
-pub fn matchesRule(dns_cache_ptr: *DnsCache, addr: std.net.Address, rule: IpRule) bool {
+pub fn matchesRule(dns_cache_ptr: *DnsCache, addr: std.Io.net.IpAddress, rule: IpRule, io: std.Io) bool {
     switch (rule) {
         .single_ipv4 => |rule_addr| {
-            if (addr.any.family == std.posix.AF.INET) {
-                const addr_v4 = addr.in;
-                // Convert u32 to [4]u8 for comparison
-                const rule_bytes = std.mem.asBytes(&rule_addr.sa.addr);
-                const addr_bytes = std.mem.asBytes(&addr_v4.sa.addr);
-                return std.mem.eql(u8, rule_bytes, addr_bytes);
+            switch (addr) {
+                .ip4 => |addr_v4| {
+                    // Compare IP address bytes directly
+                    return std.mem.eql(u8, &rule_addr.bytes, &addr_v4.bytes);
+                },
+                .ip6 => return false,
             }
-            return false;
         },
         .single_ipv6 => |rule_addr| {
-            if (addr.any.family == std.posix.AF.INET6) {
-                const addr_v6 = addr.in6;
-                return std.mem.eql(u8, &rule_addr.sa.addr, &addr_v6.sa.addr);
+            switch (addr) {
+                .ip6 => |addr_v6| {
+                    return std.mem.eql(u8, &rule_addr.bytes, &addr_v6.bytes);
+                },
+                .ip4 => return false,
             }
-            return false;
         },
         .cidr_v4 => |cidr| {
-            if (addr.any.family == std.posix.AF.INET) {
-                const addr_v4 = addr.in;
-                return matchesCidrV4(addr_v4, cidr.addr, cidr.prefix_len);
+            switch (addr) {
+                .ip4 => |addr_v4| {
+                    return matchesCidrV4(addr_v4, cidr.addr, cidr.prefix_len);
+                },
+                .ip6 => return false,
             }
-            return false;
         },
         .cidr_v6 => |cidr| {
-            if (addr.any.family == std.posix.AF.INET6) {
-                const addr_v6 = addr.in6;
-                return matchesCidrV6(addr_v6, cidr.addr, cidr.prefix_len);
+            switch (addr) {
+                .ip6 => |addr_v6| {
+                    return matchesCidrV6(addr_v6, cidr.addr, cidr.prefix_len);
+                },
+                .ip4 => return false,
             }
-            return false;
         },
         .hostname => |hostname| {
             // Resolve hostname to IP addresses via DNS
-            const addresses = dns_cache_ptr.resolve(hostname) catch {
+            const addresses = dns_cache_ptr.resolve(hostname, io) catch {
                 // DNS resolution failed - deny access
                 // In production, consider logging this event for security auditing
                 return false;
@@ -127,18 +129,36 @@ pub fn matchesRule(dns_cache_ptr: *DnsCache, addr: std.net.Address, rule: IpRule
             // Check if client IP matches any resolved address
             // Note: Port is ignored for ACL matching (only IP matters)
             var addr_no_port = addr;
-            if (addr.any.family == std.posix.AF.INET) {
-                addr_no_port.in.sa.port = 0;
-            } else if (addr.any.family == std.posix.AF.INET6) {
-                addr_no_port.in6.sa.port = 0;
+            switch (addr) {
+                .ip4 => |*ip4| {
+                    addr_no_port = .{ .ip4 = .{
+                        .bytes = ip4.bytes,
+                        .port = 0,
+                    } };
+                },
+                .ip6 => |*ip6| {
+                    addr_no_port = .{ .ip6 = .{
+                        .bytes = ip6.bytes,
+                        .port = 0,
+                    } };
+                },
             }
 
             for (addresses) |resolved_addr| {
                 var resolved_no_port = resolved_addr;
-                if (resolved_addr.any.family == std.posix.AF.INET) {
-                    resolved_no_port.in.sa.port = 0;
-                } else if (resolved_addr.any.family == std.posix.AF.INET6) {
-                    resolved_no_port.in6.sa.port = 0;
+                switch (resolved_addr) {
+                    .ip4 => |ip4| {
+                        resolved_no_port = .{ .ip4 = .{
+                            .bytes = ip4.bytes,
+                            .port = 0,
+                        } };
+                    },
+                    .ip6 => |ip6| {
+                        resolved_no_port = .{ .ip6 = .{
+                            .bytes = ip6.bytes,
+                            .port = 0,
+                        } };
+                    },
                 }
 
                 if (addressesEqual(addr_no_port, resolved_no_port)) {
@@ -205,7 +225,7 @@ pub fn matchesRule(dns_cache_ptr: *DnsCache, addr: std.net.Address, rule: IpRule
 /// matchesCidrV4(addr, cidr, 25);  // true (192.168.1.100 in 192.168.1.0/25)
 /// matchesCidrV4(addr, cidr, 26);  // false (192.168.1.100 not in 192.168.1.0/26)
 /// ```
-pub fn matchesCidrV4(addr: std.net.Ip4Address, cidr_addr: std.net.Ip4Address, prefix_len: u8) bool {
+pub fn matchesCidrV4(addr: std.Io.net.Ip4Address, cidr_addr: std.Io.net.Ip4Address, prefix_len: u8) bool {
     if (prefix_len == 0) {
         // 0.0.0.0/0 matches everything
         return true;
@@ -217,13 +237,9 @@ pub fn matchesCidrV4(addr: std.net.Ip4Address, cidr_addr: std.net.Ip4Address, pr
     else
         @as(u32, 0xFFFFFFFF) << @intCast(32 - prefix_len);
 
-    // Convert u32 addresses to [4]u8 arrays for readInt
-    const addr_bytes = std.mem.asBytes(&addr.sa.addr);
-    const cidr_bytes = std.mem.asBytes(&cidr_addr.sa.addr);
-
-    // Extract IP addresses as u32 (big-endian)
-    const addr_bits = std.mem.readInt(u32, addr_bytes[0..4], .big);
-    const cidr_bits = std.mem.readInt(u32, cidr_bytes[0..4], .big);
+    // Extract IP addresses as u32 (big-endian) from .bytes field
+    const addr_bits = std.mem.readInt(u32, &addr.bytes, .big);
+    const cidr_bits = std.mem.readInt(u32, &cidr_addr.bytes, .big);
 
     // Compare network portions
     return (addr_bits & mask) == (cidr_bits & mask);
@@ -313,7 +329,7 @@ pub fn matchesCidrV4(addr: std.net.Ip4Address, cidr_addr: std.net.Ip4Address, pr
 /// matchesCidrV6(addr, cidr, 64);   // true (in 2001:db8::/64)
 /// matchesCidrV6(addr, cidr, 120);  // false (different /120 subnet)
 /// ```
-pub fn matchesCidrV6(addr: std.net.Ip6Address, cidr_addr: std.net.Ip6Address, prefix_len: u8) bool {
+pub fn matchesCidrV6(addr: std.Io.net.Ip6Address, cidr_addr: std.Io.net.Ip6Address, prefix_len: u8) bool {
     if (prefix_len == 0) {
         // ::/0 matches everything
         return true;
@@ -327,7 +343,7 @@ pub fn matchesCidrV6(addr: std.net.Ip6Address, cidr_addr: std.net.Ip6Address, pr
     // Compare full bytes
     var i: usize = 0;
     while (i < full_bytes) : (i += 1) {
-        if (addr.sa.addr[i] != cidr_addr.sa.addr[i]) {
+        if (addr.bytes[i] != cidr_addr.bytes[i]) {
             return false;
         }
     }
@@ -335,8 +351,8 @@ pub fn matchesCidrV6(addr: std.net.Ip6Address, cidr_addr: std.net.Ip6Address, pr
     // Compare remaining bits if any
     if (remainder_bits > 0 and full_bytes < 16) {
         const mask: u8 = @as(u8, 0xFF) << @intCast(8 - remainder_bits);
-        const addr_byte = addr.sa.addr[full_bytes];
-        const cidr_byte = cidr_addr.sa.addr[full_bytes];
+        const addr_byte = addr.bytes[full_bytes];
+        const cidr_byte = cidr_addr.bytes[full_bytes];
         if ((addr_byte & mask) != (cidr_byte & mask)) {
             return false;
         }
@@ -362,40 +378,33 @@ pub fn matchesCidrV6(addr: std.net.Ip6Address, cidr_addr: std.net.Ip6Address, pr
 /// ## Usage
 /// Primarily used for hostname matching where resolved addresses
 /// need to be compared against client addresses (with ports normalized).
-pub fn addressesEqual(addr1: std.net.Address, addr2: std.net.Address) bool {
-    // Different address families can't be equal
-    if (addr1.any.family != addr2.any.family) {
-        return false;
+pub fn addressesEqual(addr1: std.Io.net.IpAddress, addr2: std.Io.net.IpAddress) bool {
+    switch (addr1) {
+        .ip4 => |a1| {
+            switch (addr2) {
+                .ip4 => |a2| {
+                    // Compare port
+                    if (a1.port != a2.port) {
+                        return false;
+                    }
+                    // Compare IP address (4 bytes)
+                    return std.mem.eql(u8, &a1.bytes, &a2.bytes);
+                },
+                .ip6 => return false, // Different address families
+            }
+        },
+        .ip6 => |a1| {
+            switch (addr2) {
+                .ip6 => |a2| {
+                    // Compare port
+                    if (a1.port != a2.port) {
+                        return false;
+                    }
+                    // Compare IP address (16 bytes)
+                    return std.mem.eql(u8, &a1.bytes, &a2.bytes);
+                },
+                .ip4 => return false, // Different address families
+            }
+        },
     }
-
-    if (addr1.any.family == std.posix.AF.INET) {
-        // IPv4 comparison
-        const a1 = addr1.in;
-        const a2 = addr2.in;
-
-        // Compare port
-        if (a1.sa.port != a2.sa.port) {
-            return false;
-        }
-
-        // Compare IP address (4 bytes)
-        const bytes1 = std.mem.asBytes(&a1.sa.addr);
-        const bytes2 = std.mem.asBytes(&a2.sa.addr);
-        return std.mem.eql(u8, bytes1, bytes2);
-    } else if (addr1.any.family == std.posix.AF.INET6) {
-        // IPv6 comparison
-        const a1 = addr1.in6;
-        const a2 = addr2.in6;
-
-        // Compare port
-        if (a1.sa.port != a2.sa.port) {
-            return false;
-        }
-
-        // Compare IP address (16 bytes)
-        return std.mem.eql(u8, &a1.sa.addr, &a2.sa.addr);
-    }
-
-    // Unknown family
-    return false;
 }

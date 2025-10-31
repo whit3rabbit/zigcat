@@ -19,30 +19,52 @@ const ascii = @import("ascii.zig");
 /// newline. Callers are expected to allocate at least 80 bytes, matching the
 /// legacy implementation's stack buffer size.
 pub fn formatLine(data: []const u8, offset: u64, buffer: []u8) ![]const u8 {
-    var stream = std.io.fixedBufferStream(buffer);
-    const writer = stream.writer();
+    var pos: usize = 0;
 
     // Offset column (8 hex digits)
-    try writer.print("{x:0>8}  ", .{offset});
+    const offset_str = try std.fmt.bufPrint(buffer[pos..], "{x:0>8}  ", .{offset});
+    pos += offset_str.len;
 
     // Hex byte columns with an extra space between the two groups of eight.
     var i: usize = 0;
     while (i < 16) : (i += 1) {
         if (i < data.len) {
-            try writer.print("{x:0>2} ", .{data[i]});
+            const byte_str = try std.fmt.bufPrint(buffer[pos..], "{x:0>2} ", .{data[i]});
+            pos += byte_str.len;
         } else {
-            try writer.writeAll("   ");
+            @memcpy(buffer[pos..][0..3], "   ");
+            pos += 3;
         }
 
         if (i == 7) {
-            try writer.writeByte(' ');
+            buffer[pos] = ' ';
+            pos += 1;
         }
     }
 
-    try ascii.renderSidebar(data, writer);
-    try writer.writeByte('\n');
+    // Render ASCII sidebar inline
+    buffer[pos] = ' ';
+    pos += 1;
+    buffer[pos] = '|';
+    pos += 1;
 
-    return stream.getWritten();
+    for (data) |byte| {
+        buffer[pos] = ascii.sanitizeByte(byte);
+        pos += 1;
+    }
+
+    var j: usize = data.len;
+    while (j < 16) : (j += 1) {
+        buffer[pos] = ' ';
+        pos += 1;
+    }
+
+    buffer[pos] = '|';
+    pos += 1;
+    buffer[pos] = '\n';
+    pos += 1;
+
+    return buffer[0..pos];
 }
 
 test "formatLine produces expected prefix and ASCII sidebar" {

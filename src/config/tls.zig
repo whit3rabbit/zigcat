@@ -197,7 +197,7 @@ fn validateTlsCertificates(cfg: *const Config) TLSConfigError!void {
                 displayTlsConfigurationError(TLSConfigError.PathTraversalDetected, cert_path);
                 return TLSConfigError.PathTraversalDetected;
             };
-            std.fs.cwd().access(cert_path, .{ .mode = .read_only }) catch |err| switch (err) {
+            std.fs.cwd().access(cert_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
                     displayTlsConfigurationError(TLSConfigError.TlsCertificateNotFound, cert_path);
                     return TLSConfigError.TlsCertificateNotFound;
@@ -215,7 +215,7 @@ fn validateTlsCertificates(cfg: *const Config) TLSConfigError!void {
                 displayTlsConfigurationError(TLSConfigError.PathTraversalDetected, key_path);
                 return TLSConfigError.PathTraversalDetected;
             };
-            std.fs.cwd().access(key_path, .{ .mode = .read_only }) catch |err| switch (err) {
+            std.fs.cwd().access(key_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
                     displayTlsConfigurationError(TLSConfigError.TlsKeyNotFound, key_path);
                     return TLSConfigError.TlsKeyNotFound;
@@ -234,7 +234,7 @@ fn validateTlsCertificates(cfg: *const Config) TLSConfigError!void {
             displayTlsConfigurationError(TLSConfigError.PathTraversalDetected, trust_path);
             return TLSConfigError.PathTraversalDetected;
         };
-        std.fs.cwd().access(trust_path, .{ .mode = .read_only }) catch |err| switch (err) {
+        std.fs.cwd().access(trust_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return TLSConfigError.UntrustedCertificate,
             error.AccessDenied => return TLSConfigError.InvalidTlsConfiguration,
             else => return TLSConfigError.InvalidTlsConfiguration,

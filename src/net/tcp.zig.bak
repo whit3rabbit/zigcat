@@ -162,7 +162,7 @@ pub fn connectAddressWithTimeout(addr: std.Io.net.IpAddress, timeout_ms: u32) !s
                 .port = std.mem.nativeToBig(u16, ip6.port),
                 .flowinfo = 0,
                 .addr = ip6.bytes,
-                .scope_id = 0, // IPv6 scope ID (removed in Zig 0.16)
+                .scope_id = ip6.scope_id,
             };
             break :blk posix.connect(sock, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in6));
         },
@@ -307,7 +307,7 @@ fn openTcpClientIoUring(host: []const u8, port: u16, timeout_ms: u32, cfg: *cons
                     .port = std.mem.nativeToBig(u16, ip6.port),
                     .flowinfo = 0,
                     .addr = ip6.bytes,
-                    .scope_id = 0, // IPv6 scope ID (removed in Zig 0.16)
+                    .scope_id = ip6.scope_id,
                 };
                 sqe.prep_connect(
                     sock,
@@ -567,7 +567,7 @@ pub fn openTcpListener(bind_addr: []const u8, port: u16) !socket.Socket {
                 .port = std.mem.nativeToBig(u16, ip6.port),
                 .flowinfo = 0,
                 .addr = ip6.bytes,
-                .scope_id = 0, // IPv6 scope ID (removed in Zig 0.16)
+                .scope_id = ip6.scope_id,
             };
             try posix.bind(sock, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in6));
         },
@@ -737,6 +737,9 @@ pub fn openTcpClientWithSourcePort(
     const hostname = std.Io.net.HostName.parse(host) catch {
         // Not a hostname, parse as direct IP and create array with single element
         const addr = try std.Io.net.IpAddress.parse(host, port);
+        const addrs = [_]std.Io.net.IpAddress{addr};
+        // Fall through to use main connection loop with single address
+        const addresses: []const std.Io.net.IpAddress = &addrs;
 
         // Inline the connection logic for single address
         const family = switch (addr) {
@@ -898,7 +901,7 @@ pub fn openTcpClientWithSourcePort(
                     .port = std.mem.nativeToBig(u16, ip6.port),
                     .flowinfo = 0,
                     .addr = ip6.bytes,
-                    .scope_id = 0, // IPv6 scope ID (removed in Zig 0.16)
+                    .scope_id = ip6.scope_id,
                 };
                 posix.bind(sock, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in6)) catch |err| {
                     socket.closeSocket(sock);
@@ -932,7 +935,7 @@ pub fn openTcpClientWithSourcePort(
                     .port = std.mem.nativeToBig(u16, ip6.port),
                     .flowinfo = 0,
                     .addr = ip6.bytes,
-                    .scope_id = 0, // IPv6 scope ID (removed in Zig 0.16)
+                    .scope_id = ip6.scope_id,
                 };
                 break :blk posix.connect(sock, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in6));
             },

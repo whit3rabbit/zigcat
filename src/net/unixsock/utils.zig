@@ -185,11 +185,12 @@ pub fn handleExistingSocketFile(path: []const u8) UnixSocketError!void {
         error.PermissionDenied, error.AccessDenied => {
             return UnixSocketError.PermissionDenied;
         },
-        error.AddressInUse => {
-            // This case is unlikely on a `connect` call but handled for completeness.
-            return UnixSocketError.AddressInUse;
-        },
         else => {
+            // Note: AddressInUse is not possible on connect() - it only occurs on bind().
+            // If we encounter it in the error set, handle it via handleSocketError().
+            if (@as(anyerror, err) == error.AddressInUse) {
+                return UnixSocketError.AddressInUse;
+            }
             // Any other error indicates a more complex issue (e.g., path points to a
             // directory, filesystem errors). We log it and map to a generic error.
             logging.logDebug("Socket probe failed for '{s}': {any}\n", .{ path, err });

@@ -112,18 +112,25 @@ pub const ManagedBuffer = struct {
     /// @param data The allocated byte slice for the buffer.
     /// @return An initialized `ManagedBuffer`.
     pub fn init(data: []u8) ManagedBuffer {
-        const now = std.time.timestamp();
+        const now = std.time.Instant.now() catch return ManagedBuffer{
+            .data = data,
+            .capacity = data.len,
+            .allocated_at = 0,
+            .last_accessed = 0,
+        };
+        const timestamp = now.timestamp.sec;
         return ManagedBuffer{
             .data = data,
             .capacity = data.len,
-            .allocated_at = now,
-            .last_accessed = now,
+            .allocated_at = timestamp,
+            .last_accessed = timestamp,
         };
     }
 
     /// Update last accessed timestamp
     pub fn touch(self: *ManagedBuffer) void {
-        self.last_accessed = std.time.timestamp();
+        const now = std.time.Instant.now() catch return;
+        self.last_accessed = now.timestamp.sec;
     }
 
     /// Get writable slice of buffer
@@ -152,8 +159,9 @@ pub const ManagedBuffer = struct {
 
     /// Check if buffer is idle (not accessed recently)
     pub fn isIdle(self: *const ManagedBuffer, idle_threshold_seconds: i64) bool {
-        const now = std.time.timestamp();
-        return (now - self.last_accessed) > idle_threshold_seconds;
+        const now = std.time.Instant.now() catch return false;
+        const timestamp = now.timestamp.sec;
+        return (timestamp - self.last_accessed) > idle_threshold_seconds;
     }
 };
 

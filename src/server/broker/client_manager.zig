@@ -123,7 +123,7 @@ pub const ClientInfo = struct {
     /// ## Returns
     /// Initialized ClientInfo with current timestamp
     pub fn init(_: std.mem.Allocator, id: u64, connection: Connection) ClientInfo {
-        const now = std.time.timestamp();
+        const now = (std.time.Instant.now() catch unreachable).timestamp.sec;
         return ClientInfo{
             .id = id,
             .connection = connection,
@@ -162,7 +162,7 @@ pub const ClientInfo = struct {
     ///
     /// Should be called whenever data is received from or sent to the client.
     pub fn updateActivity(self: *ClientInfo) void {
-        self.last_activity = std.time.timestamp();
+        self.last_activity = (std.time.Instant.now() catch return).timestamp.sec;
     }
 
     /// Set the client's nickname (chat mode only).
@@ -199,7 +199,7 @@ pub const ClientInfo = struct {
     /// ## Returns
     /// True if client has been idle longer than timeout
     pub fn isIdle(self: *const ClientInfo, timeout_seconds: u32) bool {
-        const now = std.time.timestamp();
+        const now = (std.time.Instant.now() catch unreachable).timestamp.sec;
         const idle_time = now - self.last_activity;
         return idle_time > timeout_seconds;
     }
@@ -495,7 +495,7 @@ pub const ClientPool = struct {
         var iterator = self.clients.iterator();
         while (iterator.next()) |entry| {
             const client = entry.value_ptr;
-            const now = std.time.timestamp();
+            const now = (try std.time.Instant.now()).timestamp.sec;
 
             stats[i] = ClientStatistics{
                 .client_id = client.id,
@@ -628,7 +628,7 @@ test "ClientInfo idle detection" {
     try testing.expect(!client.isIdle(1));
 
     // Simulate old activity by manually setting timestamp
-    client.last_activity = std.time.timestamp() - 10; // 10 seconds ago
+    client.last_activity = (std.time.Instant.now() catch unreachable).timestamp.sec - 10; // 10 seconds ago
 
     // Test idle detection
     try testing.expect(client.isIdle(5)); // 5 second timeout

@@ -243,6 +243,12 @@ pub const Config = struct {
     /// Holds version information if `--version` is passed.
     version_info: ?[]const u8 = null,
 
+    // Runtime context (set by main, not CLI)
+    /// Io instance for async network operations (Zig 0.16.0+).
+    /// Set at runtime by main(), not parsed from CLI arguments.
+    /// Required for std.Io.net operations like DNS lookup, connect, listen.
+    io: ?std.Io = null,
+
     // Positional arguments
     /// Positional arguments, typically `[host, port]`.
     positional_args: [][]const u8 = &[_][]const u8{},

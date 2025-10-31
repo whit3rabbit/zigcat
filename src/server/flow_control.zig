@@ -107,15 +107,20 @@ pub const ClientFlowState = struct {
 
     /// Initialize client flow state
     pub fn init(client_id: u64) ClientFlowState {
+        const now = std.time.Instant.now() catch return ClientFlowState{
+            .client_id = client_id,
+            .window_start = 0,
+        };
         return ClientFlowState{
             .client_id = client_id,
-            .window_start = std.time.timestamp(),
+            .window_start = now.timestamp.sec,
         };
     }
 
     /// Check if client should be rate limited
     pub fn shouldRateLimit(self: *const ClientFlowState, config: *const FlowControlConfig) bool {
-        const now = std.time.timestamp();
+        const instant = std.time.Instant.now() catch return false;
+        const now = instant.timestamp.sec;
         const window_duration_ms = @as(u64, @intCast(now - self.window_start)) * 1000;
 
         // Reset window if expired
@@ -141,7 +146,8 @@ pub const ClientFlowState = struct {
 
     /// Reset rate limiting window
     pub fn resetWindow(self: *ClientFlowState) void {
-        self.window_start = std.time.timestamp();
+        const now = std.time.Instant.now() catch return;
+        self.window_start = now.timestamp.sec;
         self.bytes_sent_window = 0;
     }
 
@@ -163,7 +169,8 @@ pub const ClientFlowState = struct {
     /// Record throttling event
     pub fn recordThrottle(self: *ClientFlowState) void {
         self.throttle_count += 1;
-        self.last_throttle_time = std.time.timestamp();
+        const now = std.time.Instant.now() catch return;
+        self.last_throttle_time = now.timestamp.sec;
     }
 };
 
@@ -268,7 +275,14 @@ pub const FlowControlManager = struct {
 
     /// Initialize flow control manager
     pub fn init(allocator: std.mem.Allocator, config: FlowControlConfig) FlowControlManager {
-        const now = std.time.timestamp();
+        const instant = std.time.Instant.now() catch return FlowControlManager{
+            .allocator = allocator,
+            .config = config,
+            .client_states = std.AutoHashMap(u64, ClientFlowState).init(allocator),
+            .last_cleanup = 0,
+            .level_change_time = 0,
+        };
+        const now = instant.timestamp.sec;
         return FlowControlManager{
             .allocator = allocator,
             .config = config,
@@ -355,7 +369,8 @@ pub const FlowControlManager = struct {
             client_state.recordBytesSent(bytes_sent);
 
             // Reset window if needed
-            const now = std.time.timestamp();
+            const instant = std.time.Instant.now() catch return;
+            const now = instant.timestamp.sec;
             const window_duration_ms = @as(u64, @intCast(now - client_state.window_start)) * 1000;
             if (window_duration_ms >= self.config.rate_limit_window_ms) {
                 client_state.resetWindow();
@@ -410,7 +425,8 @@ pub const FlowControlManager = struct {
 
         if (new_level != old_level) {
             // Update time spent in old level
-            const now = std.time.timestamp();
+            const instant = std.time.Instant.now() catch return;
+            const now = instant.timestamp.sec;
             const time_in_old_level = @as(u64, @intCast(now - self.level_change_time));
             self.stats.time_in_level[@intFromEnum(old_level)] += time_in_old_level;
 
@@ -428,7 +444,8 @@ pub const FlowControlManager = struct {
 
     /// Perform periodic cleanup and maintenance
     fn performPeriodicCleanup(self: *FlowControlManager) void {
-        const now = std.time.timestamp();
+        const instant = std.time.Instant.now() catch return;
+        const now = instant.timestamp.sec;
         const cleanup_interval_s = self.config.cleanup_interval_ms / 1000;
 
         if (now - self.last_cleanup < cleanup_interval_s) {
@@ -512,7 +529,8 @@ pub const FlowControlManager = struct {
         self.current_level = .emergency;
 
         if (old_level != .emergency) {
-            const now = std.time.timestamp();
+            const instant = std.time.Instant.now() catch return;
+            const now = instant.timestamp.sec;
             const time_in_old_level = @as(u64, @intCast(now - self.level_change_time));
             self.stats.time_in_level[@intFromEnum(old_level)] += time_in_old_level;
             self.level_change_time = now;
@@ -529,7 +547,8 @@ pub const FlowControlManager = struct {
         self.current_level = .normal;
 
         if (old_level != .normal) {
-            const now = std.time.timestamp();
+            const instant = std.time.Instant.now() catch return;
+            const now = instant.timestamp.sec;
             const time_in_old_level = @as(u64, @intCast(now - self.level_change_time));
             self.stats.time_in_level[@intFromEnum(old_level)] += time_in_old_level;
             self.level_change_time = now;

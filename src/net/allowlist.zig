@@ -123,6 +123,65 @@ pub const matchesCidrV4 = ip_filter.matchesCidrV4;
 pub const matchesCidrV6 = ip_filter.matchesCidrV6;
 pub const addressesEqual = ip_filter.addressesEqual;
 
+/// Wrapper function to match rules with io parameter for DNS resolution
+fn matchesRuleWithIo(dns_cache_ptr: *DnsCache, addr: std.Io.net.IpAddress, rule: IpRule, io: std.Io) bool {
+    switch (rule) {
+        .hostname => |hostname| {
+            // Resolve hostname with io parameter
+            const addresses = dns_cache_ptr.resolve(hostname, io) catch {
+                // DNS resolution failed - deny access
+                return false;
+            };
+
+            // Check if client IP matches any resolved address
+            // Note: Port is ignored for ACL matching (only IP matters)
+            var addr_no_port = addr;
+            switch (addr) {
+                .ip4 => |*ip4| {
+                    addr_no_port = .{ .ip4 = .{
+                        .bytes = ip4.bytes,
+                        .port = 0,
+                    } };
+                },
+                .ip6 => |*ip6| {
+                    addr_no_port = .{ .ip6 = .{
+                        .bytes = ip6.bytes,
+                        .port = 0,
+                    } };
+                },
+            }
+
+            for (addresses) |resolved_addr| {
+                var resolved_no_port = resolved_addr;
+                switch (resolved_addr) {
+                    .ip4 => |ip4| {
+                        resolved_no_port = .{ .ip4 = .{
+                            .bytes = ip4.bytes,
+                            .port = 0,
+                        } };
+                    },
+                    .ip6 => |ip6| {
+                        resolved_no_port = .{ .ip6 = .{
+                            .bytes = ip6.bytes,
+                            .port = 0,
+                        } };
+                    },
+                }
+
+                if (addressesEqual(addr_no_port, resolved_no_port)) {
+                    return true;
+                }
+            }
+
+            return false;
+        },
+        else => {
+            // For non-hostname rules, delegate to standard matchesRule
+            return matchesRule(dns_cache_ptr, addr, rule, io);
+        },
+    }
+}
+
 /// IP access control list with allow and deny rules
 ///
 /// Maintains two separate rule lists for access control:
@@ -242,10 +301,13 @@ pub const AccessList = struct {
     /// 3. Check allow list - if matched, ALLOW, otherwise DENY
     ///
     /// NOTE: Requires mutable self because DNS cache may be updated during hostname resolution
-    pub fn isAllowed(self: *AccessList, addr: std.net.Address) bool {
+    pub fn isAllowed(self: *AccessList, addr: std.Io.net.IpAddress, io: std.Io) bool {
         // Check deny list first - deny takes precedence
         for (self.deny_rules.items) |rule| {
-            if (matchesRule(&self.dns_cache_instance, addr, rule)) {
+            // matchesRule needs to be updated to pass io for hostname resolution
+            // For now, we create a wrapper that handles the io parameter
+            const matches = matchesRuleWithIo(&self.dns_cache_instance, addr, rule, io);
+            if (matches) {
                 return false;
             }
         }
@@ -257,7 +319,8 @@ pub const AccessList = struct {
 
         // Check if address matches any allow rule
         for (self.allow_rules.items) |rule| {
-            if (matchesRule(&self.dns_cache_instance, addr, rule)) {
+            const matches = matchesRuleWithIo(&self.dns_cache_instance, addr, rule, io);
+            if (matches) {
                 return true;
             }
         }

@@ -33,6 +33,38 @@ const logging = @import("../util/logging.zig");
 const path_safety = @import("../util/path_safety.zig");
 const platform = @import("../util/platform.zig");
 const UringEventLoop = @import("../util/io_uring_wrapper.zig").UringEventLoop;
+const socket = @import("../net/socket.zig");
+
+/// Connection struct for Zig 0.16.0 compatibility (replaces Server.Connection)
+pub const Connection = struct {
+    stream: std.Io.net.Stream,
+    address: std.Io.net.IpAddress,
+};
+
+/// Helper function to convert sockaddr to std.Io.net.IpAddress.
+///
+/// This is needed because accept() returns a sockaddr structure,
+/// but Zig 0.16.0+ uses IpAddress for network addresses.
+fn sockaddrToIpAddress(addr: *const posix.sockaddr) !std.Io.net.IpAddress {
+    switch (addr.family) {
+        posix.AF.INET => {
+            const in_addr: *const posix.sockaddr.in = @ptrCast(@alignCast(addr));
+            return .{ .ip4 = .{
+                .bytes = @bitCast(in_addr.addr),
+                .port = std.mem.bigToNative(u16, in_addr.port),
+            } };
+        },
+        posix.AF.INET6 => {
+            const in6_addr: *const posix.sockaddr.in6 = @ptrCast(@alignCast(addr));
+            return .{ .ip6 = .{
+                .bytes = in6_addr.addr,
+                .port = std.mem.bigToNative(u16, in6_addr.port),
+                // scope_id removed - not in Ip6Address anymore in Zig 0.16.0
+            } };
+        },
+        else => return error.UnsupportedAddressFamily,
+    }
+}
 
 /// Accept connection with access control filtering.
 ///
@@ -67,19 +99,20 @@ const UringEventLoop = @import("../util/io_uring_wrapper.zig").UringEventLoop;
 /// Returns: Accepted and allowed connection
 pub fn acceptWithAccessControl(
     allocator: std.mem.Allocator,
-    listener: *std.net.Server,
+    listener: *std.Io.net.Server,
     access_list: *allowlist.AccessList,
     verbose: bool,
-) !std.net.Server.Connection {
+    io: std.Io,
+) !Connection {
     // Try io_uring on Linux 5.5+ first (5-10x faster under load)
     if (platform.isIoUringSupported()) {
-        return acceptWithAccessControlIoUring(allocator, listener, access_list, verbose) catch |err| {
+        return acceptWithAccessControlIoUring(allocator, listener, access_list, verbose, io) catch |err| {
             // Fall back to poll on any io_uring error
             if (err == error.IoUringNotSupported) {
                 if (verbose) {
                     std.debug.print("io_uring not supported, falling back to blocking accept\n", .{});
                 }
-                return acceptWithAccessControlPosix(listener, access_list, verbose);
+                return acceptWithAccessControlPosix(listener, access_list, verbose, io);
             }
             // For other errors, propagate up
             return err;
@@ -87,7 +120,7 @@ pub fn acceptWithAccessControl(
     }
 
     // Platform-specific fallback
-    return acceptWithAccessControlPosix(listener, access_list, verbose);
+    return acceptWithAccessControlPosix(listener, access_list, verbose, io);
 }
 
 /// Accept connection with access control using blocking accept() (POSIX fallback).
@@ -106,10 +139,11 @@ pub fn acceptWithAccessControl(
 ///
 /// Returns: Accepted and allowed connection
 fn acceptWithAccessControlPosix(
-    listener: *std.net.Server,
+    listener: *std.Io.net.Server,
     access_list: *allowlist.AccessList,
     verbose: bool,
-) !std.net.Server.Connection {
+    io: std.Io,
+) !Connection {
     // SECURITY: Rate limiting state to prevent DoS via denied connection floods
     // Per-thread state (no cross-thread coordination needed)
     var consecutive_denials: u32 = 0;
@@ -118,14 +152,27 @@ fn acceptWithAccessControlPosix(
     const max_delay_ms: u64 = 1000;
 
     while (true) {
-        const conn = try listener.accept();
+        // Use posix.accept() to get both socket and address
+        var client_addr: posix.sockaddr = undefined;
+        var client_addr_len: posix.socklen_t = @sizeOf(posix.sockaddr);
+
+        const client_socket = try posix.accept(
+            listener.socket.handle,
+            &client_addr,
+            &client_addr_len,
+            0,
+        );
+        errdefer posix.close(client_socket);
+
+        // Convert sockaddr to IpAddress
+        const client_address = try sockaddrToIpAddress(@alignCast(&client_addr));
 
         // Check if client IP is allowed
-        if (!access_list.isAllowed(conn.address)) {
+        if (!access_list.isAllowed(client_address, io)) {
             if (verbose) {
-                std.debug.print("Access denied from: {any}\n", .{conn.address});
+                std.debug.print("Access denied from: {any}\n", .{client_address});
             }
-            conn.stream.close();
+            posix.close(client_socket);
 
             consecutive_denials += 1;
 
@@ -150,7 +197,8 @@ fn acceptWithAccessControlPosix(
                 // connections from a denied IP can cause this loop to spin and consume 100%
                 // CPU. This delay forces the attacker to slow down.
                 const delay_ns = delay_ms * @as(u64, std.time.ns_per_ms);
-                std.Thread.sleep(delay_ns);
+                const duration = std.Io.Duration.fromNanoseconds(@intCast(delay_ns));
+                std.Io.sleep(io, duration, std.Io.Clock.real) catch {};
             }
 
             continue;
@@ -160,10 +208,19 @@ fn acceptWithAccessControlPosix(
         consecutive_denials = 0;
 
         if (verbose) {
-            std.debug.print("Connection accepted from: {any}\n", .{conn.address});
+            std.debug.print("Connection accepted from: {any}\n", .{client_address});
         }
 
-        return conn;
+        // Wrap socket in Stream and return Connection
+        const socket_struct = std.Io.net.Socket{
+            .handle = client_socket,
+            .address = client_address,
+        };
+        const stream = std.Io.net.Stream{ .socket = socket_struct };
+        return Connection{
+            .stream = stream,
+            .address = client_address,
+        };
     }
 }
 
@@ -220,10 +277,11 @@ fn acceptWithAccessControlPosix(
 /// ```
 pub fn acceptWithAccessControlIoUring(
     allocator: std.mem.Allocator,
-    listener: *std.net.Server,
+    listener: *std.Io.net.Server,
     access_list: *allowlist.AccessList,
     verbose: bool,
-) !std.net.Server.Connection {
+    io: std.Io,
+) !Connection {
     // io_uring is Linux-only (kernel 5.1+, x86_64 only)
     if (builtin.os.tag != .linux) {
         return error.IoUringNotSupported;
@@ -252,7 +310,7 @@ pub fn acceptWithAccessControlIoUring(
 
         // Submit asynchronous accept operation
         try ring.submitAccept(
-            listener.stream.handle,
+            listener.socket.handle,
             @ptrCast(&client_addr_storage),
             &client_addr_len,
             0, // user_data
@@ -273,22 +331,27 @@ pub fn acceptWithAccessControlIoUring(
 
         // Extract new client socket and address
         const client_fd = @as(posix.socket_t, @intCast(cqe.res));
-        const client_stream = std.net.Stream{ .handle = client_fd };
 
-        // Parse client address from sockaddr storage using stdlib function
-        const client_address = std.net.Address.initPosix(@alignCast(@as(*const posix.sockaddr, @ptrCast(&client_addr_storage))));
-
-        const conn = std.net.Server.Connection{
-            .stream = client_stream,
-            .address = client_address,
+        // Parse client address from sockaddr storage
+        const client_address = sockaddrToIpAddress(@alignCast(@as(*const posix.sockaddr, @ptrCast(&client_addr_storage)))) catch {
+            // If address parsing fails, close socket and continue
+            socket.closeSocket(client_fd);
+            continue;
         };
 
+        // Create Stream from socket and address
+        const client_socket_struct = std.Io.net.Socket{
+            .handle = client_fd,
+            .address = client_address,
+        };
+        const client_stream = std.Io.net.Stream{ .socket = client_socket_struct };
+
         // Check if client IP is allowed (same logic as poll-based version)
-        if (!access_list.isAllowed(conn.address)) {
+        if (!access_list.isAllowed(client_address, io)) {
             if (verbose) {
-                std.debug.print("Access denied from: {any}\n", .{conn.address});
+                std.debug.print("Access denied from: {any}\n", .{client_address});
             }
-            conn.stream.close();
+            client_stream.close(io);
 
             consecutive_denials += 1;
 
@@ -311,7 +374,8 @@ pub fn acceptWithAccessControlIoUring(
                 // connections from a denied IP can cause this loop to spin and consume 100%
                 // CPU. This delay forces the attacker to slow down.
                 const delay_ns = delay_ms * @as(u64, std.time.ns_per_ms);
-                std.Thread.sleep(delay_ns);
+                const duration = std.Io.Duration.fromNanoseconds(@intCast(delay_ns));
+                std.Io.sleep(io, duration, std.Io.Clock.real) catch {};
             }
 
             continue;
@@ -321,10 +385,14 @@ pub fn acceptWithAccessControlIoUring(
         consecutive_denials = 0;
 
         if (verbose) {
-            std.debug.print("Connection accepted from: {any}\n", .{conn.address});
+            std.debug.print("Connection accepted from: {any}\n", .{client_address});
         }
 
-        return conn;
+        // Return Connection (stream already created above as client_stream)
+        return Connection{
+            .stream = client_stream,
+            .address = client_address,
+        };
     }
 }
 
@@ -413,12 +481,19 @@ fn loadRulesFromFile(
         return error.PathTraversalDetected;
     }
 
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
-
     const max_file_size = 1024 * 1024; // 1MB max
-    // readToEndAlloc() exists in both Zig 0.15.1 and 0.16.0-dev (not deprecated)
-    const content = try file.readToEndAlloc(allocator, max_file_size);
+    // API differs between Zig 0.15.1 and 0.16.0-dev (builtin imported at top)
+    const content = if (builtin.zig_version.minor >= 16) blk: {
+        // Zig 0.16.0+: readFileAlloc(sub_path, gpa, limit)
+        break :blk try std.fs.cwd().readFileAlloc(
+            file_path,
+            allocator,
+            std.Io.Limit.limited(max_file_size),
+        );
+    } else blk: {
+        // Zig 0.15.1: readFileAlloc(allocator, file_path, max_bytes)
+        break :blk try std.fs.cwd().readFileAlloc(allocator, file_path, max_file_size);
+    };
     defer allocator.free(content);
 
     var line_iter = std.mem.splitScalar(u8, content, '\n');
@@ -443,13 +518,14 @@ fn loadRulesFromFile(
 /// Create a TCP server with access control
 pub fn createServer(
     allocator: std.mem.Allocator,
-    address: std.net.Address,
+    address: std.Io.net.IpAddress,
+    io: std.Io,
     cfg: anytype,
 ) !struct {
-    server: std.net.Server,
+    server: std.Io.net.Server,
     access_list: allowlist.AccessList,
 } {
-    const server = try address.listen(.{
+    const server = try address.listen(io, .{
         .reuse_address = true,
         .reuse_port = false,
     });

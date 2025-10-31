@@ -18,7 +18,11 @@ const logging = @import("../util/logging.zig");
 pub var shutdown_requested = std.atomic.Value(bool).init(false);
 
 /// Signal handler for graceful shutdown (SIGINT, SIGTERM).
-pub fn handleShutdownSignal(sig: c_int) callconv(.c) void {
+///
+/// Note: Zig 0.16+ uses @TypeOf(posix.SIG.INT) for signal numbers on Darwin,
+/// which is a platform-specific enum. We use comptime to determine the correct type.
+const SignalType = @TypeOf(posix.SIG.INT);
+pub fn handleShutdownSignal(sig: SignalType) callconv(.c) void {
     _ = sig;
     shutdown_requested.store(true, .seq_cst);
 }

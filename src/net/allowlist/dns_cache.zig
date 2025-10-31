@@ -40,7 +40,7 @@ const time = std.time;
 
 /// DNS cache entry with expiry timestamp
 const DnsCacheEntry = struct {
-    addresses: []const std.net.Address,
+    addresses: []const std.Io.net.IpAddress,
     expiry: i64, // Unix timestamp in seconds
 };
 
@@ -115,8 +115,10 @@ pub const DnsCache = struct {
     /// const addresses = try cache.resolve("google.com");
     /// // addresses valid until next cache expiry/cleanup
     /// ```
-    pub fn resolve(self: *DnsCache, hostname: []const u8) ![]const std.net.Address {
-        const now = time.timestamp();
+    pub fn resolve(self: *DnsCache, hostname: []const u8, io: std.Io) ![]const std.Io.net.IpAddress {
+        // Use Instant.now() for timestamp (Zig 0.16.0+)
+        const instant = try time.Instant.now();
+        const now = instant.timestamp.sec;
 
         if (self.cache.getEntry(hostname)) |entry| {
             if (entry.value_ptr.expiry > now) {
@@ -128,10 +130,11 @@ pub const DnsCache = struct {
             }
         }
 
-        const address_list = std.net.getAddressList(self.allocator, hostname, 0) catch |err| {
+        // Perform DNS lookup using IpAddress.resolve (port 0 for hostname-only resolution)
+        const resolved_address = std.Io.net.IpAddress.resolve(io, hostname, 0) catch |err| {
             // Also cache failures to prevent repeated lookups for bad hostnames
             const expiry = now + self.ttl_seconds;
-            const empty_slice = try self.allocator.alloc(std.net.Address, 0);
+            const empty_slice = try self.allocator.alloc(std.Io.net.IpAddress, 0);
             const hostname_copy = try self.allocator.dupe(u8, hostname);
             errdefer self.allocator.free(hostname_copy);
 
@@ -141,11 +144,15 @@ pub const DnsCache = struct {
             });
             return err;
         };
-        defer address_list.deinit();
 
-        const addresses = try self.allocator.alloc(std.net.Address, address_list.addrs.len);
+        // Create single-element array with resolved address
+        const address_list = try self.allocator.alloc(std.Io.net.IpAddress, 1);
+        address_list[0] = resolved_address;
+        defer self.allocator.free(address_list);
+
+        const addresses = try self.allocator.alloc(std.Io.net.IpAddress, address_list.len);
         errdefer self.allocator.free(addresses);
-        @memcpy(addresses, address_list.addrs);
+        @memcpy(addresses, address_list);
 
         const expiry = now + self.ttl_seconds;
         const hostname_copy = try self.allocator.dupe(u8, hostname);

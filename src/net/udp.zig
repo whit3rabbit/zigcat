@@ -45,6 +45,30 @@ const posix = std.posix;
 const socket = @import("socket.zig");
 const logging = @import("../util/logging.zig");
 
+/// Helper function to convert sockaddr to std.Io.net.IpAddress.
+///
+/// This is needed because recvfrom() returns a sockaddr structure,
+/// but Zig 0.16.0+ uses IpAddress for network addresses.
+fn sockaddrToIpAddress(addr: *const posix.sockaddr) !std.Io.net.IpAddress {
+    switch (addr.family) {
+        posix.AF.INET => {
+            const in_addr: *const posix.sockaddr.in = @ptrCast(@alignCast(addr));
+            return .{ .ip4 = .{
+                .bytes = @bitCast(in_addr.addr),
+                .port = std.mem.bigToNative(u16, in_addr.port),
+            } };
+        },
+        posix.AF.INET6 => {
+            const in6_addr: *const posix.sockaddr.in6 = @ptrCast(@alignCast(addr));
+            return .{ .ip6 = .{
+                .bytes = in6_addr.addr,
+                .port = std.mem.bigToNative(u16, in6_addr.port),
+            } };
+        },
+        else => return error.UnsupportedAddressFamily,
+    }
+}
+
 /// Open a UDP "connection" by creating socket and associating with remote address.
 ///
 /// UDP is connectionless, but calling `connect()` on a UDP socket sets the default
@@ -131,8 +155,29 @@ pub fn openUdpServer(bind_addr: []const u8, port: u16) !socket.Socket {
     try socket.setReuseAddr(sock);
     try socket.setReusePort(sock);
 
-    const addr = try std.net.Address.parseIp(bind_addr, port);
-    try posix.bind(sock, &addr.any, addr.getOsSockLen());
+    const addr = try std.Io.net.IpAddress.parse(bind_addr, port);
+    // Bind (convert IpAddress to sockaddr)
+    switch (addr) {
+        .ip4 => |ip4| {
+            var sockaddr = posix.sockaddr.in{
+                .family = posix.AF.INET,
+                .port = std.mem.nativeToBig(u16, ip4.port),
+                .addr = @bitCast(ip4.bytes),
+                .zero = [_]u8{0} ** 8,
+            };
+            try posix.bind(sock, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in));
+        },
+        .ip6 => |ip6| {
+            var sockaddr = posix.sockaddr.in6{
+                .family = posix.AF.INET6,
+                .port = std.mem.nativeToBig(u16, ip6.port),
+                .flowinfo = 0,
+                .addr = ip6.bytes,
+                .scope_id = 0, // IPv6 scope ID (0 = global scope)
+            };
+            try posix.bind(sock, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in6));
+        },
+    }
 
     return sock;
 }
@@ -242,13 +287,14 @@ pub fn recvUdp(sock: socket.Socket, buffer: []u8) !usize {
 /// const result = try recvFromUdp(sock, &buf);
 /// std.debug.print("Received {} bytes from {}\n", .{result.bytes, result.addr});
 /// ```
-pub fn recvFromUdp(sock: socket.Socket, buffer: []u8) !struct { bytes: usize, addr: std.net.Address } {
+pub fn recvFromUdp(sock: socket.Socket, buffer: []u8) !struct { bytes: usize, addr: std.Io.net.IpAddress } {
     var addr: posix.sockaddr = undefined;
     var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr);
 
     const bytes = try posix.recvfrom(sock, buffer, 0, &addr, &addr_len);
 
-    const net_addr = std.net.Address.initPosix(@alignCast(&addr));
+    // Convert sockaddr to IpAddress
+    const net_addr = sockaddrToIpAddress(@alignCast(&addr)) catch return error.InvalidAddress;
 
     return .{ .bytes = bytes, .addr = net_addr };
 }
@@ -285,9 +331,32 @@ pub fn recvFromUdp(sock: socket.Socket, buffer: []u8) !struct { bytes: usize, ad
 /// const addr = try std.net.Address.parseIp("192.168.1.100", 8080);
 /// const sent = try sendToUdp(sock, "hello", addr);
 /// ```
-pub fn sendToUdp(sock: socket.Socket, data: []const u8, addr: std.net.Address) !usize {
-    return posix.sendto(sock, data, 0, &addr.any, addr.getOsSockLen()) catch |err| {
-        logging.logDebug("UDP sendto failed: {any}\n", .{err});
-        return err;
+pub fn sendToUdp(sock: socket.Socket, data: []const u8, addr: std.Io.net.IpAddress) !usize {
+    return switch (addr) {
+        .ip4 => |ip4| blk: {
+            var sockaddr = posix.sockaddr.in{
+                .family = posix.AF.INET,
+                .port = std.mem.nativeToBig(u16, ip4.port),
+                .addr = @bitCast(ip4.bytes),
+                .zero = [_]u8{0} ** 8,
+            };
+            break :blk posix.sendto(sock, data, 0, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in)) catch |err| {
+                logging.logDebug("UDP sendto failed: {any}\n", .{err});
+                return err;
+            };
+        },
+        .ip6 => |ip6| blk: {
+            var sockaddr = posix.sockaddr.in6{
+                .family = posix.AF.INET6,
+                .port = std.mem.nativeToBig(u16, ip6.port),
+                .flowinfo = 0,
+                .addr = ip6.bytes,
+                .scope_id = 0, // IPv6 scope ID (0 = global scope)
+            };
+            break :blk posix.sendto(sock, data, 0, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in6)) catch |err| {
+                logging.logDebug("UDP sendto failed: {any}\n", .{err});
+                return err;
+            };
+        },
     };
 }

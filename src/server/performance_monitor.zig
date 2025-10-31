@@ -123,7 +123,7 @@ pub const ResourceSnapshot = struct {
     /// Initialize snapshot with current timestamp
     pub fn init() ResourceSnapshot {
         return ResourceSnapshot{
-            .timestamp = std.time.timestamp(),
+            .timestamp = (std.time.Instant.now() catch unreachable).timestamp.sec,
         };
     }
 
@@ -245,7 +245,7 @@ pub const PerformanceAlert = struct {
             .alert_type = alert_type,
             .message = message,
             .severity = severity,
-            .timestamp = std.time.timestamp(),
+            .timestamp = (std.time.Instant.now() catch unreachable).timestamp.sec,
             .current_value = current_value,
             .threshold = threshold,
         };
@@ -362,12 +362,19 @@ pub const PerformanceMonitor = struct {
 
     /// Initialize performance monitor
     pub fn init(allocator: std.mem.Allocator, config: PerformanceConfig) !PerformanceMonitor {
+        const now = std.time.Instant.now() catch return PerformanceMonitor{
+            .allocator = allocator,
+            .config = config,
+            .resource_history = try RingBuffer(ResourceSnapshot).init(allocator, config.history_size),
+            .active_alerts = std.ArrayList(PerformanceAlert){},
+            .last_monitor_time = 0,
+        };
         return PerformanceMonitor{
             .allocator = allocator,
             .config = config,
             .resource_history = try RingBuffer(ResourceSnapshot).init(allocator, config.history_size),
             .active_alerts = std.ArrayList(PerformanceAlert){},
-            .last_monitor_time = std.time.timestamp(),
+            .last_monitor_time = now.timestamp.sec,
         };
     }
 
@@ -386,7 +393,7 @@ pub const PerformanceMonitor = struct {
     pub fn update(self: *PerformanceMonitor) void {
         if (!self.monitoring_enabled) return;
 
-        const now = std.time.timestamp();
+        const now = (std.time.Instant.now() catch return).timestamp.sec;
         const interval_ms = self.config.monitoring_interval_ms;
 
         if (@as(u64, @intCast(now - self.last_monitor_time)) * 1000 < interval_ms) {
@@ -722,7 +729,7 @@ pub const PerformanceMonitor = struct {
         // This is a simplified implementation
         // In a real implementation, you would read network interface statistics
 
-        const now = std.time.timestamp();
+        const now = (std.time.Instant.now() catch return).timestamp.sec;
         if (self.prev_network_time > 0) {
             const time_diff = @as(f64, @floatFromInt(now - self.prev_network_time));
             if (time_diff > 0) {
@@ -794,7 +801,7 @@ pub const PerformanceMonitor = struct {
 
     /// Clear old alerts (older than 5 minutes)
     fn clearOldAlerts(self: *PerformanceMonitor) void {
-        const now = std.time.timestamp();
+        const now = (std.time.Instant.now() catch return).timestamp.sec;
         const alert_timeout = 300; // 5 minutes
 
         var i: usize = 0;

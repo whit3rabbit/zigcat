@@ -78,7 +78,7 @@ pub fn runGsocketClient(
     //    Connect to gs.thc.org:443, send GsListen/GsConnect packet,
     //    wait for GsStart response, return raw TCP tunnel + role from relay
     const tunnel_result = try gsocket.establishGsrnTunnel(allocator, cfg);
-    defer tunnel_result.stream.close();
+    defer tunnel_result.stream.close(cfg.io.?);
 
     // 2. Perform SRP handshake over tunnel
     //    Use -w timeout if set, otherwise connect_timeout

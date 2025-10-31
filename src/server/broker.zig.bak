@@ -84,29 +84,6 @@ const logging = @import("../util/logging.zig");
 const message_handler = @import("broker/message_handler.zig");
 const protocols = @import("broker/protocols.zig");
 const main_common = @import("../main/common.zig");
-const posix = std.posix;
-
-/// Helper function to convert sockaddr to IpAddress (Zig 0.16.0 compatibility)
-fn sockaddrToIpAddress(addr: *const posix.sockaddr) !std.Io.net.IpAddress {
-    switch (addr.family) {
-        posix.AF.INET => {
-            const in_addr: *const posix.sockaddr.in = @ptrCast(@alignCast(addr));
-            return .{ .ip4 = .{
-                .bytes = @bitCast(in_addr.addr),
-                .port = std.mem.bigToNative(u16, in_addr.port),
-            } };
-        },
-        posix.AF.INET6 => {
-            const in6_addr: *const posix.sockaddr.in6 = @ptrCast(@alignCast(addr));
-            return .{ .ip6 = .{
-                .bytes = in6_addr.addr,
-                .port = std.mem.bigToNative(u16, in6_addr.port),
-                // scope_id removed - not in Ip6Address anymore in Zig 0.16.0
-            } };
-        },
-        else => return error.UnsupportedAddressFamily,
-    }
-}
 
 /// Broker operation modes
 pub const BrokerMode = enum {
@@ -567,11 +544,8 @@ pub const BrokerServer = struct {
                 return BrokerError.ListenSocketError;
             };
 
-            // Convert sockaddr to IpAddress for logging
-            const client_address = sockaddrToIpAddress(@alignCast(&client_addr)) catch {
-                std.posix.close(client_socket);
-                return BrokerError.ListenSocketError;
-            };
+            // Convert sockaddr to std.net.Address for logging
+            const client_address = std.net.Address.initPosix(@alignCast(&client_addr));
 
             // Log the rejected connection with verbosity-aware logging
             logging.logDebug("Client limit reached ({}/{}), connection from {any} rejected\n", .{ current_clients, self.max_clients, client_address });
@@ -597,24 +571,21 @@ pub const BrokerServer = struct {
             return BrokerError.ListenSocketError;
         };
 
-        // Convert sockaddr to IpAddress for access control and logging
-        // NOTE: sockaddrToIpAddress() only supports IPv4/IPv6, not Unix sockets.
+        // Convert sockaddr to std.net.Address for access control and logging
+        // NOTE: std.net.Address.initPosix() only supports IPv4/IPv6, not Unix sockets.
         // For Unix sockets (AF.UNIX), we create a dummy localhost address since
         // access control lists don't apply to local Unix socket connections.
         const is_unix_socket = client_addr.family == std.posix.AF.UNIX;
         const client_address = if (is_unix_socket)
-            std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(0) } // Dummy localhost for Unix sockets
+            std.net.Address.initIp4([_]u8{ 127, 0, 0, 1 }, 0) // Dummy localhost for Unix sockets
         else
-            sockaddrToIpAddress(@alignCast(&client_addr)) catch {
-                std.posix.close(client_socket);
-                return BrokerError.ListenSocketError;
-            };
+            std.net.Address.initPosix(@alignCast(&client_addr));
 
         // Check access control with enhanced logging
         // NOTE: For Unix socket clients, IP-based access control is bypassed by using
         // a dummy localhost address. This ensures IP allow/deny lists don't affect
         // local Unix socket connections, which is the correct behavior.
-        if (!self.access_list.isAllowed(client_address, self.config.io.?)) {
+        if (!self.access_list.isAllowed(client_address)) {
             if (!is_unix_socket) {
                 logging.logConnection(client_address, "DENIED");
                 logging.logDebug("Access control denied connection from {any}\n", .{client_address});
@@ -788,7 +759,7 @@ pub const BrokerServer = struct {
             // Log chat client disconnection with enhanced details
             logging.log(1, "Client {} ({s}) left the chat", .{ client_id, client_nickname.? });
             if (client_stats) |stats| {
-                const now = (std.time.Instant.now() catch return).timestamp.sec;
+                const now = std.time.timestamp();
                 const duration = now - stats.connect_time;
                 logging.log(1, " ({}s, {}↑/{}↓ bytes, TLS: {})", .{ duration, stats.bytes_sent, stats.bytes_received, stats.was_tls });
             }
@@ -797,7 +768,7 @@ pub const BrokerServer = struct {
             // Log regular client disconnection
             logging.logDebug("Client {} disconnected", .{client_id});
             if (client_stats) |stats| {
-                const now = (std.time.Instant.now() catch return).timestamp.sec;
+                const now = std.time.timestamp();
                 const duration = now - stats.connect_time;
                 logging.logDebug(" ({}s, {}↑/{}↓ bytes, TLS: {})", .{ duration, stats.bytes_sent, stats.bytes_received, stats.was_tls });
             }
