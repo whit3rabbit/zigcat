@@ -71,6 +71,7 @@ const builtin = @import("builtin");
 const Connection = @import("../net/connection.zig").Connection;
 const ClientPool = @import("broker/client_manager.zig").ClientPool;
 const ClientInfo = @import("broker/client_manager.zig").ClientInfo;
+const clientPoolRemoveIdleClients = @import("broker/client_manager.zig").clientPoolRemoveIdleClients;
 const BufferPool = @import("buffer_pool.zig").BufferPool;
 const BufferPoolConfig = @import("buffer_pool.zig").BufferPoolConfig;
 const FlowControlManager = @import("flow_control.zig").FlowControlManager;
@@ -816,7 +817,7 @@ pub const BrokerServer = struct {
     }
 
     /// Log detailed client statistics for debugging
-    fn logClientStatistics(self: *BrokerServer, scratch: std.mem.Allocator) void {
+    inline fn logClientStatistics(self: *BrokerServer, scratch: std.mem.Allocator) void {
         const stats = self.clients.getClientStatistics(scratch) catch {
             logging.logError(error.OutOfMemory, "client statistics");
             return;
@@ -851,14 +852,14 @@ pub const BrokerServer = struct {
         // Remove idle clients if timeout is configured
         if (self.config.idle_timeout > 0) {
             const timeout_seconds = self.config.idle_timeout / 1000; // Convert ms to seconds
-            const removed = self.clients.removeIdleClients(@intCast(timeout_seconds));
+            const removed = clientPoolRemoveIdleClients(&self.clients, @intCast(timeout_seconds));
             if (removed > 0) {
                 logging.logDebug("Removed {} idle clients (timeout: {}s)\n", .{ removed, timeout_seconds });
             }
         }
 
         // Perform connection health checks
-        self.performConnectionHealthCheck(scratch);
+        brokerPerformConnectionHealthCheck(self, scratch);
 
         // Log client statistics periodically
         const client_count = self.clients.getClientCount();
@@ -867,7 +868,7 @@ pub const BrokerServer = struct {
 
             // Log detailed client statistics if very verbose
             if (logging.isVerbosityEnabled(self.config, .trace)) {
-                self.logClientStatistics(scratch);
+                brokerLogClientStatistics(self, scratch);
             }
         }
     }
@@ -893,7 +894,7 @@ pub const BrokerServer = struct {
     /// ## Performance
     /// Uses callback pattern to eliminate client ID list allocation, reducing allocation overhead
     /// during periodic maintenance checks.
-    fn performConnectionHealthCheck(self: *BrokerServer, scratch: std.mem.Allocator) void {
+    inline fn performConnectionHealthCheck(self: *BrokerServer, scratch: std.mem.Allocator) void {
         var failed_clients = std.ArrayList(u64){};
         defer failed_clients.deinit(scratch);
 
@@ -1223,7 +1224,10 @@ pub const BrokerServer = struct {
 
         // Log final statistics and performance summary
         if (logging.isVerbosityEnabled(self.config, .verbose)) {
-            self.logClientStatistics();
+            // Note: This was missing the scratch allocator - creating a temporary one
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            brokerLogClientStatistics(self, arena.allocator());
         }
 
         // Log final performance summary
@@ -1236,6 +1240,16 @@ pub const BrokerServer = struct {
         });
     }
 };
+
+// Workaround for Zig 0.16.0-dev LLVM linkage bug
+// These wrapper functions prevent the "Global is external, but doesn't have external or weak linkage" error
+pub inline fn brokerPerformConnectionHealthCheck(server: *BrokerServer, scratch: std.mem.Allocator) void {
+    server.performConnectionHealthCheck(scratch);
+}
+
+pub inline fn brokerLogClientStatistics(server: *BrokerServer, scratch: std.mem.Allocator) void {
+    server.logClientStatistics(scratch);
+}
 
 // Tests
 test "BrokerServer initialization" {

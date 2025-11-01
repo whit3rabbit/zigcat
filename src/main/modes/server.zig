@@ -115,7 +115,16 @@ fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, p
             if (cfg.max_conns > 0) {
                 const ctx = try allocator.create(ThreadContext);
                 ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg, .io = cfg.io.? };
-                var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
+                // Anonymous function wrapper to avoid Zig 0.16.0-dev LLVM linkage bugs
+                var thread = try std.Thread.spawn(.{}, struct {
+                    fn entry(context: *ThreadContext) void {
+                        defer context.allocator.destroy(context);
+                        defer context.conn.stream.close(context.io);
+                        handleClient(context.allocator, context.conn.stream, context.conn.address, context.cfg) catch |err| {
+                            logging.logError(err, "client handler");
+                        };
+                    }
+                }.entry, .{ctx});
                 thread.detach();
             } else {
                 handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
@@ -149,7 +158,16 @@ fn runDualStackServer(allocator: std.mem.Allocator, cfg: *const config.Config, p
             if (cfg.max_conns > 0) {
                 const ctx = try allocator.create(ThreadContext);
                 ctx.* = .{ .allocator = allocator, .conn = conn, .cfg = cfg, .io = cfg.io.? };
-                var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
+                // Anonymous function wrapper to avoid Zig 0.16.0-dev LLVM linkage bugs
+                var thread = try std.Thread.spawn(.{}, struct {
+                    fn entry(context: *ThreadContext) void {
+                        defer context.allocator.destroy(context);
+                        defer context.conn.stream.close(context.io);
+                        handleClient(context.allocator, context.conn.stream, context.conn.address, context.cfg) catch |err| {
+                            logging.logError(err, "client handler");
+                        };
+                    }
+                }.entry, .{ctx});
                 thread.detach();
             } else {
                 handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
@@ -349,9 +367,19 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
                 .allocator = allocator,
                 .conn = conn,
                 .cfg = cfg,
+                .io = cfg.io.?,
             };
 
-            var thread = try std.Thread.spawn(.{}, handleClientThread, .{ctx});
+            // Anonymous function wrapper to avoid Zig 0.16.0-dev LLVM linkage bugs
+            var thread = try std.Thread.spawn(.{}, struct {
+                fn entry(context: *ThreadContext) void {
+                    defer context.allocator.destroy(context);
+                    defer context.conn.stream.close(context.io);
+                    handleClient(context.allocator, context.conn.stream, context.conn.address, context.cfg) catch |err| {
+                        logging.logError(err, "client handler");
+                    };
+                }
+            }.entry, .{ctx});
             thread.detach();
         } else {
             handleClient(allocator, conn.stream, conn.address, cfg) catch |err| {
@@ -370,30 +398,13 @@ pub fn runServer(allocator: std.mem.Allocator, cfg: *const config.Config) !void 
     }
 }
 
+/// Context structure for thread-based client handling
 const ThreadContext = struct {
     allocator: std.mem.Allocator,
     conn: listen.Connection,
     cfg: *const config.Config,
     io: std.Io,
 };
-
-/// A thread entry point for handling a single client connection.
-///
-/// This function is spawned in a new thread when the server is configured to
-/// handle multiple connections (`--max-conns > 0`). It is responsible for
-/// calling the main `handleClient` logic and ensuring that the connection's
-/// resources (context, stream) are cleaned up when the handler exits.
-///
-/// - `ctx`: A pointer to `ThreadContext`, containing the allocator, connection object,
-///   and configuration.
-fn handleClientThread(ctx: *ThreadContext) void {
-    defer ctx.allocator.destroy(ctx);
-    defer ctx.conn.stream.close(ctx.io);
-
-    handleClient(ctx.allocator, ctx.conn.stream, ctx.conn.address, ctx.cfg) catch |err| {
-        logging.logError(err, "client handler");
-    };
-}
 
 /// Handles a single accepted client connection.
 ///
@@ -408,7 +419,7 @@ fn handleClientThread(ctx: *ThreadContext) void {
 /// - `cfg`: A pointer to the application's global configuration.
 ///
 /// Returns an error if any part of the handling process fails.
-fn handleClient(
+pub fn handleClient(
     allocator: std.mem.Allocator,
     stream: std.Io.net.Stream,
     client_address: std.Io.net.IpAddress,

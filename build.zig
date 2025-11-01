@@ -165,9 +165,10 @@ pub fn build(b: *std.Build) void {
     // - `unixsock`: (Default: true) Enables or disables support for Unix domain sockets.
     const enable_unixsock = b.option(bool, "unixsock", "Enable Unix domain sockets") orelse true;
     //
-    // - `strip`: (Default: true) If true, strips debug symbols from the final executable,
-    //   reducing its size.
-    const strip = b.option(bool, "strip", "Strip debug symbols") orelse true;
+    // - `strip`: (Default: false) If true, strips debug symbols from the final executable,
+    //   reducing its size. IMPORTANT: Defaults to false to avoid Zig 0.16.0-dev.747+ linker
+    //   errors where strip=true causes undefined symbol errors for _main and other exported symbols.
+    const strip = b.option(bool, "strip", "Strip debug symbols") orelse false;
     //
     // - `lto`: (Default: null/auto) Controls Link-Time Optimization mode for cross-module
     //   optimization and binary size reduction. LTO works across Zig + C boundaries (including OpenSSL).

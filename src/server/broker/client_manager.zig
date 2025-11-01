@@ -418,7 +418,7 @@ pub const ClientPool = struct {
     ///
     /// ## Thread Safety
     /// This method is thread-safe and can be called concurrently.
-    pub fn removeIdleClients(self: *ClientPool, timeout_seconds: u32) usize {
+    inline fn removeIdleClients(self: *ClientPool, timeout_seconds: u32) usize {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -536,6 +536,12 @@ pub const ClientPool = struct {
         }
     }
 };
+
+// Workaround for Zig 0.16.0-dev LLVM linkage bug
+// This wrapper function prevents the "Global is external, but doesn't have external or weak linkage" error
+pub inline fn clientPoolRemoveIdleClients(pool: *ClientPool, timeout_seconds: u32) usize {
+    return pool.removeIdleClients(timeout_seconds);
+}
 
 // Tests for ClientPool functionality
 test "ClientPool basic operations" {
