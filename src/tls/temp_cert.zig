@@ -59,6 +59,9 @@ else if (use_wolfssl)
         @cInclude("wolfssl/wolfcrypt/asn.h");
         @cInclude("wolfssl/wolfcrypt/asn_public.h");
         @cInclude("wolfssl/wolfcrypt/coding.h");
+        @cInclude("wolfssl/wolfcrypt/rsa.h");
+        @cInclude("wolfssl/wolfcrypt/random.h");
+        @cInclude("wolfssl/wolfcrypt/error-crypt.h");
     })
 else
     struct {};
@@ -304,11 +307,111 @@ fn generateRsa2048CertificateOpenssl(allocator: std.mem.Allocator) TempCertError
 
 /// Generate RSA 2048-bit certificate using wolfSSL.
 fn generateRsa2048CertificateWolfssl(allocator: std.mem.Allocator) TempCertError!TemporaryCertificate {
-    _ = allocator;
-    // TODO: Implement wolfSSL-based temporary certificate generation
-    // wolfSSL requires different APIs (wc_MakeRsaKey, wc_InitCert, wc_MakeSelfCert)
-    logging.logDebug("wolfSSL temporary certificate generation not yet implemented\n", .{});
-    return TempCertError.TlsNotAvailable;
+    if (!use_wolfssl) {
+        return TempCertError.TlsNotAvailable;
+    }
+
+    // Initialize RNG
+    var rng: c.WC_RNG = undefined;
+    if (c.wc_InitRng(&rng) != 0) {
+        logging.logDebug("Failed to initialize wolfSSL RNG\n", .{});
+        return TempCertError.RsaKeyGenerationFailed;
+    }
+    defer _ = c.wc_FreeRng(&rng);
+
+    // Initialize RSA Key
+    var rsaKey: c.RsaKey = undefined;
+    if (c.wc_InitRsaKey(&rsaKey, null) != 0) {
+        logging.logDebug("Failed to initialize wolfSSL RSA key\n", .{});
+        return TempCertError.RsaKeyGenerationFailed;
+    }
+    defer _ = c.wc_FreeRsaKey(&rsaKey);
+
+    // Generate RSA Key (2048 bits, e=65537)
+    if (c.wc_MakeRsaKey(&rsaKey, 2048, 65537, &rng) != 0) {
+        logging.logDebug("Failed to generate wolfSSL RSA key\n", .{});
+        return TempCertError.RsaKeyGenerationFailed;
+    }
+
+    // Create Cert (heap allocated for safety and full initialization)
+    const cert = c.wc_CertNew(null);
+    if (cert == null) {
+        logging.logDebug("Failed to create wolfSSL Cert\n", .{});
+        return TempCertError.CertificateCreationFailed;
+    }
+    defer c.wc_CertFree(cert);
+
+    // Set properties
+    // Subject: CN=localhost
+    // Validity: 365 days
+    cert.*.daysValid = 365;
+
+    // Copy "localhost" to cert.subject.commonName
+    const subjectName = "localhost";
+    @memcpy(cert.*.subject.commonName[0..subjectName.len], subjectName);
+    cert.*.subject.commonName[subjectName.len] = 0;
+
+    // Buffers for DER output
+    // We need a buffer for the certificate. 4KB is standard.
+    const derCertBufLen: usize = 4096;
+    const derCertBuf = try allocator.alloc(u8, derCertBufLen);
+    defer allocator.free(derCertBuf);
+
+    // Generate Self-Signed Cert
+    const certSz = c.wc_MakeSelfCert(cert, derCertBuf.ptr, @intCast(derCertBufLen), &rsaKey, &rng);
+    if (certSz <= 0) {
+        logging.logDebug("Failed to create self-signed certificate: {d}\n", .{certSz});
+        return TempCertError.CertificateCreationFailed;
+    }
+
+    // Convert Cert to PEM
+    const pemCertBufLen: usize = 4096;
+    const pemCertBuf = try allocator.alloc(u8, pemCertBufLen);
+    defer allocator.free(pemCertBuf);
+
+    const pemCertSz = c.wc_DerToPem(derCertBuf.ptr, @intCast(certSz), pemCertBuf.ptr, @intCast(pemCertBufLen), c.CERT_TYPE);
+    if (pemCertSz <= 0) {
+        logging.logDebug("Failed to convert cert to PEM: {d}\n", .{pemCertSz});
+        return TempCertError.PemEncodingFailed;
+    }
+
+    // Convert RSA Key to DER
+    const derKeyBufLen: usize = 4096;
+    const derKeyBuf = try allocator.alloc(u8, derKeyBufLen);
+    defer allocator.free(derKeyBuf);
+
+    const keySz = c.wc_RsaKeyToDer(&rsaKey, derKeyBuf.ptr, @intCast(derKeyBufLen));
+    if (keySz <= 0) {
+        logging.logDebug("Failed to convert RSA key to DER: {d}\n", .{keySz});
+        return TempCertError.PemEncodingFailed;
+    }
+
+    // Convert RSA Key to PEM
+    const pemKeyBufLen: usize = 4096;
+    const pemKeyBuf = try allocator.alloc(u8, pemKeyBufLen);
+    defer allocator.free(pemKeyBuf);
+
+    const pemKeySz = c.wc_DerToPem(derKeyBuf.ptr, @intCast(keySz), pemKeyBuf.ptr, @intCast(pemKeyBufLen), c.PRIVATEKEY_TYPE);
+    if (pemKeySz <= 0) {
+        logging.logDebug("Failed to convert key to PEM: {d}\n", .{pemKeySz});
+        return TempCertError.PemEncodingFailed;
+    }
+
+    // Create result strings (allocate exact size + null terminator)
+    const cert_pem = try allocator.alloc(u8, @intCast(pemCertSz + 1));
+    @memcpy(cert_pem[0..@intCast(pemCertSz)], pemCertBuf[0..@intCast(pemCertSz)]);
+    cert_pem[@intCast(pemCertSz)] = 0;
+
+    const key_pem = try allocator.alloc(u8, @intCast(pemKeySz + 1));
+    @memcpy(key_pem[0..@intCast(pemKeySz)], pemKeyBuf[0..@intCast(pemKeySz)]);
+    key_pem[@intCast(pemKeySz)] = 0;
+
+    logging.logDebug("Successfully generated temporary RSA 2048-bit certificate using wolfSSL\n", .{});
+
+    return TemporaryCertificate{
+        .cert_pem = cert_pem,
+        .key_pem = key_pem,
+    };
 }
 
 /// Generate a temporary ECDSA P-256 self-signed certificate.
